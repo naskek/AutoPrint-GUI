@@ -1,0 +1,5 @@
+customtkinter
+Pillow
+openpyxl
+pywin32
+PyInstaller

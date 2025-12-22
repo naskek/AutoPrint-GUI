@@ -1,0 +1,1167 @@
+{
+  "formats": {
+    "16x16": "C:/auto_print/16x16.btw",
+    "30x20": "C:/auto_print/30x20.btw"
+  },
+  "product_map_path": "d:\\AutoPrint V3.1\\product_catalog.xlsx",
+  "btw_16": "C:/auto_print/16x16.btw",
+  "btw_30": "",
+  "printer": "TSC TE310",
+  "batch_size": 1,
+  "show_print_dialog": false,
+  "sticker_client": "Печагин",
+  "clients_list": [
+    "Sunfeel",
+    "Вкусный мир",
+    "Зеймар",
+    "Кратос",
+    "КрутТон",
+    "Мирный",
+    "Мясницкий ряд",
+    "Мяснов",
+    "Окей",
+    "Печагин",
+    "Пикник",
+    "Ракита",
+    "Роспродукт",
+    "Сантус",
+    "СП Мирный",
+    "Тогрус",
+    "Холтек",
+    "Экошеф"
+  ],
+  "csv_dir": "C:\\Users\\ЧестныйЗнак\\Desktop\\Маркировка\\Заказы кодов\\12_ДЕКАБРЬ\\199_Печагин_Мирный_Окей_18_12_2025",
+  "csv_print_stats": {
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\191_мирный_печагин_12_12_2025\\191_04606447001769.csv": {
+      "printed": true,
+      "last_print": "2025-12-11 18:39:53",
+      "print_runs": 12,
+      "last_sent": 10
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\191_мирный_печагин_12_12_2025\\191_04607186951520.csv": {
+      "printed": true,
+      "last_print": "2025-12-11 17:58:11",
+      "print_runs": 1,
+      "last_sent": 2
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\176_вкусныймир_печагин_тогрус_01_12_2025\\176_04607046150148.csv": {
+      "printed": true,
+      "last_print": "2025-12-11 18:12:57",
+      "print_runs": 1,
+      "last_sent": 2
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\192_мяснов_холтек_мяснряд_12_12_2025\\192_04607046150315.csv": {
+      "printed": true,
+      "last_print": "2025-12-13 14:00:17",
+      "print_runs": 15,
+      "last_sent": 1,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 0,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-12 16:39:32",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 10,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:39:39",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 10,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:46:55",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 4,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:55:55",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 5,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:59:53",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 17:13:15",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 4,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 17:15:43",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 2,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 17:16:43",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 17:32:19",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 5,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 17:32:49",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 17:34:50",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 17:40:27",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 4,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 17:45:49",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-13 14:00:17",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\192_мяснов_холтек_мяснряд_12_12_2025\\192_04607046150322.csv": {
+      "printed": true,
+      "last_print": "2025-12-12 12:18:45",
+      "print_runs": 2,
+      "last_sent": 1
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\192_мяснов_холтек_мяснряд_12_12_2025\\192_04607046150667.csv": {
+      "printed": true,
+      "last_print": "2025-12-12 12:26:44",
+      "print_runs": 1,
+      "last_sent": 1900
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\192_мяснов_холтек_мяснряд_12_12_2025\\192_04607046150636.csv": {
+      "printed": true,
+      "last_print": "2025-12-12 12:43:50",
+      "print_runs": 2,
+      "last_sent": 17
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\192_мяснов_холтек_мяснряд_12_12_2025\\192_04607046150599.csv": {
+      "printed": true,
+      "last_print": "2025-12-12 12:52:35",
+      "print_runs": 1,
+      "last_sent": 2260
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\192_мяснов_холтек_мяснряд_12_12_2025\\192_04607046150605.csv": {
+      "printed": true,
+      "last_print": "2025-12-12 13:03:42",
+      "print_runs": 1,
+      "last_sent": 2260
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\192_мяснов_холтек_мяснряд_12_12_2025\\192_04607046150612.csv": {
+      "printed": true,
+      "last_print": "2025-12-12 13:14:39",
+      "print_runs": 2,
+      "last_sent": 230
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\192_мяснов_холтек_мяснряд_12_12_2025\\192_04607046150629.csv": {
+      "printed": true,
+      "last_print": "2025-12-12 13:17:25",
+      "print_runs": 1,
+      "last_sent": 1810
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\193_тогрус_12_12_2025\\193_04620001500031.csv": {
+      "printed": true,
+      "last_print": "2025-12-12 17:00:25",
+      "print_runs": 15,
+      "last_sent": 1,
+      "history": [
+        {
+          "ts": "2025-12-12 13:24:56",
+          "printer": null,
+          "fmt": null,
+          "sent": 100,
+          "calib": null,
+          "user": "-"
+        },
+        {
+          "ts": "2025-12-12 16:18:55",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 100,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:21:01",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 20,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:22:10",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 20,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:27:37",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 10,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:30:01",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 10,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:33:28",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 10,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:33:47",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 10,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:39:01",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 20,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:39:10",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 10,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:47:11",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 4,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:50:41",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 30,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 16:55:18",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 5,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 17:00:05",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 1,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-12 17:00:25",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 1,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        }
+      ],
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 0,
+      "last_user": "ЧестныйЗнак"
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\193_тогрус_12_12_2025\\193_04620001500109.csv": {
+      "printed": true,
+      "last_print": "2025-12-12 13:26:19",
+      "print_runs": 1,
+      "last_sent": 420
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\194_печагин_12_12_2025\\194.csv": {
+      "printed": true,
+      "last_print": "2025-12-12 17:26:33",
+      "print_runs": 1,
+      "last_sent": 2400,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 12,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-12 17:26:33",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 2400,
+          "calib": 12,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\195_печагин_вкусныймир_16_12_2025\\195_04607186951568.csv": {
+      "printed": true,
+      "last_print": "2025-12-16 11:04:57",
+      "print_runs": 1,
+      "last_sent": 1512,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-16 11:04:57",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 1512,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\195_печагин_вкусныймир_16_12_2025\\195_04607046150148.csv": {
+      "printed": true,
+      "last_print": "2025-12-16 11:11:10",
+      "print_runs": 1,
+      "last_sent": 120,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-16 11:11:10",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 120,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\195_печагин_вкусныймир_16_12_2025\\195_04607046150162.csv": {
+      "printed": true,
+      "last_print": "2025-12-16 11:12:47",
+      "print_runs": 1,
+      "last_sent": 120,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-16 11:12:47",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 120,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\195_печагин_вкусныймир_16_12_2025\\195_04607186951551.csv": {
+      "printed": true,
+      "last_print": "2025-12-16 12:08:38",
+      "print_runs": 3,
+      "last_sent": 5490,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 18,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-16 11:47:30",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 7320,
+          "calib": 24,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-16 11:53:01",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 28,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-16 12:08:38",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 5490,
+          "calib": 18,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\195_печагин_вкусныймир_16_12_2025\\195_04607186951537.csv": {
+      "printed": true,
+      "last_print": "2025-12-16 13:23:35",
+      "print_runs": 3,
+      "last_sent": 7320,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 24,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-16 12:55:28",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 10980,
+          "calib": 36,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-16 12:58:20",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 16,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-16 13:23:35",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 7320,
+          "calib": 24,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\196_печагин_17_12_2025\\196.csv": {
+      "printed": true,
+      "last_print": "2025-12-17 10:24:07",
+      "print_runs": 4,
+      "last_sent": 600,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-17 10:15:17",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 1800,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-17 10:21:49",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 16,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-17 10:22:04",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 1,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-17 10:24:07",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 600,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\197_тогрус_17_12_2025\\197.csv": {
+      "printed": true,
+      "last_print": "2025-12-17 18:31:31",
+      "print_runs": 1,
+      "last_sent": 420,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-17 18:31:31",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 420,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\198_кратос_18_12_2025\\198_04607046150063.csv": {
+      "printed": true,
+      "last_print": "2025-12-18 11:59:42",
+      "print_runs": 1,
+      "last_sent": 336,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-18 11:59:42",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 336,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\198_кратос_18_12_2025\\198_04607046150087.csv": {
+      "printed": true,
+      "last_print": "2025-12-18 12:03:35",
+      "print_runs": 3,
+      "last_sent": 72,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-18 12:01:40",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 72,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-18 12:02:55",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 72,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-18 12:03:35",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 72,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\198_кратос_18_12_2025\\198_04607046150124.csv": {
+      "printed": true,
+      "last_print": "2025-12-18 12:05:01",
+      "print_runs": 1,
+      "last_sent": 288,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-18 12:05:01",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 288,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\199_печагин_мирный_окей_18_12_2025\\199_04606447001769.csv": {
+      "printed": true,
+      "last_print": "2025-12-18 16:36:22",
+      "print_runs": 1,
+      "last_sent": 1810,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-18 16:36:22",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1810,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\199_печагин_мирный_окей_18_12_2025\\199_04606447001776.csv": {
+      "printed": true,
+      "last_print": "2025-12-18 16:52:04",
+      "print_runs": 1,
+      "last_sent": 2410,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 12,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-18 16:52:04",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 2410,
+          "calib": 12,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\199_печагин_мирный_окей_18_12_2025\\199_04606447001783.csv": {
+      "printed": true,
+      "last_print": "2025-12-18 16:58:21",
+      "print_runs": 1,
+      "last_sent": 1810,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-18 16:58:21",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1810,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\199_печагин_мирный_окей_18_12_2025\\199_04607046150018.csv": {
+      "printed": true,
+      "last_print": "2025-12-18 17:13:23",
+      "print_runs": 1,
+      "last_sent": 155,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-18 17:13:23",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 155,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\199_печагин_мирный_окей_18_12_2025\\199_04607046150339.csv": {
+      "printed": true,
+      "last_print": "2025-12-18 17:15:02",
+      "print_runs": 1,
+      "last_sent": 460,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-18 17:15:02",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 460,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\199_печагин_мирный_окей_18_12_2025\\199_04607046150322.csv": {
+      "printed": true,
+      "last_print": "2025-12-18 17:18:02",
+      "print_runs": 1,
+      "last_sent": 1360,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-18 17:18:02",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1360,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\199_печагин_мирный_окей_18_12_2025\\199_04607186951520.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 16:53:27",
+      "print_runs": 2,
+      "last_sent": 1,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 0,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-18 17:27:27",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 1890,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-19 16:53:27",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 1,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\199_печагин_мирный_окей_18_12_2025\\199_04607186951544.csv": {
+      "printed": true,
+      "last_print": "2025-12-18 17:51:24",
+      "print_runs": 1,
+      "last_sent": 4800,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 18,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-18 17:51:24",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 4800,
+          "calib": 18,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\200_мяснов_мясницкийряд_19_12_2025\\codesorder_2025-12-19_04607046150667_1.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 10:51:38",
+      "print_runs": 1,
+      "last_sent": 1900,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 10:51:38",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1900,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\200_мяснов_мясницкийряд_19_12_2025\\codesorder_2025-12-19_04607046150681_2.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 11:09:27",
+      "print_runs": 2,
+      "last_sent": 3800,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 12,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 11:04:23",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1900,
+          "calib": 0,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-19 11:09:27",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 3800,
+          "calib": 12,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\200_мяснов_мясницкийряд_19_12_2025\\codesorder_2025-12-19_04607046150636_3.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 11:16:04",
+      "print_runs": 1,
+      "last_sent": 1810,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 11:16:04",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1810,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\200_мяснов_мясницкийряд_19_12_2025\\codesorder_2025-12-19_04607046150629_4.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 11:24:29",
+      "print_runs": 1,
+      "last_sent": 1810,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 11:24:29",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1810,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\200_мяснов_мясницкийряд_19_12_2025\\codesorder_2025-12-19_04607046150612_5.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 11:31:01",
+      "print_runs": 1,
+      "last_sent": 1135,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 11:31:01",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1135,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\200_мяснов_мясницкийряд_19_12_2025\\codesorder_2025-12-19_04607046150599_6.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 11:36:01",
+      "print_runs": 1,
+      "last_sent": 1360,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 11:36:01",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1360,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\200_мяснов_мясницкийряд_19_12_2025\\codesorder_2025-12-19_04607046150605_7.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 11:49:05",
+      "print_runs": 2,
+      "last_sent": 1360,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 11:43:10",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1360,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-19 11:49:05",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1360,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\200_мяснов_мясницкийряд_19_12_2025\\codesorder_2025-12-19_04607046150513_8.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 11:53:28",
+      "print_runs": 1,
+      "last_sent": 135,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 11:53:28",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 135,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\200_мяснов_мясницкийряд_19_12_2025\\codesorder_2025-12-19_04607046150643_9.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 11:56:16",
+      "print_runs": 1,
+      "last_sent": 135,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 11:56:16",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 135,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\200_мяснов_мясницкийряд_19_12_2025\\codesorder_2025-12-19_04607046150155_10.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 11:57:43",
+      "print_runs": 1,
+      "last_sent": 48,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 11:57:43",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 48,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\201_пикник_19_12_2025\\codesorder_2025-12-19_04607046150322_1.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 12:29:38",
+      "print_runs": 1,
+      "last_sent": 2260,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 12,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 12:29:38",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 2260,
+          "calib": 12,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\201_пикник_19_12_2025\\codesorder_2025-12-19_04607046150339_2.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 12:32:48",
+      "print_runs": 1,
+      "last_sent": 1210,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 12:32:48",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1210,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\202_мирный_19_12_2025\\codesorder_2025-12-19_04606447001783_3.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 16:35:07",
+      "print_runs": 1,
+      "last_sent": 310,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 16:35:07",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 310,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\202_мирный_19_12_2025\\codesorder_2025-12-19_04607046150018_4.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 16:38:04",
+      "print_runs": 1,
+      "last_sent": 155,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 16:38:04",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 155,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\202_мирный_19_12_2025\\codesorder_2025-12-19_04606447001776_1.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 16:40:18",
+      "print_runs": 1,
+      "last_sent": 1810,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 16:40:18",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 1810,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\202_мирный_19_12_2025\\codesorder_2025-12-19_04606447001769_2.csv": {
+      "printed": true,
+      "last_print": "2025-12-19 16:47:42",
+      "print_runs": 1,
+      "last_sent": 910,
+      "last_printer": "TSC TE310",
+      "last_fmt": "16x16",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-19 16:47:42",
+          "printer": "TSC TE310",
+          "fmt": "16x16",
+          "sent": 910,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
+    }
+  },
+  "token_status": {
+    "ok": true,
+    "level": "ok",
+    "source": "pnp",
+    "summary": "Найдены устройства токена (2 шт.): Win32_PnPEntity: Aktiv Rutoken lite 0 (DeviceID = \"SWD\\SCDEVICEENUM\\1_AKTIV_RUTOKEN_LITE_0...); Win32_PnPEntity: Smart Card Device Enumeration Bus (DeviceID = \"SWD\\SCDEVICEENUMBUS\\0\")",
+    "details": "Win32_PnPEntity: Aktiv Rutoken lite 0 (DeviceID = \"SWD\\SCDEVICEENUM\\1_AKTIV_RUTOKEN_LITE_0...); Win32_PnPEntity: Smart Card Device Enumeration Bus (DeviceID = \"SWD\\SCDEVICEENUMBUS\\0\")"
+  },
+  "token_checked_at": "2025-12-12T11:26:39",
+  "ribbon_counter": {
+    "count_16x16": 6697,
+    "last_reset": null,
+    "last_update": "2025-12-19T16:47:42"
+  }
+}
