@@ -62,6 +62,17 @@ CATALOG_HEADERS = [
     "Клиент",
     "Упаковка отображаемая",
 ]
+REPORT_TURNOVER_HEADERS = [
+    "Код маркировки",
+    "GTIN",
+    "Наименование",
+    "ТН ВЭД",
+    "Тип документа",
+    "Номер документа",
+    "Дата документа",
+]
+REPORT_TURNOVER_DOC_TYPE = "Декларация"
+XLSX_ILLEGAL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def default_template_path(name: str) -> str:
@@ -1158,6 +1169,9 @@ class App(ctk.CTk):
             service_menu.add_command(label="Открыть папку шаблонов", command=self._open_templates_dir)
             service_menu.add_command(label="Смена риббона (сброс счётчика)", command=self._on_ribbon_reset)
 
+            report_menu = Menu(self, tearoff=0)
+            report_menu.add_command(label="Отчет о вводе в оборот", command=self._open_turnover_report_dialog)
+
             # Кастомная панель вместо menu-bar
             # создаём бар до остального контента (если уже есть виджеты - вставляем перед первым)
             initial_children = list(self.winfo_children())
@@ -1177,10 +1191,11 @@ class App(ctk.CTk):
             btn_view = make_btn("Вид", view_menu)
             btn_scale = make_btn("Масштаб", scale_menu)
             btn_service = make_btn("Сервис", service_menu)
+            btn_report = make_btn("Отчет", report_menu)
 
             self.menu_bar_frame = bar
-            self._menus_popup = [view_menu, scale_menu, service_menu]
-            self._menu_buttons = [btn_view, btn_scale, btn_service]
+            self._menus_popup = [view_menu, scale_menu, service_menu, report_menu]
+            self._menu_buttons = [btn_view, btn_scale, btn_service, btn_report]
             self._update_menu_colors()
         except Exception:
             pass
@@ -2090,6 +2105,275 @@ class App(ctk.CTk):
         ctk.CTkButton(btns, text="Закрыть", command=win.destroy).pack(side="right", padx=4)
 
         refresh_tree()
+
+    def _get_product_catalog_path(self):
+        try:
+            path = (self.prodmap_entry.get() or "").strip()
+        except Exception:
+            path = ""
+        if not path:
+            try:
+                path = (self.cfg.get("product_map_path") or "").strip()
+            except Exception:
+                path = ""
+        return path or PRODUCT_MAP_DEFAULT
+
+    def _build_report_catalog_map(self, path):
+        rows = []
+        try:
+            rows = self._load_catalog_rows(path)
+        except Exception:
+            rows = []
+        mapping = {}
+        dupes = 0
+        for item in rows or []:
+            g = only_digits(item.get("GTIN", ""))
+            if not g:
+                continue
+            if g in mapping:
+                dupes += 1
+            mapping[g] = item
+        if dupes:
+            try:
+                self.logger.log(f"[INFO] Каталог: дубли GTIN: {dupes}")
+            except Exception:
+                pass
+        return mapping
+
+    def _open_turnover_report_dialog(self):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Отчет о вводе в оборот")
+        dlg.geometry("420x180")
+        try:
+            dlg.resizable(False, False)
+        except Exception:
+            pass
+        try:
+            dlg.grab_set()
+        except Exception:
+            pass
+
+        ctk.CTkLabel(dlg, text="Сформировать отчет о вводе в оборот.").pack(padx=12, pady=(12, 6), anchor="w")
+
+        separate_var = tk.BooleanVar(master=dlg, value=False)
+        chk = ctk.CTkCheckBox(dlg, text="Отдельные файлы (отчет для каждого файла)", variable=separate_var)
+        chk.pack(padx=12, pady=(0, 6), anchor="w")
+
+        btns = ctk.CTkFrame(dlg)
+        btns.pack(fill="x", padx=12, pady=(8, 12))
+
+        def choose_files():
+            try:
+                dlg.grab_release()
+            except Exception:
+                pass
+            init_dir = self.csv_dir if os.path.isdir(self.csv_dir) else BASE_DIR
+            paths = fd.askopenfilenames(
+                title="Выбери файлы для отчета",
+                filetypes=[("CSV/TSV", "*.csv;*.tsv;*.txt"), ("Все файлы", "*.*")],
+                initialdir=init_dir
+            )
+            if not paths:
+                try:
+                    dlg.grab_set()
+                except Exception:
+                    pass
+                return
+            dlg.destroy()
+            self._create_turnover_report(list(paths), separate_files=self._bool_var(separate_var, False))
+
+        ctk.CTkButton(btns, text="Выбрать файлы", command=choose_files).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="Отмена", command=dlg.destroy).pack(side="left", padx=6)
+
+    def _report_filename_for_input(self, input_path):
+        base = os.path.splitext(os.path.basename(input_path or ""))[0]
+        if not base:
+            base = "report"
+        return f"{base}_vvod_v_oborot.xlsx"
+
+    def _get_report_initial_dir(self, input_paths):
+        saved = ""
+        try:
+            saved = (self.cfg.get("report_dir") or "").strip()
+        except Exception:
+            saved = ""
+        if saved and os.path.isdir(saved):
+            return saved
+        if input_paths:
+            p = os.path.dirname(input_paths[0])
+            if os.path.isdir(p):
+                return p
+        return BASE_DIR
+
+    def _remember_report_dir(self, path):
+        try:
+            if not path:
+                return
+            self.cfg["report_dir"] = path
+            save_config(self.cfg)
+        except Exception:
+            pass
+
+    def _build_turnover_report_rows(self, input_rows, catalog_map):
+        def _clean(v):
+            if v is None:
+                return ""
+            s = str(v)
+            try:
+                s = XLSX_ILLEGAL_RE.sub("", s)
+            except Exception:
+                pass
+            return s.strip()
+
+        out = []
+        missing = 0
+        for r in input_rows or []:
+            km = _clean(r.get("DM", ""))
+            gtin = _clean(r.get("GTIN", ""))
+            name = _clean(r.get("NAME", ""))
+            gkey = only_digits(gtin)
+            cat = catalog_map.get(gkey) if gkey else None
+            if gkey and not cat:
+                missing += 1
+            tnved = _clean(cat.get("ТН ВЭД")) if cat else ""
+            doc_num = _clean(cat.get("Разрешительная документация")) if cat else ""
+            doc_date = _clean(cat.get("от")) if cat else ""
+            out.append([km, gtin, name, tnved, REPORT_TURNOVER_DOC_TYPE, doc_num, doc_date])
+        return out, missing
+
+    def _write_turnover_report_xlsx(self, path, rows):
+        try:
+            from openpyxl import Workbook
+        except Exception:
+            mb.showerror("Отчет", "Не установлена библиотека openpyxl (нужна для отчета).")
+            return False
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        except Exception:
+            pass
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Ввод в оборот"
+            ws.append(REPORT_TURNOVER_HEADERS)
+            for row in rows:
+                ws.append(row)
+            wb.save(path)
+            return True
+        except Exception as e:
+            mb.showerror("Отчет", f"Не удалось сохранить файл:\n{e}")
+            return False
+
+    def _create_turnover_report(self, input_paths, separate_files=False):
+        paths = [p for p in (input_paths or []) if p]
+        if not paths:
+            return
+        catalog_path = self._get_product_catalog_path()
+        if not os.path.isfile(catalog_path):
+            mb.showerror("Отчет", f"Файл каталога товаров не найден:\n{catalog_path}")
+            return
+        catalog_map = self._build_report_catalog_map(catalog_path)
+        if not catalog_map:
+            try:
+                mb.showwarning("Отчет", "Каталог товаров пуст. Поля ТН ВЭД и документа будут пустыми.")
+            except Exception:
+                pass
+
+        if separate_files and len(paths) > 1:
+            init_dir = self._get_report_initial_dir(paths)
+            out_dir = fd.askdirectory(title="Папка для отчетов", initialdir=init_dir)
+            if not out_dir:
+                return
+            self._remember_report_dir(out_dir)
+            ok_files = 0
+            total_rows = 0
+            total_missing = 0
+            for p in paths:
+                try:
+                    rows_in = load_kontur_raw(p)
+                except Exception as e:
+                    try:
+                        self.logger.err(f"Отчет: не удалось прочитать {p}: {e}")
+                    except Exception:
+                        pass
+                    continue
+                if not rows_in:
+                    try:
+                        self.logger.err(f"Отчет: файл пуст: {p}")
+                    except Exception:
+                        pass
+                    continue
+                report_rows, missing = self._build_turnover_report_rows(rows_in, catalog_map)
+                if not report_rows:
+                    continue
+                out_path = os.path.join(out_dir, self._report_filename_for_input(p))
+                if self._write_turnover_report_xlsx(out_path, report_rows):
+                    ok_files += 1
+                    total_rows += len(report_rows)
+                    total_missing += missing
+                    try:
+                        self.logger.log(f"Отчет создан: {out_path} (строк={len(report_rows)})")
+                    except Exception:
+                        pass
+            if ok_files <= 0:
+                mb.showerror("Отчет", "Не удалось сформировать отчеты (нет строк или ошибка чтения).")
+                return
+            if total_missing:
+                try:
+                    self.logger.log(f"Отчет: не найдено в каталоге GTIN: {total_missing}")
+                except Exception:
+                    pass
+            mb.showinfo("Отчет", f"Готово. Создано отчетов: {ok_files}.\nПапка: {out_dir}")
+            return
+
+        init_dir = self._get_report_initial_dir(paths)
+        default_name = self._report_filename_for_input(paths[0]) if len(paths) == 1 else "vvod_v_oborot_report.xlsx"
+        out_path = fd.asksaveasfilename(
+            title="Сохранить отчет",
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")],
+            initialdir=init_dir,
+            initialfile=default_name
+        )
+        if not out_path:
+            return
+        self._remember_report_dir(os.path.dirname(out_path))
+
+        combined_rows = []
+        total_missing = 0
+        for p in paths:
+            try:
+                rows_in = load_kontur_raw(p)
+            except Exception as e:
+                try:
+                    self.logger.err(f"Отчет: не удалось прочитать {p}: {e}")
+                except Exception:
+                    pass
+                continue
+            if not rows_in:
+                try:
+                    self.logger.err(f"Отчет: файл пуст: {p}")
+                except Exception:
+                    pass
+                continue
+            report_rows, missing = self._build_turnover_report_rows(rows_in, catalog_map)
+            combined_rows.extend(report_rows)
+            total_missing += missing
+
+        if not combined_rows:
+            mb.showerror("Отчет", "Нет строк для отчета.")
+            return
+        if self._write_turnover_report_xlsx(out_path, combined_rows):
+            try:
+                self.logger.log(f"Отчет создан: {out_path} (строк={len(combined_rows)})")
+            except Exception:
+                pass
+            if total_missing:
+                try:
+                    self.logger.log(f"Отчет: не найдено в каталоге GTIN: {total_missing}")
+                except Exception:
+                    pass
+            mb.showinfo("Отчет", f"Отчет создан:\n{out_path}\nСтрок: {len(combined_rows)}")
 
     def _prompt_csv_on_launch(self):
         if self.csv_path:
