@@ -21,3 +21,4 @@ dist/
 *.bak
 *.swp
 *.tmp
+.env

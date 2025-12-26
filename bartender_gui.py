@@ -15,6 +15,7 @@ import json
 import uuid
 import tempfile
 import getpass
+import threading
 
 import customtkinter as ctk
 import tkinter as tk
@@ -29,6 +30,13 @@ from data_processing import (
     load_kontur_raw, read_product_map, enrich_row
 )
 from bartender_com import BT
+from crpt_client import (
+    crpt_check_statuses_sync, parse_codes, normalize_code,
+    crpt_check_connection_sync
+)
+from services.crpt_settings import load_crpt_settings, set_runtime_overrides
+from services.crpt_token_manager import get_token_manager, CrptTokenError
+from services import crpt_auth
 
 BASE_DIR = get_base_dir()
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
@@ -109,6 +117,7 @@ class Logger:
             "error": ("#FF5555" if is_dark else "#CC0000"),
             "success": ("#50FA7B" if is_dark else "#007F00"),
             "info": ("#FFB86C" if is_dark else "#FFA500"),
+            "warn": ("#F1C40F" if is_dark else "#B58900"),
             "pack": ("#8BE9FD" if is_dark else "#007ACC"),
         }
 
@@ -117,9 +126,10 @@ class Logger:
             self.tb.tag_config("error", foreground=colors["error"])
             self.tb.tag_config("success", foreground=colors["success"])
             self.tb.tag_config("info", foreground=colors["info"])
+            self.tb.tag_config("warn", foreground=colors["warn"])
             self.tb.tag_config("pack", foreground=colors["pack"])
             # гарантируем, что цветовой тег выше стандартного текста
-            for _t in ("error", "success", "info", "pack"):
+            for _t in ("error", "success", "info", "warn", "pack"):
                 try:
                     self.tb.tag_raise(_t)
                 except Exception:
@@ -128,29 +138,38 @@ class Logger:
             # может падать при старте, если виджет еще не готов
             pass
 
-    def log(self, msg):
+    def log(self, msg, tags=None):
         ts = time.strftime("%H:%M:%S")
-        tags = []
-        msg_lower = msg.lower()
-        self._ensure_tags_ready()
-        # Расширяем ключевые слова, чтобы ловить русские сообщения об ошибках
-        error_markers = ("error", "err", "ошибка", "ошибк", "не удалось", "fail", "сбой", "пропущен")
-        if any(k in msg_lower for k in error_markers):
-            tags.append("error")
-        elif ("отправлен" in msg_lower or "готово" in msg_lower or "записан" in msg_lower
-              or "сохранено" in msg_lower or "запущен" in msg_lower or "завершено" in msg_lower
-              or "csv выбран" in msg_lower):
-            tags.append("success")
-        elif "[INFO]" in msg:
-            tags.append("info")
-        elif "[PACK]" in msg:
-            tags.append("pack")
+        resolved_tags = []
+        if tags:
+            if isinstance(tags, (list, tuple, set)):
+                resolved_tags = list(tags)
+            else:
+                resolved_tags = [str(tags)]
+        else:
+            msg_lower = msg.lower()
+            self._ensure_tags_ready()
+            # Расширяем ключевые слова, чтобы ловить русские сообщения об ошибках
+            error_markers = ("error", "err", "ошибка", "ошибк", "не удалось", "fail", "сбой", "пропущен")
+            warn_markers = ("warn", "warning", "предуп", "вниман")
+            if any(k in msg_lower for k in error_markers):
+                resolved_tags.append("error")
+            elif any(k in msg_lower for k in warn_markers):
+                resolved_tags.append("warn")
+            elif ("отправлен" in msg_lower or "готово" in msg_lower or "записан" in msg_lower
+                  or "сохранено" in msg_lower or "запущен" in msg_lower or "завершено" in msg_lower
+                  or "csv выбран" in msg_lower):
+                resolved_tags.append("success")
+            elif "[INFO]" in msg:
+                resolved_tags.append("info")
+            elif "[PACK]" in msg:
+                resolved_tags.append("pack")
 
         self.tb.configure(state="normal")
         text = f"[{ts}] {msg}\n"
         try:
             # сразу вставляем с тегами, чтобы не зависеть от диапазонов
-            self.tb.insert("end", text, tuple(tags))
+            self.tb.insert("end", text, tuple(resolved_tags))
         except Exception:
             self.tb.insert("end", text)
 
@@ -169,7 +188,7 @@ class Logger:
         """Пере-настраивает цвета, если теги ещё не созданы (редкий случай)."""
         try:
             names = set(self.tb.tag_names())
-            if not {"error", "success", "info", "pack"} <= names:
+            if not {"error", "success", "info", "warn", "pack"} <= names:
                 self.configure_tags()
         except Exception:
             # если виджет ещё не готов - просто пропускаем
@@ -1172,6 +1191,9 @@ class App(ctk.CTk):
             report_menu = Menu(self, tearoff=0)
             report_menu.add_command(label="Отчет о вводе в оборот", command=self._open_turnover_report_dialog)
 
+            check_menu = Menu(self, tearoff=0)
+            check_menu.add_command(label="Проверка кодов", command=self._open_crpt_checker_window)
+
             # Кастомная панель вместо menu-bar
             # создаём бар до остального контента (если уже есть виджеты - вставляем перед первым)
             initial_children = list(self.winfo_children())
@@ -1182,8 +1204,11 @@ class App(ctk.CTk):
                 bar.pack(fill="x", side="top")
             btn_style = dict(width=90, height=28, corner_radius=0, fg_color="transparent", hover_color="#2a2a2a")
 
-            def make_btn(text, menu_obj):
-                b = ctk.CTkButton(bar, text=text, **btn_style,
+            def make_btn(text, menu_obj, width=None):
+                style = dict(btn_style)
+                if width:
+                    style["width"] = width
+                b = ctk.CTkButton(bar, text=text, **style,
                                    command=lambda m=menu_obj, w=None: self._popup_menu(m, b))
                 b.pack(side="left", padx=(0, 2), pady=0)
                 return b
@@ -1192,10 +1217,11 @@ class App(ctk.CTk):
             btn_scale = make_btn("Масштаб", scale_menu)
             btn_service = make_btn("Сервис", service_menu)
             btn_report = make_btn("Отчет", report_menu)
+            btn_check = make_btn("Проверка кодов", check_menu, width=150)
 
             self.menu_bar_frame = bar
-            self._menus_popup = [view_menu, scale_menu, service_menu, report_menu]
-            self._menu_buttons = [btn_view, btn_scale, btn_service, btn_report]
+            self._menus_popup = [view_menu, scale_menu, service_menu, report_menu, check_menu]
+            self._menu_buttons = [btn_view, btn_scale, btn_service, btn_report, btn_check]
             self._update_menu_colors()
         except Exception:
             pass
@@ -2374,6 +2400,1139 @@ class App(ctk.CTk):
                 except Exception:
                     pass
             mb.showinfo("Отчет", f"Отчет создан:\n{out_path}\nСтрок: {len(combined_rows)}")
+
+    # --- CRPT (GIS MT) code status checker ---
+
+    def _open_crpt_checker_window(self):
+        try:
+            existing = getattr(self, "_crpt_win", None)
+            if existing and existing.winfo_exists():
+                existing.lift()
+                existing.focus_force()
+                return
+        except Exception:
+            pass
+
+        win = ctk.CTkToplevel(self)
+        self._crpt_win = win
+        win.title("Проверка кодов (ГИС МТ)")
+        win.geometry("980x640")
+        try:
+            win.minsize(760, 520)
+        except Exception:
+            pass
+        try:
+            win.transient(self)
+            win.lift()
+            win.attributes("-topmost", True)
+            win.after(150, lambda: win.attributes("-topmost", False))
+            win.focus_force()
+        except Exception:
+            pass
+
+        status_row = ctk.CTkFrame(win, corner_radius=12)
+        status_row.pack(fill="x", padx=12, pady=(12, 6))
+        self._crpt_ind_crypto_dot = ctk.CTkLabel(status_row, text="●", font=("Arial", 14))
+        self._crpt_ind_crypto_dot.pack(side="left", padx=(8, 4), pady=6)
+        self._crpt_ind_crypto_label = ctk.CTkLabel(status_row, text="CryptoPro")
+        self._crpt_ind_crypto_label.pack(side="left", padx=(0, 12), pady=6)
+        self._crpt_ind_cert_dot = ctk.CTkLabel(status_row, text="●", font=("Arial", 14))
+        self._crpt_ind_cert_dot.pack(side="left", padx=(0, 4), pady=6)
+        self._crpt_ind_cert_label = ctk.CTkLabel(status_row, text="Сертификат")
+        self._crpt_ind_cert_label.pack(side="left", padx=(0, 12), pady=6)
+        self._crpt_ind_token_dot = ctk.CTkLabel(status_row, text="●", font=("Arial", 14))
+        self._crpt_ind_token_dot.pack(side="left", padx=(0, 4), pady=6)
+        self._crpt_ind_token_label = ctk.CTkLabel(status_row, text="Токен")
+        self._crpt_ind_token_label.pack(side="left", padx=(0, 12), pady=6)
+        self._crpt_conn_dot = ctk.CTkLabel(status_row, text="●", font=("Arial", 14))
+        self._crpt_conn_dot.pack(side="left", padx=(0, 4), pady=6)
+        self._crpt_conn_label = ctk.CTkLabel(status_row, text="ГИС МТ")
+        self._crpt_conn_label.pack(side="left", padx=(0, 12), pady=6)
+        self._crpt_health_label = ctk.CTkLabel(status_row, text="Статус: -")
+        self._crpt_health_label.pack(side="right", padx=10, pady=6)
+
+        input_block = ctk.CTkFrame(win, corner_radius=12)
+        input_block.pack(fill="x", padx=12, pady=(0, 8))
+        ctk.CTkLabel(input_block, text="Коды (по одному в строке):").pack(anchor="w", padx=10, pady=(8, 4))
+        self._crpt_input_text = ctk.CTkTextbox(input_block, height=120)
+        self._crpt_input_text.pack(fill="x", padx=10, pady=(0, 8))
+        for seq in ("<Control-c>", "<Control-C>"):
+            self._crpt_input_text.bind(seq, self._crpt_input_copy)
+        for seq in ("<Control-v>", "<Control-V>"):
+            self._crpt_input_text.bind(seq, self._crpt_input_paste)
+        for seq in ("<Control-x>", "<Control-X>"):
+            self._crpt_input_text.bind(seq, self._crpt_input_cut)
+        input_actions = ctk.CTkFrame(input_block, fg_color="transparent")
+        input_actions.pack(fill="x", padx=10, pady=(0, 8))
+        self._crpt_btn_from_csv = ctk.CTkButton(
+            input_actions, text="Из CSV файла", command=self._crpt_import_from_csv, width=140
+        )
+        self._crpt_btn_from_csv.pack(side="left", padx=6)
+        self._crpt_btn_from_current = ctk.CTkButton(
+            input_actions, text="Из текущего CSV", command=self._crpt_import_from_current_csv, width=160
+        )
+        self._crpt_btn_from_current.pack(side="left", padx=6)
+
+        opts = ctk.CTkFrame(win, corner_radius=12)
+        opts.pack(fill="x", padx=12, pady=(0, 8))
+        self._crpt_dedupe_var = tk.BooleanVar(master=win, value=True)
+        ctk.CTkCheckBox(opts, text="Удалять дубли", variable=self._crpt_dedupe_var).pack(side="left", padx=10, pady=8)
+        self._crpt_use_info_var = tk.BooleanVar(master=win, value=False)
+        ctk.CTkCheckBox(
+            opts, text="Расширенный запрос (info)", variable=self._crpt_use_info_var
+        ).pack(side="left", padx=10, pady=8)
+        ctk.CTkLabel(opts, text="GS (0x1D) допускается как \\u001d").pack(side="left", padx=10, pady=8)
+
+        btns = ctk.CTkFrame(win, corner_radius=12)
+        btns.pack(fill="x", padx=12, pady=(0, 8))
+        self._crpt_btn_check = ctk.CTkButton(btns, text="Проверить", command=self._crpt_run_check, width=120)
+        self._crpt_btn_check.pack(side="left", padx=8, pady=8)
+        self._crpt_btn_connect = ctk.CTkButton(
+            btns, text="Подключиться к ГИС МТ", command=self._crpt_connect, width=190
+        )
+        self._crpt_btn_connect.pack(side="left", padx=8, pady=8)
+        self._crpt_btn_clear = ctk.CTkButton(btns, text="Очистить", command=self._crpt_clear_results, width=100)
+        self._crpt_btn_clear.pack(side="left", padx=8, pady=8)
+        self._crpt_btn_copy_details = ctk.CTkButton(
+            btns, text="Скопировать детали", command=self._crpt_copy_error_details, state="disabled", width=160
+        )
+        self._crpt_btn_copy_details.pack(side="left", padx=8, pady=8)
+        self._crpt_status_label = ctk.CTkLabel(btns, text="Готово")
+        self._crpt_status_label.pack(side="right", padx=10, pady=8)
+
+        health_actions = ctk.CTkFrame(win, corner_radius=12)
+        health_actions.pack(fill="x", padx=12, pady=(0, 8))
+        self._crpt_btn_sign_settings = ctk.CTkButton(
+            health_actions, text="Выбор подписи", command=self._crpt_open_sign_settings, width=170
+        )
+        self._crpt_btn_sign_settings.pack(side="left", padx=8, pady=8)
+        self._crpt_btn_refresh_token = ctk.CTkButton(
+            health_actions, text="Обновить токен", command=self._crpt_refresh_token, width=140
+        )
+        self._crpt_btn_refresh_token.pack(side="left", padx=8, pady=8)
+
+
+        diag = ctk.CTkFrame(win, corner_radius=12)
+        diag.pack(fill="x", padx=12, pady=(0, 8))
+        self._crpt_diag_label = ctk.CTkLabel(diag, text="Диагностика: -", anchor="w", justify="left")
+        self._crpt_diag_label.pack(fill="x", padx=10, pady=6)
+
+        table_block = ctk.CTkFrame(win, corner_radius=12)
+        table_block.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        cols = ("normalized", "status", "explain")
+        self._crpt_tree = ttk.Treeview(table_block, columns=cols, show="headings", height=16)
+        vsb = ttk.Scrollbar(table_block, orient="vertical", command=self._crpt_tree.yview)
+        self._crpt_tree.configure(yscrollcommand=vsb.set)
+
+        headings = {
+            "normalized": "Normalized",
+            "status": "status",
+            "explain": "explain",
+        }
+        widths = {
+            "normalized": 360,
+            "status": 110,
+            "explain": 420,
+        }
+        for c in cols:
+            self._crpt_tree.heading(c, text=headings.get(c, c))
+            self._crpt_tree.column(c, width=widths.get(c, 140), anchor="w")
+
+        self._crpt_tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        table_block.grid_rowconfigure(0, weight=1)
+        table_block.grid_columnconfigure(0, weight=1)
+
+        try:
+            self._crpt_tree.tag_configure("ok", foreground="#198754")
+            self._crpt_tree.tag_configure("warn", foreground="#d39e00")
+            self._crpt_tree.tag_configure("error", foreground="#dc3545")
+            self._crpt_tree.tag_configure("info", foreground="#0d6efd")
+        except Exception:
+            pass
+
+        self._crpt_raw_map = {}
+        self._crpt_error_details = ""
+        self._crpt_tree.bind("<Double-1>", lambda e: self._crpt_show_raw_for_selected())
+        self._crpt_connected = False
+        self._crpt_set_connection_state("disconnected")
+        self._crpt_refresh_health()
+        try:
+            self.after(200, self._crpt_auto_refresh_token_on_open)
+        except Exception:
+            pass
+
+    def _crpt_display_code(self, value):
+        try:
+            s = str(value or "")
+            s = re.sub(r"\\+u001d", "[GS]", s, flags=re.IGNORECASE)
+            s = re.sub(r"\\+x1d", "[GS]", s, flags=re.IGNORECASE)
+            return s.replace(chr(29), "[GS]")
+        except Exception:
+            return value or ""
+
+    def _crpt_format_raw(self, raw):
+        if raw is None:
+            return "", ""
+        try:
+            full = json.dumps(raw, ensure_ascii=False, indent=2)
+        except Exception:
+            full = str(raw)
+        preview = full.replace("\r", " ").replace("\n", " ")
+        if len(preview) > 160:
+            preview = preview[:157] + "..."
+        return preview, full
+
+    def _crpt_set_connection_state(self, state: str, message: str | None = None):
+        colors = {
+            "connected": "#198754",
+            "checking": "#ffc107",
+            "disconnected": "#6c757d",
+            "error": "#dc3545",
+        }
+        color = colors.get(state, "#6c757d")
+        try:
+            if getattr(self, "_crpt_conn_dot", None):
+                self._crpt_conn_dot.configure(text_color=color)
+        except Exception:
+            pass
+        try:
+            self._crpt_connected = (state == "connected")
+        except Exception:
+            pass
+        if message:
+            try:
+                self._crpt_status_label.configure(text=message)
+            except Exception:
+                pass
+
+    def _crpt_set_indicator(self, dot, label, state: str, text: str):
+        colors = {
+            "ok": "#198754",
+            "warn": "#ffc107",
+            "error": "#dc3545",
+            "off": "#6c757d",
+        }
+        color = colors.get(state, "#6c757d")
+        try:
+            if dot:
+                dot.configure(text_color=color)
+        except Exception:
+            pass
+        try:
+            if label:
+                label.configure(text=text)
+        except Exception:
+            pass
+
+    def _crpt_log_error(self, message: str, details: str | None = None):
+        logger = getattr(self, "logger", None)
+        if not logger:
+            return
+        key = (str(message), str(details or ""))
+        if getattr(self, "_crpt_last_log_error", None) == key:
+            return
+        self._crpt_last_log_error = key
+        try:
+            logger.err(f"[CRPT] {message}")
+        except Exception:
+            return
+        if details:
+            det = str(details).replace("\r", " ").replace("\n", " ")
+            if len(det) > 800:
+                det = det[:797] + "..."
+            try:
+                logger.err(f"[CRPT] Детали: {det}")
+            except Exception:
+                pass
+
+    def _crpt_set_busy(self, busy: bool):
+        state = "disabled" if busy else "normal"
+        for btn in (getattr(self, "_crpt_btn_check", None),
+                    getattr(self, "_crpt_btn_clear", None),
+                    getattr(self, "_crpt_btn_connect", None),
+                    getattr(self, "_crpt_btn_from_csv", None),
+                    getattr(self, "_crpt_btn_from_current", None),
+                    getattr(self, "_crpt_btn_sign_settings", None),
+                    getattr(self, "_crpt_btn_refresh_token", None)):
+            try:
+                if btn:
+                    btn.configure(state=state)
+            except Exception:
+                pass
+        try:
+            if busy:
+                self._crpt_status_label.configure(text="Проверка...")
+        except Exception:
+            pass
+
+    def _crpt_append_codes(self, codes, clear=False):
+        box = getattr(self, "_crpt_input_text", None)
+        if not box:
+            return
+        try:
+            if clear:
+                box.delete("1.0", "end")
+        except Exception:
+            pass
+        text = "\n".join([c for c in codes if c])
+        if not text:
+            return
+        try:
+            existing = box.get("1.0", "end-1c").strip()
+        except Exception:
+            existing = ""
+        try:
+            if existing:
+                box.insert("end", "\n" + text)
+            else:
+                box.insert("end", text)
+        except Exception:
+            pass
+
+    def _crpt_input_copy(self, event=None):
+        box = getattr(self, "_crpt_input_text", None)
+        if not box:
+            return "break"
+        try:
+            text = box.get("sel.first", "sel.last")
+        except Exception:
+            text = ""
+        if not text:
+            return "break"
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+        except Exception:
+            pass
+        return "break"
+
+    def _crpt_input_paste(self, event=None):
+        box = getattr(self, "_crpt_input_text", None)
+        if not box:
+            return "break"
+        try:
+            data = self.clipboard_get()
+        except Exception:
+            data = ""
+        if not data:
+            return "break"
+        try:
+            box.insert("insert", data)
+        except Exception:
+            try:
+                box.insert("end", data)
+            except Exception:
+                pass
+        return "break"
+
+    def _crpt_input_cut(self, event=None):
+        box = getattr(self, "_crpt_input_text", None)
+        if not box:
+            return "break"
+        try:
+            text = box.get("sel.first", "sel.last")
+        except Exception:
+            text = ""
+        if not text:
+            return "break"
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+        except Exception:
+            pass
+        try:
+            box.delete("sel.first", "sel.last")
+        except Exception:
+            pass
+        return "break"
+
+    def _crpt_paste_to_input(self):
+        try:
+            data = self.clipboard_get()
+        except Exception:
+            data = ""
+        if not data:
+            return
+        box = getattr(self, "_crpt_input_text", None)
+        if not box:
+            return
+        try:
+            box.insert("insert", data)
+        except Exception:
+            try:
+                box.insert("end", data)
+            except Exception:
+                pass
+
+    def _crpt_copy_input_codes(self):
+        box = getattr(self, "_crpt_input_text", None)
+        if not box:
+            return
+        try:
+            text = box.get("sel.first", "sel.last")
+        except Exception:
+            try:
+                text = box.get("1.0", "end-1c")
+            except Exception:
+                text = ""
+        dedupe = self._bool_var(getattr(self, "_crpt_dedupe_var", False), False)
+        codes = parse_codes(text or "", dedupe=dedupe)
+        if not codes:
+            mb.showinfo("Проверка кодов", "Список кодов пуст.")
+            return
+        out = "\n".join(codes)
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(out)
+        except Exception:
+            pass
+        try:
+            if getattr(self, "_crpt_status_label", None):
+                self._crpt_status_label.configure(text=f"Скопировано кодов: {len(codes)}")
+        except Exception:
+            pass
+
+    def _crpt_import_from_csv(self):
+        init_dir = self.csv_dir if os.path.isdir(self.csv_dir) else BASE_DIR
+        p = fd.askopenfilename(
+            title="Выбери kontur.csv/tsv",
+            filetypes=[("CSV/TSV", "*.csv;*.tsv;*.txt"), ("Все файлы", "*.*")],
+            initialdir=init_dir
+        )
+        if not p:
+            return
+        try:
+            rows = load_kontur_raw(p)
+        except Exception as e:
+            mb.showerror("Проверка кодов", f"Не удалось прочитать CSV:\n{e}")
+            return
+        codes = [r.get("DM", "") for r in rows if r.get("DM")]
+        if not codes:
+            mb.showinfo("Проверка кодов", "Коды не найдены в выбранном CSV.")
+            return
+        self._crpt_append_codes(codes, clear=False)
+        try:
+            self._crpt_status_label.configure(text=f"Добавлено кодов: {len(codes)}")
+        except Exception:
+            pass
+
+    def _crpt_import_from_current_csv(self):
+        rows = []
+        try:
+            if getattr(self, "csv_rows", None):
+                rows = list(self.csv_rows)
+        except Exception:
+            rows = []
+        if not rows:
+            try:
+                p = getattr(self, "csv_path", "") or ""
+            except Exception:
+                p = ""
+            if p and os.path.isfile(p):
+                try:
+                    rows = load_kontur_raw(p)
+                except Exception:
+                    rows = []
+        if not rows:
+            mb.showinfo("Проверка кодов", "Текущий CSV не выбран или пуст.")
+            return
+        codes = [r.get("DM", "") for r in rows if r.get("DM")]
+        if not codes:
+            mb.showinfo("Проверка кодов", "Коды не найдены в текущем CSV.")
+            return
+        self._crpt_append_codes(codes, clear=False)
+        try:
+            self._crpt_status_label.configure(text=f"Добавлено кодов: {len(codes)}")
+        except Exception:
+            pass
+
+    def _crpt_apply_connection_result(self, ok, message, severity, details):
+        state = "connected" if ok else "error"
+        self._crpt_set_connection_state(state, message)
+        if not ok:
+            try:
+                self._crpt_log_error(f"Подключение не удалось: {message}", details)
+            except Exception:
+                pass
+        if details:
+            try:
+                self._crpt_error_details += f"{details}\n"
+            except Exception:
+                pass
+            try:
+                if getattr(self, "_crpt_btn_copy_details", None):
+                    self._crpt_btn_copy_details.configure(state="normal")
+            except Exception:
+                pass
+
+    def _crpt_apply_health(self, health, certs, err=None):
+        if err:
+            try:
+                mb.showerror("Проверка кодов", f"{err.user_message if hasattr(err,'user_message') else err}")
+            except Exception:
+                pass
+            try:
+                self._crpt_log_error(
+                    getattr(err, "user_message", None) or str(err),
+                    getattr(err, "details", None),
+                )
+            except Exception:
+                pass
+        crypto_ok = bool(health.get("cryptoProAvailable"))
+        cert_selected = bool(health.get("selectedCert"))
+        cert_ok = bool(health.get("certOk"))
+        token_present = bool(health.get("tokenPresent"))
+        seconds_left = health.get("secondsLeft")
+        sign_ok = bool(health.get("signTestOk"))
+        base_url = str(health.get("baseUrl") or "-")
+        pg = str(health.get("pg") or "-")
+        auth_mode = str(health.get("authMode") or "-")
+        token_len = int(health.get("tokenLen") or 0)
+        token_jwt_dots = int(health.get("tokenJwtDots") or 0)
+        token_type = str(health.get("tokenType") or "")
+        token_received_at = str(health.get("tokenReceivedAt") or "-")
+        selected_cert = health.get("selectedCert") or {}
+
+        if not crypto_ok:
+            state = "error"
+        elif not cert_selected:
+            state = "disconnected"
+        elif not cert_ok:
+            state = "error"
+        elif token_present:
+            if seconds_left is None or seconds_left > 0:
+                state = "connected"
+            else:
+                state = "error"
+        else:
+            state = "checking"
+        try:
+            self._crpt_set_connection_state(state)
+        except Exception:
+            pass
+        try:
+            crypto_text = "CryptoPro: ok" if crypto_ok else "CryptoPro: нет"
+            self._crpt_set_indicator(
+                getattr(self, "_crpt_ind_crypto_dot", None),
+                getattr(self, "_crpt_ind_crypto_label", None),
+                "ok" if crypto_ok else "error",
+                crypto_text,
+            )
+            if not cert_selected:
+                cert_state = "warn"
+                cert_text = "Сертификат: не выбран"
+            elif cert_ok:
+                cert_state = "ok"
+                cert_text = "Сертификат: ok"
+            else:
+                cert_state = "error"
+                cert_text = "Сертификат: нет ключа"
+            self._crpt_set_indicator(
+                getattr(self, "_crpt_ind_cert_dot", None),
+                getattr(self, "_crpt_ind_cert_label", None),
+                cert_state,
+                cert_text,
+            )
+            if token_present:
+                if isinstance(seconds_left, int):
+                    if seconds_left > 0:
+                        mins = max(0, seconds_left // 60)
+                        token_text = f"Токен: {mins} мин"
+                    else:
+                        token_text = "Токен: истек"
+                else:
+                    token_text = "Токен: есть"
+                token_state = "ok" if (seconds_left is None or seconds_left > 0) else "error"
+            else:
+                token_text = "Токен: нет"
+                token_state = "warn"
+            self._crpt_set_indicator(
+                getattr(self, "_crpt_ind_token_dot", None),
+                getattr(self, "_crpt_ind_token_label", None),
+                token_state,
+                token_text,
+            )
+
+            label_parts = []
+            if sign_ok:
+                label_parts.append("Подпись: ok")
+            if health.get("lastError"):
+                label_parts.append(f"Ошибка: {health.get('lastError')}")
+            if not label_parts:
+                label_parts.append("Статус: -")
+            if getattr(self, "_crpt_health_label", None):
+                self._crpt_health_label.configure(text=" | ".join(label_parts))
+
+            def _short_tp(tp: str) -> str:
+                s = tp or ""
+                return s if len(s) <= 12 else f"{s[:6]}...{s[-6:]}"
+
+            cert_text = "не выбран"
+            if selected_cert:
+                subject = str(selected_cert.get("subject") or "")
+                valid_to = str(selected_cert.get("validTo") or "")
+                tp_short = _short_tp(str(selected_cert.get("thumbprint") or ""))
+                parts = [p for p in (subject, f"до {valid_to}" if valid_to else "", tp_short) if p]
+                cert_text = " | ".join(parts) if parts else "выбран"
+
+            if token_present:
+                if token_type == "jwt" and isinstance(seconds_left, int):
+                    mins = max(0, seconds_left // 60)
+                    token_line = f"Токен: len={token_len} dots={token_jwt_dots} получен={token_received_at} осталось={mins} мин"
+                else:
+                    token_kind = token_type or "opaque"
+                    token_line = f"Токен: len={token_len} dots={token_jwt_dots} получен={token_received_at} тип={token_kind}"
+            else:
+                token_line = "Токен: нет"
+            line1 = f"API: {base_url} | pg: {pg} | auth: {auth_mode} | CryptoPro: {'ok' if crypto_ok else 'нет'} | Подпись: {'ok' if sign_ok else 'нет'}"
+            line2 = f"Сертификат: {cert_text}"
+            diag_text = f"{line1}\n{line2}\n{token_line}"
+            if getattr(self, "_crpt_diag_label", None):
+                self._crpt_diag_label.configure(text=diag_text)
+        except Exception:
+            pass
+        last_err = health.get("lastError")
+        if last_err:
+            prev = getattr(self, "_crpt_last_health_error", None)
+            if prev != last_err:
+                self._crpt_last_health_error = last_err
+                self._crpt_log_error(str(last_err))
+        else:
+            self._crpt_last_health_error = None
+
+    def _crpt_refresh_health(self, sign_test=False, refresh_token=False, check_connection=False):
+        self._crpt_set_busy(True)
+        use_info = self._bool_var(getattr(self, "_crpt_use_info_var", False), False) if check_connection else False
+
+        def worker():
+            tm = get_token_manager()
+            err = None
+            if refresh_token:
+                try:
+                    tm.force_refresh_sync()
+                except CrptTokenError as e:
+                    err = e
+            health, certs = tm.health_sync(sign_test=sign_test)
+            self.after(0, lambda: self._crpt_apply_health(health, certs, err))
+            if check_connection and not err:
+                ok, msg, severity, details = crpt_check_connection_sync(use_info=use_info)
+                self.after(0, lambda: self._crpt_apply_connection_result(ok, msg, severity, details))
+            self.after(0, lambda: self._crpt_set_busy(False))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _crpt_auto_refresh_token_on_open(self):
+        def worker():
+            settings = load_crpt_settings()
+            if not settings.cert_thumbprint:
+                return
+            if not (settings.oms_connection or settings.token_provider_inn):
+                return
+            tm = get_token_manager()
+            err = None
+            try:
+                tm.get_token_sync()
+            except CrptTokenError as e:
+                err = e
+            health, certs = tm.health_sync(sign_test=False)
+            self.after(0, lambda: self._crpt_apply_health(health, certs, None))
+            if err:
+                msg = getattr(err, "user_message", None) or str(err)
+                try:
+                    if getattr(self, "logger", None):
+                        self.after(0, lambda m=msg: self.logger.err(f"[CRPT] Автообновление токена не удалось: {m}"))
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _crpt_open_sign_settings(self):
+        try:
+            existing = getattr(self, "_crpt_sign_win", None)
+            if existing and existing.winfo_exists():
+                existing.lift()
+                existing.focus_force()
+                return
+        except Exception:
+            pass
+
+        win = ctk.CTkToplevel(self)
+        self._crpt_sign_win = win
+        win.title("Настройка подписи")
+        win.geometry("920x540")
+        try:
+            parent = getattr(self, "_crpt_win", None)
+            if parent and parent.winfo_exists():
+                win.transient(parent)
+            else:
+                win.transient(self)
+            win.lift()
+            win.attributes("-topmost", True)
+            win.after(150, lambda: win.attributes("-topmost", False))
+            win.focus_force()
+        except Exception:
+            pass
+
+        settings = load_crpt_settings()
+        env_oms = (os.environ.get("CRPT_OMS_CONNECTION") or "").strip()
+        env_cert = (os.environ.get("CRPT_CERT_THUMBPRINT") or "").strip()
+
+        top = ctk.CTkFrame(win, corner_radius=12)
+        top.pack(fill="x", padx=12, pady=(12, 8))
+        ctk.CTkLabel(top, text="OMS connection (UUID):").grid(row=0, column=0, sticky="w", padx=8, pady=8)
+        oms_entry = ctk.CTkEntry(top, width=420)
+        oms_entry.grid(row=0, column=1, sticky="w", padx=8, pady=8)
+        if settings.oms_connection:
+            oms_entry.insert(0, settings.oms_connection)
+
+        def save_oms():
+            value = (oms_entry.get() or "").strip()
+            self.cfg["crpt_oms_connection"] = value
+            save_config(self.cfg)
+            if not env_oms:
+                set_runtime_overrides(oms_connection=value)
+            self._crpt_refresh_health()
+
+        ctk.CTkButton(top, text="Сохранить", command=save_oms, width=120).grid(row=0, column=2, sticky="w", padx=8, pady=8)
+        hint_text = "Приоритет: .env" if env_oms else "Источник: config.json"
+        ctk.CTkLabel(top, text=hint_text).grid(row=1, column=1, sticky="w", padx=8, pady=(0, 8))
+        ctk.CTkLabel(top, text="Выберите сертификат УКЭП (CurrentUser\\My).").grid(
+            row=2, column=0, sticky="w", padx=8, pady=(0, 8)
+        )
+
+        cert_frame = ctk.CTkFrame(win, corner_radius=12)
+        cert_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        cols = ("subject", "valid_to", "thumbprint", "key")
+        tree = ttk.Treeview(cert_frame, columns=cols, show="headings", height=12)
+        vsb = ttk.Scrollbar(cert_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.heading("subject", text="Subject")
+        tree.heading("valid_to", text="ValidTo")
+        tree.heading("thumbprint", text="Thumbprint")
+        tree.heading("key", text="Key")
+        tree.column("subject", width=420, anchor="w")
+        tree.column("valid_to", width=140, anchor="w")
+        tree.column("thumbprint", width=200, anchor="w")
+        tree.column("key", width=60, anchor="center")
+        tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        cert_frame.grid_rowconfigure(0, weight=1)
+        cert_frame.grid_columnconfigure(0, weight=1)
+        try:
+            tree.tag_configure("cert_ok", foreground="#198754")
+            tree.tag_configure("cert_expired", foreground="#dc3545")
+        except Exception:
+            pass
+
+        self._crpt_sign_certs = []
+
+        def _short_tp(tp: str) -> str:
+            s = tp or ""
+            return s if len(s) <= 12 else f"{s[:6]}...{s[-6:]}"
+
+        def _parse_cert_date(value: str):
+            s = str(value or "").strip()
+            if not s:
+                return None
+            try:
+                return dt.datetime.fromisoformat(s)
+            except Exception:
+                pass
+            for fmt in (
+                "%d.%m.%Y %H:%M:%S",
+                "%d.%m.%Y",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d",
+                "%m/%d/%Y %H:%M:%S",
+                "%m/%d/%Y %I:%M:%S %p",
+                "%m/%d/%Y",
+            ):
+                try:
+                    return dt.datetime.strptime(s, fmt)
+                except Exception:
+                    pass
+            return None
+
+        def apply_certs(certs, err=None):
+            tree.delete(*tree.get_children())
+            self._crpt_sign_certs = certs or []
+            if err:
+                msg = getattr(err, "user_message", None) or str(err)
+                mb.showerror("Сертификаты", msg)
+            if not certs:
+                return
+            for idx, c in enumerate(certs):
+                key_ok = "OK" if c.has_private_key else "-"
+                valid_to_dt = _parse_cert_date(c.valid_to)
+                expired = False
+                if valid_to_dt:
+                    now = dt.datetime.now(valid_to_dt.tzinfo) if valid_to_dt.tzinfo else dt.datetime.now()
+                    expired = valid_to_dt < now
+                tag = "cert_expired" if expired else "cert_ok"
+                tree.insert(
+                    "", "end", iid=str(idx),
+                    values=(c.subject, c.valid_to, _short_tp(c.thumbprint), key_ok),
+                    tags=(tag,),
+                )
+            current_tp = load_crpt_settings().cert_thumbprint
+            if current_tp:
+                for idx, c in enumerate(certs):
+                    if c.thumbprint == current_tp:
+                        tree.selection_set(str(idx))
+                        tree.see(str(idx))
+                        break
+
+        def load_certs_async():
+            def worker():
+                try:
+                    certs = crpt_auth.list_certificates()
+                    err = None
+                except Exception as e:
+                    certs = []
+                    err = e
+                self.after(0, lambda: apply_certs(certs, err))
+            threading.Thread(target=worker, daemon=True).start()
+
+        def on_select():
+            sel = tree.selection()
+            if not sel:
+                mb.showinfo("Сертификаты", "Сертификат не выбран.")
+                return
+            idx = int(sel[0])
+            cert = self._crpt_sign_certs[idx]
+            self.cfg["crpt_cert_thumbprint"] = cert.thumbprint
+            save_config(self.cfg)
+            if not env_cert:
+                set_runtime_overrides(cert_thumbprint=cert.thumbprint)
+            self._crpt_refresh_health()
+
+        btns = ctk.CTkFrame(win, corner_radius=12)
+        btns.pack(fill="x", padx=12, pady=(0, 8))
+        ctk.CTkButton(btns, text="Обновить список", command=load_certs_async, width=160).pack(side="left", padx=6, pady=6)
+        ctk.CTkButton(btns, text="Выбрать сертификат", command=on_select, width=170).pack(side="left", padx=6, pady=6)
+        ctk.CTkButton(btns, text="Закрыть", command=win.destroy, width=120).pack(side="right", padx=6, pady=6)
+
+        note_text = "Если значение задано в .env, оно имеет приоритет над config.json."
+        ctk.CTkLabel(win, text=note_text).pack(anchor="w", padx=14, pady=(0, 10))
+
+        load_certs_async()
+
+    def _crpt_refresh_token(self):
+        self._crpt_refresh_health(refresh_token=True, check_connection=True)
+
+    def _crpt_connect(self):
+        use_info = self._bool_var(getattr(self, "_crpt_use_info_var", False), False)
+        settings = load_crpt_settings()
+        if not settings.pg:
+            mb.showerror(
+                "Проверка кодов",
+                "Не задан CRPT_PG (product group).\nУкажите в .env, например: CRPT_PG=grocery"
+            )
+            return
+        if not settings.cert_thumbprint:
+            try:
+                open_settings = mb.askyesno(
+                    "Проверка кодов",
+                    "Не выбран сертификат.\nОткрыть настройку подписи?"
+                )
+            except Exception:
+                open_settings = False
+            if open_settings:
+                self._crpt_open_sign_settings()
+            return
+        if not (settings.oms_connection or settings.token_provider_inn):
+            mb.showerror(
+                "Проверка кодов",
+                "Не задан CRPT_OMS_CONNECTION или CRPT_TOKEN_PROVIDER_INN.\nУкажите в .env."
+            )
+            return
+        self._crpt_set_busy(True)
+        self._crpt_set_connection_state("checking", "Подключение...")
+
+        def worker():
+            ok, msg, severity, details = crpt_check_connection_sync(use_info=use_info)
+            self.after(0, lambda: self._crpt_apply_connection_result(ok, msg, severity, details))
+            self.after(0, lambda: self._crpt_set_busy(False))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _crpt_clear_results(self):
+        try:
+            tree = getattr(self, "_crpt_tree", None)
+            if tree:
+                tree.delete(*tree.get_children())
+        except Exception:
+            pass
+        try:
+            self._crpt_raw_map = {}
+            self._crpt_error_details = ""
+            if getattr(self, "_crpt_btn_copy_details", None):
+                self._crpt_btn_copy_details.configure(state="disabled")
+            if getattr(self, "_crpt_status_label", None):
+                self._crpt_status_label.configure(text="Готово")
+        except Exception:
+            pass
+
+    def _crpt_run_check(self):
+        try:
+            text = self._crpt_input_text.get("1.0", "end-1c")
+        except Exception:
+            text = ""
+        dedupe = self._bool_var(getattr(self, "_crpt_dedupe_var", False), False)
+        use_info = self._bool_var(getattr(self, "_crpt_use_info_var", False), False)
+        codes = parse_codes(text or "", dedupe=dedupe)
+        if not codes:
+            mb.showinfo("Проверка кодов", "Список кодов пуст.")
+            return
+        settings = load_crpt_settings()
+        if not settings.pg:
+            mb.showerror(
+                "Проверка кодов",
+                "Не задан CRPT_PG (product group).\nУкажите в .env, например: CRPT_PG=grocery"
+            )
+            return
+        if not settings.cert_thumbprint:
+            try:
+                open_settings = mb.askyesno(
+                    "Проверка кодов",
+                    "Не выбран сертификат.\nОткрыть настройку подписи?"
+                )
+            except Exception:
+                open_settings = False
+            if open_settings:
+                self._crpt_open_sign_settings()
+            return
+        if not (settings.oms_connection or settings.token_provider_inn):
+            mb.showerror(
+                "Проверка кодов",
+                "Не задан CRPT_OMS_CONNECTION или CRPT_TOKEN_PROVIDER_INN.\nУкажите в .env."
+            )
+            return
+        self._crpt_start_check(codes, show_raw=False, use_info=use_info)
+
+    def _crpt_check_single_prompt(self):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Проверка кода")
+        dlg.geometry("460x220")
+        try:
+            dlg.resizable(False, False)
+        except Exception:
+            pass
+        try:
+            dlg.grab_set()
+        except Exception:
+            pass
+
+        ctk.CTkLabel(dlg, text="Введите один код КМ:").pack(anchor="w", padx=12, pady=(12, 4))
+        box = ctk.CTkTextbox(dlg, height=80)
+        box.pack(fill="x", padx=12, pady=(0, 8))
+
+        btns = ctk.CTkFrame(dlg)
+        btns.pack(fill="x", padx=12, pady=(0, 12))
+
+        def paste_from_clipboard():
+            try:
+                data = self.clipboard_get()
+            except Exception:
+                data = ""
+            if not data:
+                return
+            try:
+                box.insert("insert", data)
+            except Exception:
+                pass
+
+        def on_ok():
+            try:
+                text = box.get("1.0", "end-1c")
+            except Exception:
+                text = ""
+            codes = parse_codes(text or "", dedupe=True)
+            if not codes:
+                mb.showinfo("Проверка кодов", "Код не задан.")
+                return
+            use_info = self._bool_var(getattr(self, "_crpt_use_info_var", False), False)
+            settings = load_crpt_settings()
+            if not settings.pg:
+                mb.showerror(
+                    "Проверка кодов",
+                    "Не задан CRPT_PG (product group).\nУкажите в .env, например: CRPT_PG=grocery"
+                )
+                return
+            if not settings.cert_thumbprint:
+                try:
+                    open_settings = mb.askyesno(
+                        "Проверка кодов",
+                        "Не выбран сертификат.\nОткрыть настройку подписи?"
+                    )
+                except Exception:
+                    open_settings = False
+                if open_settings:
+                    self._crpt_open_sign_settings()
+                return
+            if not (settings.oms_connection or settings.token_provider_inn):
+                mb.showerror(
+                    "Проверка кодов",
+                    "Не задан CRPT_OMS_CONNECTION или CRPT_TOKEN_PROVIDER_INN.\nУкажите в .env."
+                )
+                return
+            dlg.destroy()
+            self._crpt_start_check([codes[0]], show_raw=True, use_info=use_info)
+
+        ctk.CTkButton(btns, text="Вставить из буфера", command=paste_from_clipboard).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="Проверить", command=on_ok, width=100).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="Отмена", command=dlg.destroy, width=100).pack(side="left", padx=6)
+
+    def _crpt_start_check(self, codes, show_raw=False, use_info=False):
+        self._crpt_clear_results()
+        self._crpt_set_busy(True)
+        self._crpt_set_connection_state("checking", "Подключение...")
+
+        def worker():
+            err = None
+            results = []
+            logger_cb = None
+            if getattr(self, "logger", None):
+                def logger_cb(msg, _self=self):
+                    try:
+                        _self.after(0, lambda m=msg: _self.logger.log(m))
+                    except Exception:
+                        pass
+            ok, msg, severity, details = crpt_check_connection_sync(use_info=use_info)
+            self.after(0, lambda: self._crpt_apply_connection_result(ok, msg, severity, details))
+            if not ok:
+                err = msg
+                self.after(0, lambda: self._crpt_apply_results([], err, show_raw))
+                return
+            try:
+                results = crpt_check_statuses_sync(codes, use_info=use_info, logger=logger_cb)
+            except Exception as e:
+                err = str(e)
+            self.after(0, lambda: self._crpt_apply_results(results, err, show_raw))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _crpt_apply_results(self, results, err=None, show_raw=False):
+        self._crpt_set_busy(False)
+        if err:
+            try:
+                self._crpt_status_label.configure(text="Ошибка запроса")
+            except Exception:
+                pass
+            try:
+                if getattr(self, "logger", None):
+                    self.logger.err(f"[CRPT] Ошибка: {err}")
+            except Exception:
+                pass
+            mb.showerror("Проверка кодов", f"Ошибка:\n{err}")
+            return
+        tree = getattr(self, "_crpt_tree", None)
+        if not tree:
+            return
+        tree.delete(*tree.get_children())
+        self._crpt_raw_map = {}
+        self._crpt_error_details = ""
+        ok = warn = err_cnt = 0
+        for r in results or []:
+            norm_disp = self._crpt_display_code(normalize_code(r.normalized))
+            preview, full = self._crpt_format_raw(r.raw)
+            tags = ()
+            if getattr(r, "severity", ""):
+                tags = (r.severity,)
+                if r.severity == "ok":
+                    ok += 1
+                elif r.severity == "warn":
+                    warn += 1
+                elif r.severity == "error":
+                    err_cnt += 1
+            iid = tree.insert("", "end", values=(
+                norm_disp,
+                r.status or "",
+                r.explain or "",
+            ), tags=tags)
+            if full:
+                self._crpt_raw_map[iid] = full
+            if getattr(r, "error_details", None):
+                self._crpt_error_details += f"{r.error_details}\n"
+
+        total = len(results or [])
+        try:
+            self._crpt_status_label.configure(
+                text=f"Готово: {total} (ok={ok}, warn={warn}, err={err_cnt})"
+            )
+        except Exception:
+            pass
+        try:
+            if getattr(self, "logger", None):
+                tag = "success"
+                if err_cnt > 0:
+                    tag = "error"
+                elif warn > 0:
+                    tag = "warn"
+                self.logger.log(
+                    f"[CRPT] Проверка завершена: total={total}, ok={ok}, warn={warn}, err={err_cnt}",
+                    tags=tag,
+                )
+        except Exception:
+            pass
+        if self._crpt_error_details:
+            self._crpt_log_error("\u0414\u0438\u0430\u0433\u043d\u043e\u0441\u0442\u0438\u043a\u0430", self._crpt_error_details)
+        if self._crpt_error_details or self._crpt_raw_map:
+            try:
+                self._crpt_btn_copy_details.configure(state="normal")
+            except Exception:
+                pass
+        if show_raw and results:
+            self._crpt_show_raw_text(self._crpt_raw_map.get(tree.get_children()[0], ""))
+
+    def _crpt_show_raw_text(self, text: str):
+        if not text:
+            mb.showinfo("Сырой ответ", "Нет данных для отображения.")
+            return
+        win = ctk.CTkToplevel(self)
+        win.title("Сырой ответ")
+        win.geometry("760x520")
+        box = ctk.CTkTextbox(win)
+        box.pack(fill="both", expand=True, padx=12, pady=12)
+        box.insert("1.0", text)
+        box.configure(state="disabled")
+
+    def _crpt_show_raw_for_selected(self):
+        tree = getattr(self, "_crpt_tree", None)
+        if not tree:
+            return
+        sel = tree.selection()
+        if not sel:
+            return
+        text = self._crpt_raw_map.get(sel[0], "")
+        self._crpt_show_raw_text(text)
+
+    def _crpt_copy_error_details(self):
+        details = getattr(self, "_crpt_error_details", "") or ""
+        if not details.strip():
+            tree = getattr(self, "_crpt_tree", None)
+            text = ""
+            if tree:
+                sel = tree.selection()
+                if sel:
+                    text = self._crpt_raw_map.get(sel[0], "")
+            if not text and len(getattr(self, "_crpt_raw_map", {}) or {}) == 1:
+                try:
+                    text = next(iter(self._crpt_raw_map.values()))
+                except Exception:
+                    text = ""
+            if not text:
+                mb.showinfo("Проверка кодов", "Деталей нет.")
+                return
+            details = text
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(details)
+        except Exception:
+            pass
+        mb.showinfo("Проверка кодов", "Детали скопированы в буфер.")
 
     def _prompt_csv_on_launch(self):
         if self.csv_path:
@@ -3799,8 +4958,8 @@ class App(ctk.CTk):
     # ---------- date picker ----------
     def _open_date_picker(self):
         """
-        Открывает простой выбор даты. Если установлен пакет tkcalendar — используем его.
-        Иначе показываем диалог с полями ДД/ММ/ГГГГ.
+        Открывает выбор даты. Если установлен пакет tkcalendar - используем его.
+        Иначе показываем встроенный календарь без внешних зависимостей.
         """
         try:
             import tkcalendar  # type: ignore
@@ -3816,48 +4975,109 @@ class App(ctk.CTk):
             ctk.CTkButton(top, text="Отмена", command=top.destroy).pack(pady=4)
             top.grab_set()
             return
-        except Exception:
-            pass
-    
-        # Фолбэк: простое окно с валидированными полями
+        except Exception as e:
+            if getattr(self, "logger", None):
+                try:
+                    self.logger.err(f"Календарь: tkcalendar недоступен: {e}")
+                except Exception:
+                    pass
+
+        # Фолбэк: встроенный календарь
         import datetime as _dt
+        import calendar as _cal
         top = ctk.CTkToplevel(self)
-        top.title("Выбор даты (ДД.ММ.ГГГГ)")
-        frame = ctk.CTkFrame(top)
-        frame.pack(padx=12, pady=12)
-    
+        top.title("Выбор даты")
+        top.resizable(False, False)
+
         # Текущая дата из поля
         cur = (self.prod_date_entry.get() or "").strip()
         try:
             d, m, y = [int(x) for x in cur.split(".")]
+            _dt.date(y, m, d)
         except Exception:
             today = _dt.date.today()
             d, m, y = today.day, today.month, today.year
-    
-        day = ctk.CTkEntry(frame, width=40); day.insert(0, str(d).zfill(2)); day.pack(side="left", padx=4)
-        ctk.CTkLabel(frame, text=".").pack(side="left")
-        mon = ctk.CTkEntry(frame, width=40); mon.insert(0, str(m).zfill(2)); mon.pack(side="left", padx=4)
-        ctk.CTkLabel(frame, text=".").pack(side="left")
-        year = ctk.CTkEntry(frame, width=60); year.insert(0, str(y)); year.pack(side="left", padx=4)
-    
-        def only_digits(e):
-            return re.fullmatch(r"[0-9]*", e or "") is not None
-        vcmd = (self.register(only_digits), "%P")
-        for w in (day, mon, year):
-            w.configure(validate="key", validatecommand=vcmd)
-    
+
+        state = {"day": d, "month": m, "year": y}
+        month_names = [
+            "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+            "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+        ]
+        weekday_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+        header = ctk.CTkFrame(top)
+        header.pack(padx=12, pady=(12, 4), fill="x")
+        month_label = ctk.CTkLabel(header, text="")
+
+        days_header = ctk.CTkFrame(top)
+        days_header.pack(padx=12)
+        for i, name in enumerate(weekday_names):
+            ctk.CTkLabel(days_header, text=name, width=28).grid(row=0, column=i, padx=2, pady=2)
+
+        days_frame = ctk.CTkFrame(top)
+        days_frame.pack(padx=12, pady=(0, 6))
+
+        info = ctk.CTkLabel(top, text="")
+        info.pack(pady=(0, 4))
+
+        def update_info():
+            info.configure(text=f"Выбрано: {state['day']:02d}.{state['month']:02d}.{state['year']:04d}")
+
+        def select_day(day):
+            state["day"] = day
+            update_info()
+
+        def build_calendar():
+            month_label.configure(text=f"{month_names[state['month'] - 1]} {state['year']}")
+            for child in days_frame.winfo_children():
+                child.destroy()
+            cal = _cal.Calendar(firstweekday=0)
+            weeks = cal.monthdayscalendar(state["year"], state["month"])
+            for r, week in enumerate(weeks):
+                for c, day in enumerate(week):
+                    if day == 0:
+                        ctk.CTkLabel(days_frame, text=" ", width=28).grid(row=r, column=c, padx=2, pady=2)
+                        continue
+                    btn = ctk.CTkButton(days_frame, text=str(day), width=28, command=lambda d=day: select_day(d))
+                    btn.grid(row=r, column=c, padx=2, pady=2)
+
+        def shift_month(delta):
+            year = state["year"]
+            month = state["month"] + delta
+            if month < 1:
+                month = 12
+                year -= 1
+            elif month > 12:
+                month = 1
+                year += 1
+            state["year"] = year
+            state["month"] = month
+            max_day = _cal.monthrange(year, month)[1]
+            if state["day"] > max_day:
+                state["day"] = max_day
+            build_calendar()
+            update_info()
+
+        ctk.CTkButton(header, text="◀", width=28, command=lambda: shift_month(-1)).pack(side="left")
+        month_label.pack(side="left", expand=True, padx=6)
+        ctk.CTkButton(header, text="▶", width=28, command=lambda: shift_month(1)).pack(side="right")
+
         def on_ok():
             try:
-                dd = int(day.get() or "0"); mm = int(mon.get() or "0"); yy = int(year.get() or "0")
-                _dt.date(yy, mm, dd)  # проверка
+                _dt.date(state["year"], state["month"], state["day"])
                 self.prod_date_entry.delete(0, "end")
-                self.prod_date_entry.insert(0, f"{dd:02d}.{mm:02d}.{yy:04d}")
+                self.prod_date_entry.insert(0, f"{state['day']:02d}.{state['month']:02d}.{state['year']:04d}")
                 top.destroy()
             except Exception:
-                mb.showerror("Дата", "Введите корректную дату (ДД.ММ.ГГГГ).")
-        btns = ctk.CTkFrame(top); btns.pack(pady=8)
+                mb.showerror("Дата", "Выберите корректную дату.")
+
+        btns = ctk.CTkFrame(top)
+        btns.pack(pady=(2, 10))
         ctk.CTkButton(btns, text="OK", command=on_ok).pack(side="left", padx=6)
         ctk.CTkButton(btns, text="Отмена", command=top.destroy).pack(side="left", padx=6)
+
+        build_calendar()
+        update_info()
         top.grab_set()
     
     # ---------- actions ----------

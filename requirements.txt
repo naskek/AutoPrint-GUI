@@ -3,3 +3,4 @@ Pillow
 openpyxl
 pywin32
 PyInstaller
+tkcalendar

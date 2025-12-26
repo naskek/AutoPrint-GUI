@@ -31,7 +31,7 @@
     "Холтек",
     "Экошеф"
   ],
-  "csv_dir": "C:\\Users\\ЧестныйЗнак\\Desktop\\Маркировка\\Заказы кодов\\12_ДЕКАБРЬ\\207_Печагин_24_12_2025",
+  "csv_dir": "C:\\Users\\ЧестныйЗнак\\Desktop\\Маркировка\\Заказы кодов\\12_ДЕКАБРЬ\\199_Печагин_Мирный_Окей_18_12_2025",
   "csv_print_stats": {
     "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\191_мирный_печагин_12_12_2025\\191_04606447001769.csv": {
       "printed": true,
@@ -509,9 +509,9 @@
     },
     "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\196_печагин_17_12_2025\\196.csv": {
       "printed": true,
-      "last_print": "2025-12-17 10:24:07",
-      "print_runs": 4,
-      "last_sent": 600,
+      "last_print": "2025-12-25 10:07:12",
+      "print_runs": 5,
+      "last_sent": 2,
       "last_printer": "Printronix Auto ID T6304 - PGL",
       "last_fmt": "30x20",
       "last_calib": 6,
@@ -546,6 +546,14 @@
           "printer": "Printronix Auto ID T6304 - PGL",
           "fmt": "30x20",
           "sent": 600,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-25 10:07:12",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 2,
           "calib": 6,
           "user": "ЧестныйЗнак"
         }
@@ -797,12 +805,12 @@
     },
     "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\199_печагин_мирный_окей_18_12_2025\\199_04607186951544.csv": {
       "printed": true,
-      "last_print": "2025-12-18 17:51:24",
-      "print_runs": 1,
-      "last_sent": 4800,
+      "last_print": "2025-12-26 09:19:00",
+      "print_runs": 2,
+      "last_sent": 1,
       "last_printer": "Printronix Auto ID T6304 - PGL",
       "last_fmt": "30x20",
-      "last_calib": 18,
+      "last_calib": 0,
       "last_user": "ЧестныйЗнак",
       "history": [
         {
@@ -811,6 +819,14 @@
           "fmt": "30x20",
           "sent": 4800,
           "calib": 18,
+          "user": "ЧестныйЗнак"
+        },
+        {
+          "ts": "2025-12-26 09:19:00",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 1,
+          "calib": 0,
           "user": "ЧестныйЗнак"
         }
       ]
@@ -1318,6 +1334,26 @@
           "user": "ЧестныйЗнак"
         }
       ]
+    },
+    "c:\\users\\честныйзнак\\desktop\\маркировка\\заказы кодов\\12_декабрь\\208_печагин_25_12_2025\\codesorder_2025-12-25_1.csv": {
+      "printed": true,
+      "last_print": "2025-12-25 13:17:40",
+      "print_runs": 1,
+      "last_sent": 378,
+      "last_printer": "Printronix Auto ID T6304 - PGL",
+      "last_fmt": "30x20",
+      "last_calib": 6,
+      "last_user": "ЧестныйЗнак",
+      "history": [
+        {
+          "ts": "2025-12-25 13:17:40",
+          "printer": "Printronix Auto ID T6304 - PGL",
+          "fmt": "30x20",
+          "sent": 378,
+          "calib": 6,
+          "user": "ЧестныйЗнак"
+        }
+      ]
     }
   },
   "token_status": {
@@ -1333,5 +1369,6 @@
     "last_reset": "2025-12-24T14:11:37",
     "last_update": "2025-12-24T14:11:37"
   },
-  "report_dir": "C:/Users/ЧестныйЗнак/Desktop"
+  "report_dir": "C:/Users/ЧестныйЗнак/Desktop",
+  "crpt_cert_thumbprint": "3E6DBBB9C5CEC4A4530616CDF9169E97C0D38A44"
 }

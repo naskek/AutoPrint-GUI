@@ -52,6 +52,34 @@ def save_config(cfg: dict):
         pass
 
 
+def load_env_file(path: str, override: bool = False) -> dict:
+    """Load simple KEY=VALUE pairs into os.environ."""
+    if not path or not os.path.isfile(path):
+        return {}
+    loaded = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip()
+                if not key:
+                    continue
+                if val and ((val[0] == val[-1]) and val[0] in ("'", '"')):
+                    val = val[1:-1]
+                if override or (key not in os.environ):
+                    os.environ[key] = val
+                loaded[key] = val
+    except Exception:
+        return loaded
+    return loaded
+
+
 def enum_printers():
     if not win32print:
         return []

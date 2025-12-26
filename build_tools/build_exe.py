@@ -35,6 +35,8 @@ def main() -> int:
         "customtkinter",
         "--hidden-import",
         "darkdetect",
+        "--hidden-import",
+        "tkcalendar",
     ]
 
     for rel_path, dest in data_files:
