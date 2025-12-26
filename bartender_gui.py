@@ -1182,17 +1182,17 @@ class App(ctk.CTk):
                     variable=self.scale_var,
                     command=self._on_scale_change
                 )
+            view_menu.add_separator()
+            view_menu.add_cascade(label="Масштаб", menu=scale_menu)
 
             service_menu = Menu(self, tearoff=0)
             service_menu.add_command(label="Редактор каталога товаров", command=self._open_product_catalog)
             service_menu.add_command(label="Открыть папку шаблонов", command=self._open_templates_dir)
             service_menu.add_command(label="Смена риббона (сброс счётчика)", command=self._on_ribbon_reset)
 
-            report_menu = Menu(self, tearoff=0)
-            report_menu.add_command(label="Отчет о вводе в оборот", command=self._open_turnover_report_dialog)
-
-            check_menu = Menu(self, tearoff=0)
-            check_menu.add_command(label="Проверка кодов", command=self._open_crpt_checker_window)
+            codes_menu = Menu(self, tearoff=0)
+            codes_menu.add_command(label="Отчет о вводе в оборот", command=self._open_turnover_report_dialog)
+            codes_menu.add_command(label="Проверка кодов", command=self._open_crpt_checker_window)
 
             # Кастомная панель вместо menu-bar
             # создаём бар до остального контента (если уже есть виджеты - вставляем перед первым)
@@ -1214,14 +1214,12 @@ class App(ctk.CTk):
                 return b
 
             btn_view = make_btn("Вид", view_menu)
-            btn_scale = make_btn("Масштаб", scale_menu)
             btn_service = make_btn("Сервис", service_menu)
-            btn_report = make_btn("Отчет", report_menu)
-            btn_check = make_btn("Проверка кодов", check_menu, width=150)
+            btn_codes = make_btn("Работа с кодами", codes_menu, width=150)
 
             self.menu_bar_frame = bar
-            self._menus_popup = [view_menu, scale_menu, service_menu, report_menu, check_menu]
-            self._menu_buttons = [btn_view, btn_scale, btn_service, btn_report, btn_check]
+            self._menus_popup = [view_menu, codes_menu, service_menu]
+            self._menu_buttons = [btn_view, btn_service, btn_codes]
             self._update_menu_colors()
         except Exception:
             pass
