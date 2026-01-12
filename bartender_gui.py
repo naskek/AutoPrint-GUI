@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-BarTender GUI V2.0 batch - Refactored
+BarTender GUI V3.1 
 """
 
 import os
@@ -859,6 +859,7 @@ class App(ctk.CTk):
         self.last_batches = []
         self.last_rows_all = []
         self.last_idx0 = 0
+        self.last_sticker_jobs = []
         atexit.register(lambda: save_config(self.cfg))
 
         self.bt = None
@@ -1078,6 +1079,14 @@ class App(ctk.CTk):
         btn_row.pack(fill="x", pady=(4, 0))
         ctk.CTkButton(btn_row, text="Добавить", width=80, command=self._client_add).pack(side="left", padx=(0, 6))
         ctk.CTkButton(btn_row, text="Очистить", width=80, command=self._client_clear).pack(side="left")
+        sticker_row = ctk.CTkFrame(client_col)
+        sticker_row.pack(fill="x", pady=(6, 0))
+        ctk.CTkButton(
+            sticker_row,
+            text="Перепечатать стикер",
+            width=180,
+            command=self._open_sticker_reprint_dialog
+        ).pack(side="left")
 
         # кнопки действий
         btns = ctk.CTkFrame(self)
@@ -1188,6 +1197,7 @@ class App(ctk.CTk):
             service_menu = Menu(self, tearoff=0)
             service_menu.add_command(label="Редактор каталога товаров", command=self._open_product_catalog)
             service_menu.add_command(label="Открыть папку шаблонов", command=self._open_templates_dir)
+            service_menu.add_command(label="Принтеры по шаблонам", command=self._open_template_printer_settings)
             service_menu.add_command(label="Смена риббона (сброс счётчика)", command=self._on_ribbon_reset)
 
             codes_menu = Menu(self, tearoff=0)
@@ -1549,6 +1559,88 @@ class App(ctk.CTk):
             except Exception:
                 pass
 
+    def _open_template_printer_settings(self):
+        """Окно настроек принтеров по шаблонам."""
+        win = ctk.CTkToplevel(self)
+        win.title("Принтеры по шаблонам")
+        win.geometry("440x260")
+        win.grab_set()
+        try:
+            win.lift()
+            win.attributes("-topmost", True)
+            win.after(150, lambda: win.attributes("-topmost", False))
+            win.focus_force()
+        except Exception:
+            pass
+
+        fmt_map = self.cfg.get("format_printers") or {}
+        values = self._get_printer_values()
+        extras = []
+        for v in (fmt_map.get("16x16"), fmt_map.get("30x20"), self.cfg.get("sticker_printer")):
+            if v and v not in values and v not in extras:
+                extras.append(v)
+        values = extras + values
+        options = ["(по умолчанию)"] + values if values else ["(по умолчанию)"]
+
+        def _cur_or_default(val):
+            return val if val else "(по умолчанию)"
+
+        body = ctk.CTkFrame(win)
+        body.pack(fill="both", expand=True, padx=12, pady=12)
+        body.grid_columnconfigure(1, weight=1)
+
+        var_16 = tk.StringVar(value=_cur_or_default(fmt_map.get("16x16")))
+        var_30 = tk.StringVar(value=_cur_or_default(fmt_map.get("30x20")))
+        var_st = tk.StringVar(value=_cur_or_default(self.cfg.get("sticker_printer")))
+
+        ctk.CTkLabel(body, text="Шаблон 16x16:").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=6)
+        ctk.CTkOptionMenu(body, variable=var_16, values=options).grid(row=0, column=1, sticky="ew", pady=6)
+
+        ctk.CTkLabel(body, text="Шаблон 30x20:").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=6)
+        ctk.CTkOptionMenu(body, variable=var_30, values=options).grid(row=1, column=1, sticky="ew", pady=6)
+
+        ctk.CTkLabel(body, text="Стикер 60x40:").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=6)
+        ctk.CTkOptionMenu(body, variable=var_st, values=options).grid(row=2, column=1, sticky="ew", pady=6)
+
+        btns = ctk.CTkFrame(win)
+        btns.pack(pady=(0, 12))
+
+        def _apply_format_setting(fmt_key, var):
+            val = (var.get() or "").strip()
+            if val in ("(по умолчанию)", "(нет принтеров)", ""):
+                if fmt_key in fmt_map:
+                    fmt_map.pop(fmt_key, None)
+            else:
+                fmt_map[fmt_key] = val
+
+        def _save():
+            _apply_format_setting("16x16", var_16)
+            _apply_format_setting("30x20", var_30)
+            if fmt_map:
+                self.cfg["format_printers"] = fmt_map
+            else:
+                self.cfg.pop("format_printers", None)
+
+            st_val = (var_st.get() or "").strip()
+            if st_val in ("(по умолчанию)", "(нет принтеров)", ""):
+                self.cfg.pop("sticker_printer", None)
+            else:
+                self.cfg["sticker_printer"] = st_val
+
+            save_config(self.cfg)
+            try:
+                self.logger.log("[Пресет] Принтеры по шаблонам сохранены.")
+            except Exception:
+                pass
+            try:
+                self._set_default_printer_for_format((self.format_combo.get() or "").strip())
+            except Exception:
+                pass
+            win.destroy()
+
+        ctk.CTkButton(btns, text="Сохранить", command=_save, width=120).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="Отмена", command=win.destroy, width=90, fg_color="#444").pack(side="left", padx=6)
+
     def _prompt_ribbon_printer(self):
         """Небольшое окно выбора принтера для смены риббона."""
         vals = []
@@ -1649,35 +1741,86 @@ class App(ctk.CTk):
             self.logger.err(f"COM не стартовал: {e}")
             mb.showerror("BarTender COM", f"Не удалось запустить COM:\n{e}")
 
-    def _refresh_printers(self):
-        items = enum_printers() or ["(нет принтеров)"]
-        self.prn_combo.configure(values=items)
-        self.prn_combo.set(items[0])
-
-    def _set_default_printer_for_format(self, fmt: str):
-        """Выбирает принтер по умолчанию для формата, если он есть в списке."""
-        fmt = (fmt or "").strip()
-        desired = None
-        if fmt == "16x16":
-            desired = "TSC TE310"
-        elif fmt == "30x20":
-            desired = "Printronix"
-        if not desired:
-            return
+    def _get_printer_values(self):
         try:
             values = list(self.prn_combo.cget("values") or [])
         except Exception:
             values = []
-        target = None
+        if not values or values == ["(нет принтеров)"]:
+            try:
+                values = enum_printers() or []
+            except Exception:
+                values = []
+        seen = set()
+        ordered = []
         for v in values:
-            if desired.lower() in v.lower():
-                target = v
-                break
+            if v and v not in seen:
+                ordered.append(v)
+                seen.add(v)
+        return ordered
+
+    def _match_printer_value(self, preferred):
+        if not preferred:
+            return None
+        values = self._get_printer_values()
+        for v in values:
+            if v == preferred:
+                return v
+        pref_lower = preferred.lower()
+        for v in values:
+            if v.lower() == pref_lower:
+                return v
+        for v in values:
+            if pref_lower in v.lower():
+                return v
+        return None
+
+    def _get_format_printer_preference(self, fmt: str):
+        try:
+            fmt_map = self.cfg.get("format_printers") or {}
+        except Exception:
+            fmt_map = {}
+        return (fmt_map.get(fmt) or "").strip()
+
+    def _refresh_printers(self):
+        items = enum_printers() or ["(нет принтеров)"]
+        self.prn_combo.configure(values=items)
+        cur_fmt = (self.format_combo.get() or "").strip() if hasattr(self, "format_combo") else ""
+        target = None
+        if cur_fmt in ("16x16", "30x20"):
+            target = self._match_printer_value(self._get_format_printer_preference(cur_fmt))
+        if not target:
+            target = self._pick_printer_by_keywords(("TSC310", "TSC 310", "TSC TE310", "TE310"))
+        self.prn_combo.set(target or items[0])
+
+    def _set_default_printer_for_format(self, fmt: str):
+        """Выбирает принтер по умолчанию для формата, если он есть в списке."""
+        fmt = (fmt or "").strip()
+        if fmt not in ("16x16", "30x20"):
+            return
+        pref = self._get_format_printer_preference(fmt)
+        target = self._match_printer_value(pref)
         if target:
             try:
                 self.prn_combo.set(target)
             except Exception:
                 pass
+            return
+        preferred = ("TSC310", "TSC 310", "TSC TE310", "TE310")
+        target = self._pick_printer_by_keywords(preferred)
+        if target:
+            try:
+                self.prn_combo.set(target)
+            except Exception:
+                pass
+
+    def _pick_printer_by_keywords(self, keywords):
+        values = self._get_printer_values()
+        for key in keywords or []:
+            for v in values:
+                if key.lower() in v.lower():
+                    return v
+        return None
 
     def _apply_format_ui(self, fmt: str):
         """Переключает доступность поля партии и дефолтный принтер под выбранный формат."""
@@ -4214,11 +4357,94 @@ class App(ctk.CTk):
             for v in values:
                 if cand.lower() in v.lower():
                     return v
-        # запасной вариант — выбранный принтер
+        # запасной вариант - выбранный принтер
         try:
             return self._get_printer()
         except Exception:
             return None
+
+    def _record_sticker_job(self, bidx, start, end, total, sample_row, km_count, total_rolls):
+        if not sample_row:
+            return
+        try:
+            sample_copy = dict(sample_row)
+        except Exception:
+            sample_copy = sample_row
+        job = {
+            "bidx": int(bidx),
+            "start": int(start),
+            "end": int(end),
+            "total": int(total),
+            "sample_row": sample_copy,
+            "km_count": int(km_count or 0),
+            "total_rolls": int(total_rolls or 0),
+            "label": f"Пакет {bidx} ({start}-{end})",
+        }
+        for i, existing in enumerate(self.last_sticker_jobs):
+            if existing.get("bidx") == job["bidx"]:
+                self.last_sticker_jobs[i] = job
+                return
+        self.last_sticker_jobs.append(job)
+
+    def _open_sticker_reprint_dialog(self):
+        jobs = list(self.last_sticker_jobs or [])
+        if not jobs:
+            mb.showerror("Стикер", "Нет данных для повторной печати стикера. Сначала напечатайте коды.")
+            return
+        jobs.sort(key=lambda j: j.get("bidx", 0))
+        options = [j.get("label") or f"Пакет {j.get('bidx','?')}" for j in jobs]
+
+        win = ctk.CTkToplevel(self)
+        win.title("Повторная печать стикера")
+        win.geometry("420x180")
+        win.grab_set()
+        try:
+            win.lift()
+            win.attributes("-topmost", True)
+            win.after(150, lambda: win.attributes("-topmost", False))
+            win.focus_force()
+        except Exception:
+            pass
+
+        body = ctk.CTkFrame(win)
+        body.pack(fill="both", expand=True, padx=12, pady=12)
+        ctk.CTkLabel(body, text="Выбери пакет для печати стикера:").pack(anchor="w", pady=(0, 6))
+        var = tk.StringVar(value=options[0])
+        ctk.CTkOptionMenu(body, variable=var, values=options).pack(fill="x", pady=(0, 8))
+
+        btns = ctk.CTkFrame(win)
+        btns.pack(pady=(0, 10))
+
+        def _print_one():
+            label = var.get()
+            job = next((j for j in jobs if j.get("label") == label), None)
+            if not job:
+                return
+            self._print_sticker_placeholder(
+                job["bidx"],
+                job["start"],
+                job["end"],
+                job["total"],
+                sample_row=job.get("sample_row"),
+                km_count=job.get("km_count"),
+                total_rolls=job.get("total_rolls"),
+            )
+
+        def _print_all():
+            for job in jobs:
+                self._print_sticker_placeholder(
+                    job["bidx"],
+                    job["start"],
+                    job["end"],
+                    job["total"],
+                    sample_row=job.get("sample_row"),
+                    km_count=job.get("km_count"),
+                    total_rolls=job.get("total_rolls"),
+                )
+
+        ctk.CTkButton(btns, text="Печать", command=_print_one, width=110).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="Печать всех", command=_print_all, width=110).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="Закрыть", command=win.destroy, width=90, fg_color="#444").pack(side="left", padx=6)
 
     def _print_sticker_placeholder(self, bidx, start, end, total, sample_row=None, km_count=None, total_rolls=None):
         """Печать стикера через BarTender, если есть шаблон sticker60x40.btw (или cfg['sticker_btw'])."""
@@ -4771,7 +4997,7 @@ class App(ctk.CTk):
             self.logger.err(f"Не удалось показать превью: {e}")
             self.preview_label.configure(text="Не удалось показать превью")
 
-    def _preprint_stickers_for_all_batches(self, batches, rows_all, idx0, total, total_rolls):
+    def _preprint_stickers_for_all_batches(self, batches, rows_all, idx0, total, total_rolls, record_jobs=False):
         """Печать стикеров сразу на все пакеты перед основной печатью."""
         try:
             if self._bool_var(getattr(self, "skip_sticker_var", False)):
@@ -4787,6 +5013,16 @@ class App(ctk.CTk):
                     if not enr:
                         self.logger.err(f"Стикер пакет {bidx}: данные не сформированы (пропуск).")
                         continue
+                    if record_jobs:
+                        self._record_sticker_job(
+                            bidx,
+                            idx0 + start + 1,
+                            idx0 + end,
+                            total,
+                            enr,
+                            len(rows),
+                            total_rolls,
+                        )
                     self._print_sticker_placeholder(
                         bidx,
                         idx0 + start + 1,
@@ -5541,6 +5777,9 @@ class App(ctk.CTk):
         batches_full = [(i, min(i + batch_size, total)) for i in range(0, total, batch_size)]
         batches = target_batches if target_batches else batches_full
         self.logger.log(f"Всего пакетов: {len(batches_full)}; размер пакета={batch_size}; лимит={total}")
+        record_jobs = target_batches is None
+        if record_jobs:
+            self.last_sticker_jobs = []
 
         sent_total = 0
         calib_total = 0
@@ -5554,7 +5793,14 @@ class App(ctk.CTk):
         try:
             self._stickers_preprinted = False
             if target_batches is None and not self._bool_var(getattr(self, "skip_sticker_var", False)):
-                if self._preprint_stickers_for_all_batches(batches_full, rows_all, idx0, total, total_rolls):
+                if self._preprint_stickers_for_all_batches(
+                    batches_full,
+                    rows_all,
+                    idx0,
+                    total,
+                    total_rolls,
+                    record_jobs=record_jobs,
+                ):
                     self._stickers_preprinted = True
 
             if target_batches is None:
@@ -5714,14 +5960,26 @@ class App(ctk.CTk):
                             pass
 
                 try:
+                    start_num = idx0 + start + 1
+                    end_num = idx0 + end
+                    sample_real = None
+                    for e in enriched:
+                        if not e.get("_CALIB"):
+                            sample_real = e
+                            break
+                    if not sample_real and enriched:
+                        sample_real = enriched[0]
+                    if record_jobs:
+                        self._record_sticker_job(
+                            bidx,
+                            start_num,
+                            end_num,
+                            total,
+                            sample_real,
+                            real_in_batch,
+                            total_rolls,
+                        )
                     if (not self._stickers_preprinted) and (not self._bool_var(getattr(self, "skip_sticker_var", False))):
-                        start_num = idx0 + start + 1
-                        end_num = idx0 + end
-                        sample_real = None
-                        for e in enriched:
-                            if not e.get("_CALIB"):
-                                sample_real = e
-                                break
                         self._print_sticker_placeholder(
                             bidx, start_num, end_num, total,
                             sample_row=sample_real,
