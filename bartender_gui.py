@@ -2392,6 +2392,32 @@ class App(ctk.CTk):
                 pass
             return s.strip()
 
+        def _format_doc_date(v):
+            if v is None:
+                return ""
+            if isinstance(v, dt.datetime):
+                return v.date().strftime("%Y-%m-%d")
+            if isinstance(v, dt.date):
+                return v.strftime("%Y-%m-%d")
+            s = _clean(v)
+            if not s:
+                return ""
+            m = re.match(r"^(\d{4})[./-](\d{1,2})[./-](\d{1,2})", s)
+            if m:
+                try:
+                    y, mo, d = (int(x) for x in m.groups())
+                    return dt.date(y, mo, d).strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+            m = re.match(r"^(\d{1,2})[./-](\d{1,2})[./-](\d{4})", s)
+            if m:
+                try:
+                    d, mo, y = (int(x) for x in m.groups())
+                    return dt.date(y, mo, d).strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+            return s
+
         out = []
         missing = 0
         for r in input_rows or []:
@@ -2404,7 +2430,7 @@ class App(ctk.CTk):
                 missing += 1
             tnved = _clean(cat.get("ТН ВЭД")) if cat else ""
             doc_num = _clean(cat.get("Разрешительная документация")) if cat else ""
-            doc_date = _clean(cat.get("от")) if cat else ""
+            doc_date = _format_doc_date(cat.get("от")) if cat else ""
             out.append([km, gtin, name, tnved, REPORT_TURNOVER_DOC_TYPE, doc_num, doc_date])
         return out, missing
 
