@@ -52,6 +52,7 @@ PREVIEW_NAME = "preview.png"
 STICKER_BTW_NAME = "sticker60x40.btw"
 STATS_PATH = os.path.join(CONFIG_DIR, "stats.json")
 CNT_RIBBON_LIMIT_16 = 16000
+ROLL_SIZE_DEFAULT = 2000
 CATALOG_HEADERS = [
     "GTIN",
     "Наименование",
@@ -193,6 +194,73 @@ class Logger:
         except Exception:
             # если виджет ещё не готов - просто пропускаем
             pass
+
+
+class SimpleTooltip:
+    def __init__(self, widget, text, delay=400):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._after_id = None
+        self._tip = None
+        try:
+            widget.bind("<Enter>", self._schedule)
+            widget.bind("<Leave>", self._hide)
+            widget.bind("<ButtonPress>", self._hide)
+        except Exception:
+            pass
+
+    def _schedule(self, event=None):
+        self._cancel()
+        try:
+            self._after_id = self.widget.after(self.delay, self._show)
+        except Exception:
+            self._after_id = None
+
+    def _cancel(self):
+        if self._after_id:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show(self):
+        if self._tip or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 10
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        except Exception:
+            return
+        try:
+            tip = tk.Toplevel(self.widget)
+            tip.wm_overrideredirect(True)
+            tip.wm_geometry(f"+{x}+{y}")
+            label = tk.Label(
+                tip,
+                text=self.text,
+                background="#222222",
+                foreground="#ffffff",
+                relief="solid",
+                borderwidth=1,
+                padx=6,
+                pady=3,
+                font=("Arial", 9),
+            )
+            label.pack()
+            self._tip = tip
+        except Exception:
+            self._tip = None
+
+    def _hide(self, event=None):
+        self._cancel()
+        if self._tip:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
 
 class StatsManager:
     """Отвечает за сбор/хранение статистики печати и риббонов."""
@@ -997,6 +1065,29 @@ class App(ctk.CTk):
         self.skip_sticker_var = ctk.BooleanVar(value=False)
         self.skip_sticker_chk = ctk.CTkCheckBox(chk_col, text="Не печатать маркировочный стикер", variable=self.skip_sticker_var)
         self.skip_sticker_chk.pack(anchor="w", pady=(0, 4))
+
+        roll_row = ctk.CTkFrame(chk_col, fg_color="transparent")
+        roll_row.pack(anchor="w", pady=(0, 4), fill="x")
+        self.roll_remain_var = ctk.BooleanVar(value=False)
+        self.roll_remain_chk = ctk.CTkCheckBox(
+            roll_row,
+            text="Печать остатка в рулоне",
+            variable=self.roll_remain_var,
+            command=self._on_roll_remain_toggle,
+        )
+        self.roll_remain_chk.pack(side="left")
+        ctk.CTkLabel(roll_row, text="В рулоне:").pack(side="left", padx=(8, 4))
+        self.roll_remain_entry = ctk.CTkEntry(roll_row, width=80)
+        self.roll_remain_entry.insert(0, str(ROLL_SIZE_DEFAULT))
+        vcmd_roll = (self.register(lambda s: re.fullmatch(r"[0-9]*", s or "") is not None), "%P")
+        self.roll_remain_entry.configure(validate="key", validatecommand=vcmd_roll)
+        self.roll_remain_entry.pack(side="left")
+        ctk.CTkLabel(roll_row, text="шт.").pack(side="left", padx=(4, 0))
+        self.roll_remain_tip = SimpleTooltip(
+            self.roll_remain_entry,
+            "Число штук в полном рулоне. Используется для расчёта остатка. По умолчанию 2000.",
+        )
+        self._on_roll_remain_toggle()
 
         # CSV менеджер: папка + список файлов (правая половина)
         csv_block = ctk.CTkFrame(top_split, corner_radius=12)
@@ -4301,6 +4392,54 @@ class App(ctk.CTk):
             mb.showerror("Пакет", f"Ожидается целое число, получено: '{t}'")
             return None
 
+    def _on_roll_remain_toggle(self):
+        enabled = self._bool_var(getattr(self, "roll_remain_var", False))
+        try:
+            self.roll_remain_entry.configure(state="normal" if enabled else "disabled")
+        except Exception:
+            pass
+
+    def _get_roll_size(self):
+        try:
+            raw = (self.roll_remain_entry.get() or "").strip()
+        except Exception:
+            raw = ""
+        try:
+            v = int(raw or 0)
+        except Exception:
+            v = 0
+        if v > 0:
+            return v
+        return ROLL_SIZE_DEFAULT
+
+    def _calc_roll_remainder(self, printed_count, roll_size):
+        try:
+            printed = int(printed_count or 0)
+            size = int(roll_size or 0)
+        except Exception:
+            return None
+        if printed <= 0 or size <= 0:
+            return None
+        mod = printed % size
+        if mod == 0:
+            return 0
+        return size - mod
+
+    def _build_roll_remainder_row(self, remainder_value, fmt_name=None):
+        cols = getattr(self, "REQ_COLS", ["ShortName","ShortGTIN","EXP_DATE","PROD_DATE","PART_NUM","DM","NUM"])
+        remainder_str = str(remainder_value)
+        row = {k: "" for k in cols}
+        row.update({
+            "NUM": remainder_str,
+            "ShortGTIN": remainder_str,
+            "ShortName": f"Остаток: {remainder_str}",
+            "DM": remainder_str,
+        })
+        if fmt_name:
+            row["_FORMAT"] = fmt_name
+        row["_ROLL_REMAIN"] = True
+        return row
+
     def _can_fast_enrich(self, rows):
         """Проверяем, одинаковый ли GTIN во всём пакете (можно обогащать один раз)."""
         try:
@@ -5919,6 +6058,18 @@ class App(ctk.CTk):
                     calib_added = 6
                     self.logger.log("КАЛИБРОВКА: 6 строк 'X' добавлены в начало пакета.")
 
+                fmt_name = enriched[0].get("_FORMAT") or "16x16"
+                remainder_added = 0
+                remainder_value = None
+                if self._bool_var(getattr(self, "roll_remain_var", False)):
+                    roll_size = self._get_roll_size()
+                    consumed = max(0, len(enriched) - calib_added)
+                    remainder_value = self._calc_roll_remainder(consumed, roll_size)
+                    if remainder_value and remainder_value > 0:
+                        enriched.append(self._build_roll_remainder_row(remainder_value, fmt_name=fmt_name))
+                        remainder_added = 1
+                        self.logger.log(f"ОСТАТОК В РУЛОНЕ: будет напечатано {remainder_value} (рулон {roll_size}).")
+
                 self._pause_wait()
                 if self._should_stop():
                     break
@@ -5927,8 +6078,7 @@ class App(ctk.CTk):
                 fmt = None
                 try:
                     labels_for_ribbon = len(enriched)
-                    real_in_batch = len(enriched) - calib_added
-                    fmt_name = enriched[0].get("_FORMAT") or "16x16"
+                    real_in_batch = len(enriched) - calib_added - remainder_added
                     try:
                         self._apply_format_ui(fmt_name)
                         prn = self._get_printer()
@@ -5967,7 +6117,12 @@ class App(ctk.CTk):
                     if self._should_stop():
                         raise Exception("Печать остановлена пользователем.")
 
-                    self.logger.log(f"Отправка на печать: {real_in_batch} строк." + (f" (+{calib_added} калибровочных)" if calib_added else ""))
+                    extra_info = ""
+                    if calib_added:
+                        extra_info += f" (+{calib_added} калибровочных)"
+                    if remainder_added and remainder_value:
+                        extra_info += f" (+1 остаток={remainder_value})"
+                    self.logger.log(f"Отправка на печать: {real_in_batch} строк." + extra_info)
                     fmt.PrintOut(False, self._dialog_flag())
 
                     self._increment_ribbon_counter(labels_for_ribbon, fmt_name)
@@ -5990,9 +6145,10 @@ class App(ctk.CTk):
                     end_num = idx0 + end
                     sample_real = None
                     for e in enriched:
-                        if not e.get("_CALIB"):
-                            sample_real = e
-                            break
+                        if e.get("_CALIB") or e.get("_ROLL_REMAIN"):
+                            continue
+                        sample_real = e
+                        break
                     if not sample_real and enriched:
                         sample_real = enriched[0]
                     if record_jobs:
