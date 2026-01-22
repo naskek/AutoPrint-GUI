@@ -12,7 +12,6 @@ import datetime as dt
 import atexit
 import sys
 import json
-import uuid
 import tempfile
 import getpass
 import threading
@@ -51,8 +50,6 @@ APP_VERSION = "3.0"
 PREVIEW_NAME = "preview.png"
 STICKER_BTW_NAME = "sticker60x40.btw"
 STATS_PATH = os.path.join(CONFIG_DIR, "stats.json")
-CNT_RIBBON_LIMIT_16 = 16000
-ROLL_SIZE_DEFAULT = 2000
 CATALOG_HEADERS = [
     "GTIN",
     "Наименование",
@@ -263,7 +260,7 @@ class SimpleTooltip:
             self._tip = None
 
 class StatsManager:
-    """Отвечает за сбор/хранение статистики печати и риббонов."""
+    """Отвечает за сбор/хранение статистики печати."""
     def __init__(self, path, extra_paths=None, logger=None):
         self.path = path
         self.extra_paths = extra_paths or []
@@ -272,26 +269,13 @@ class StatsManager:
         self.current_job_start = None
         self.current_job_name = ""
         self.load()
-        self._ensure_ribbon_session()
 
     def _default_data(self):
-        now_iso = dt.datetime.now().isoformat(timespec="seconds")
-        sid = str(uuid.uuid4())
         return {
             "labels_total": 0,
             "labels_by_format": {"16x16": 0, "30x20": 0, "other": 0},
             "print_time_seconds": 0,
             "print_time_by_format": {"16x16": 0.0, "30x20": 0.0, "other": 0.0},
-            "ribbon": {
-                "current_session_id": sid,
-                "current_session_started_at": now_iso,
-                "labels_on_current_ribbon": 0,
-                "last_checkpoint_asked": 0,
-            },
-            "ribbon_history": [],
-            "ribbons": {  # новое: раздельные риббоны по принтерам
-                "by_printer": {}
-            },
             "jobs_history": [],
         }
 
@@ -311,11 +295,6 @@ class StatsManager:
             if loaded is not None:
                 # мягкий merge, чтобы не потерять новые поля
                 self.data.update({k: loaded.get(k, v) for k, v in self._default_data().items()})
-                # глубокий merge ribbon
-                r_def = self._default_data()["ribbon"]
-                r_loaded = loaded.get("ribbon", {})
-                r = {k: r_loaded.get(k, r_def.get(k)) for k in r_def.keys()}
-                self.data["ribbon"] = r
                 # merge per-format словарей
                 def _merge_dict(defv, loadedv):
                     out = dict(defv or {})
@@ -330,12 +309,6 @@ class StatsManager:
                     self._default_data().get("print_time_by_format"),
                     loaded.get("print_time_by_format")
                 )
-                self.data["ribbon_history"] = loaded.get("ribbon_history", []) or []
-                # merge ribbons (по принтерам)
-                ribbons_loaded = loaded.get("ribbons", {}) or {}
-                self.data["ribbons"] = {
-                    "by_printer": ribbons_loaded.get("by_printer", {}) or {}
-                }
                 self.data["jobs_history"] = loaded.get("jobs_history", []) or []
         except Exception:
             self.data = self._default_data()
@@ -380,73 +353,14 @@ class StatsManager:
             except Exception:
                 pass
 
-    def _ensure_ribbon_session(self):
-        r = self.data.get("ribbon") or {}
-        if not r.get("current_session_id") or not r.get("current_session_started_at"):
-            r["current_session_id"] = str(uuid.uuid4())
-            r["current_session_started_at"] = dt.datetime.now().isoformat(timespec="seconds")
-            r["labels_on_current_ribbon"] = int(r.get("labels_on_current_ribbon") or 0)
-            r["last_checkpoint_asked"] = int(r.get("last_checkpoint_asked") or 0)
-            self.data["ribbon"] = r
-            self._save_atomic()
-        else:
-            self.data["ribbon"] = {
-                "current_session_id": r.get("current_session_id"),
-                "current_session_started_at": r.get("current_session_started_at"),
-                "labels_on_current_ribbon": int(r.get("labels_on_current_ribbon") or 0),
-                "last_checkpoint_asked": int(r.get("last_checkpoint_asked") or 0),
-            }
-        # гарантируем наличие файла на диске
-        try:
-            self._save_atomic()
-        except Exception:
-            pass
-
     def reset_all(self):
         """Полное обнуление статистики."""
         self.data = self._default_data()
-        self._ensure_ribbon_session()
         self._save_atomic()
 
     def save(self):
         """Публичный синоним для сохранения на диск."""
         self._save_atomic()
-
-    def _norm_printer(self, printer):
-        try:
-            p = (printer or "default").strip()
-            if not p:
-                p = "default"
-            return p
-        except Exception:
-            return "default"
-
-    def _ensure_printer_ribbon(self, printer):
-        """Гарантирует наличие сессии риббона для указанного принтера."""
-        key = self._norm_printer(printer)
-        ribbons = self.data.setdefault("ribbons", {}).setdefault("by_printer", {})
-        entry = ribbons.get(key, {})
-        now_iso = dt.datetime.now().isoformat(timespec="seconds")
-        cur = entry.get("current") or {}
-        if not cur.get("current_session_id") or not cur.get("current_session_started_at"):
-            cur = {
-                "current_session_id": str(uuid.uuid4()),
-                "current_session_started_at": now_iso,
-                "labels_on_current_ribbon": int(cur.get("labels_on_current_ribbon") or 0),
-                "last_checkpoint_asked": int(cur.get("last_checkpoint_asked") or 0),
-            }
-        else:
-            cur = {
-                "current_session_id": cur.get("current_session_id"),
-                "current_session_started_at": cur.get("current_session_started_at"),
-                "labels_on_current_ribbon": int(cur.get("labels_on_current_ribbon") or 0),
-                "last_checkpoint_asked": int(cur.get("last_checkpoint_asked") or 0),
-            }
-        entry["current"] = cur
-        entry.setdefault("history", [])
-        entry.setdefault("name", printer or key)
-        ribbons[key] = entry
-        return key, entry
 
     def start_print_job(self, job_name=""):
         self.current_job_start = time.time()
@@ -455,16 +369,11 @@ class StatsManager:
 
     def finish_print_job(self, printed_count=0, duration_sec=None, success=True, fmt=None, printer=None):
         try:
-            self._ensure_ribbon_session()
             if duration_sec is None:
                 duration_sec = 0.0 if not self.current_job_start else max(0.0, time.time() - self.current_job_start)
         finally:
             self.current_job_start = None
-        threshold_to_ask = None
         fmt_key = (fmt or "").strip() or "other"
-        prn_key = self._norm_printer(printer)
-        prn_name = printer or prn_key
-        _k, rb_entry = self._ensure_printer_ribbon(prn_name)
         if success and printed_count > 0:
             self.data["labels_total"] = int(self.data.get("labels_total", 0)) + int(printed_count)
             self.data["print_time_seconds"] = float(self.data.get("print_time_seconds", 0.0)) + float(duration_sec or 0.0)
@@ -479,29 +388,6 @@ class StatsManager:
                 pt = dict(self.data.get("print_time_by_format") or {})
                 pt[fmt_key] = float(pt.get(fmt_key, 0.0)) + float(duration_sec or 0.0)
                 self.data["print_time_by_format"] = pt
-            except Exception:
-                pass
-            # общий счётчик риббона (для совместимости)
-            r = self.data.get("ribbon", {})
-            r["labels_on_current_ribbon"] = int(r.get("labels_on_current_ribbon", 0)) + int(printed_count)
-            self.data["ribbon"] = r
-            try:
-                threshold_calc = (r["labels_on_current_ribbon"] // 10000) * 10000
-                last_chk = int(r.get("last_checkpoint_asked") or 0)
-                if threshold_calc >= 10000 and threshold_calc > last_chk:
-                    threshold_to_ask = (threshold_calc, prn_name)
-            except Exception:
-                threshold_to_ask = None
-            # риббон по принтеру
-            try:
-                cur = rb_entry.get("current", {})
-                cur["labels_on_current_ribbon"] = int(cur.get("labels_on_current_ribbon", 0)) + int(printed_count)
-                threshold_calc_p = (cur["labels_on_current_ribbon"] // 10000) * 10000
-                last_chk_p = int(cur.get("last_checkpoint_asked") or 0)
-                if threshold_calc_p >= 10000 and threshold_calc_p > last_chk_p:
-                    threshold_to_ask = (threshold_calc_p, prn_name)
-                rb_entry["current"] = cur
-                self.data.setdefault("ribbons", {}).setdefault("by_printer", {})[prn_key] = rb_entry
             except Exception:
                 pass
         elif success and duration_sec:
@@ -535,63 +421,7 @@ class StatsManager:
             pass
 
         self._save_atomic()
-        return threshold_to_ask
-
-    def ribbon_reset(self, printer=None):
-        self._ensure_ribbon_session()
-        now_iso = dt.datetime.now().isoformat(timespec="seconds")
-        r = self.data.get("ribbon", {})
-        history = list(self.data.get("ribbon_history") or [])
-        history.append({
-            "session_id": r.get("current_session_id"),
-            "started_at": r.get("current_session_started_at"),
-            "ended_at": now_iso,
-            "labels": int(r.get("labels_on_current_ribbon") or 0),
-        })
-        history = history[-50:]  # ограничим историю
-        self.data["ribbon_history"] = history
-        # открываем новую (общую)
-        self.data["ribbon"] = {
-            "current_session_id": str(uuid.uuid4()),
-            "current_session_started_at": now_iso,
-            "labels_on_current_ribbon": 0,
-            "last_checkpoint_asked": 0,
-        }
-        # по принтеру
-        key, entry = self._ensure_printer_ribbon(printer)
-        hist_p = list(entry.get("history") or [])
-        cur = entry.get("current", {})
-        hist_p.append({
-            "session_id": cur.get("current_session_id"),
-            "started_at": cur.get("current_session_started_at"),
-            "ended_at": now_iso,
-            "labels": int(cur.get("labels_on_current_ribbon") or 0),
-            "printer": printer or key,
-        })
-        entry["history"] = hist_p[-50:]
-        entry["current"] = {
-            "current_session_id": str(uuid.uuid4()),
-            "current_session_started_at": now_iso,
-            "labels_on_current_ribbon": 0,
-            "last_checkpoint_asked": 0,
-        }
-        self.data.setdefault("ribbons", {}).setdefault("by_printer", {})[key] = entry
-        self._save_atomic()
-
-    def mark_checkpoint(self, threshold, printer=None):
-        try:
-            self._ensure_ribbon_session()
-            r = self.data.get("ribbon", {})
-            r["last_checkpoint_asked"] = max(int(r.get("last_checkpoint_asked") or 0), int(threshold or 0))
-            self.data["ribbon"] = r
-            key, entry = self._ensure_printer_ribbon(printer)
-            cur = entry.get("current", {})
-            cur["last_checkpoint_asked"] = max(int(cur.get("last_checkpoint_asked") or 0), int(threshold or 0))
-            entry["current"] = cur
-            self.data.setdefault("ribbons", {}).setdefault("by_printer", {})[key] = entry
-            self._save_atomic()
-        except Exception:
-            pass
+        return None
 
 class App(ctk.CTk):
 
@@ -675,107 +505,6 @@ class App(ctk.CTk):
             return True
         except Exception:
             return False
-
-    # ------------------------ Риббон: упрощённый счётчик ------------------------
-    def _load_ribbon_state(self):
-        """Загружает счётчик риббона из конфига."""
-        try:
-            state = dict(self.cfg.get("ribbon_counter") or {})
-        except Exception:
-            state = {}
-        try:
-            state["count_16x16"] = int(state.get("count_16x16", 0) or 0)
-        except Exception:
-            state["count_16x16"] = 0
-        state.setdefault("last_reset", None)
-        state.setdefault("last_update", None)
-        return state
-
-    def _save_ribbon_state(self):
-        """Сохраняет счётчик риббона в конфиг."""
-        try:
-            if not isinstance(self.cfg, dict):
-                self.cfg = {}
-            self.cfg["ribbon_counter"] = self.ribbon_state
-            save_config(self.cfg)
-        except Exception:
-            pass
-
-    def _reset_ribbon_counter(self):
-        """Обнуляет счётчик риббона (16x16)."""
-        ts = dt.datetime.now().isoformat(timespec="seconds")
-        self.ribbon_state["count_16x16"] = 0
-        self.ribbon_state["last_reset"] = ts
-        self.ribbon_state["last_update"] = ts
-        self._save_ribbon_state()
-        self._update_ribbon_label()
-
-    def _increment_ribbon_counter(self, labels, fmt_name):
-        """Учитывает напечатанные этикетки 16x16 в счётчике риббона."""
-        try:
-            if (fmt_name or "").strip() != "16x16":
-                return
-            delta = max(0, int(labels or 0))
-            self.ribbon_state["count_16x16"] = int(self.ribbon_state.get("count_16x16", 0) or 0) + delta
-            self.ribbon_state["last_update"] = dt.datetime.now().isoformat(timespec="seconds")
-            self._save_ribbon_state()
-            self._update_ribbon_label()
-        except Exception:
-            pass
-
-    def _ensure_ribbon_capacity(self, labels_to_print, fmt_name, printer=None):
-        """Проверяет, не приближаемся ли к лимиту риббона, и просит подтверждение."""
-        if (fmt_name or "").strip() != "16x16":
-            return True
-        try:
-            current = int(self.ribbon_state.get("count_16x16", 0) or 0)
-        except Exception:
-            current = 0
-        add = max(0, int(labels_to_print or 0))
-        total_after = current + add
-        warn_at = max(0, self.ribbon_limit_16 - 1000)
-        if total_after < warn_at:
-            return True
-        try:
-            msg = (
-                f"На риббоне учтено {current} этикеток 16x16.\n"
-                f"Текущий пакет добавит {add}, итог будет {total_after}.\n"
-                f"Лимит ~{self.ribbon_limit_16}. Риббон заменён?"
-            )
-            resp = mb.askyesnocancel("Риббон", msg, parent=self)
-        except Exception:
-            resp = None
-        if resp is None:
-            try:
-                self.logger.log("Печать остановлена: нет подтверждения по риббону.")
-            except Exception:
-                pass
-            return False
-        if resp:
-            # Пользователь подтвердил замену: обнуляем счётчик
-            self._reset_ribbon_counter()
-            try:
-                self.logger.log("Счётчик риббона обнулён (подтверждена замена).")
-            except Exception:
-                pass
-            return True
-        try:
-            self.logger.log("Риббон не сброшен, продолжаем печать с текущим счётчиком.")
-        except Exception:
-            pass
-        return True
-
-    def _update_ribbon_label(self):
-        """Обновляет отображение счётчика риббона рядом с переключателем темы."""
-        try:
-            count = int(self.ribbon_state.get("count_16x16", 0) or 0)
-        except Exception:
-            count = 0
-        try:
-            txt = f"Риббон 16x16: {count}/{self.ribbon_limit_16}"
-            self.ribbon_label.configure(text=txt)
-        except Exception:
-            pass
 
     def _resolve_stats_path(self):
         """Определяет путь stats.json и путь-дубликат, выбирая существующий/последний."""
@@ -911,10 +640,8 @@ class App(ctk.CTk):
         self._apply_auto_scaling()
 
         self.cfg = load_config()
-        # статистика печати отключена; используем только счётчик риббона
+        # статистика печати отключена
         self.stats = None
-        self.ribbon_limit_16 = CNT_RIBBON_LIMIT_16
-        self.ribbon_state = self._load_ribbon_state()
         self.app_started_at = time.time()
         # Параметры по умолчанию
         # batch_size: 0 = пакетирование выключено по умолчанию
@@ -1018,16 +745,9 @@ class App(ctk.CTk):
         self.csv_label = ctk.CTkLabel(top, text="")
         self.csv_label.pack(side="left", padx=(8, 4), pady=10)
 
-        ribbon_box = ctk.CTkFrame(top, fg_color="transparent")
-        ribbon_box.pack(side="right", padx=(10, 6), pady=10)
-        self.ribbon_label = ctk.CTkLabel(ribbon_box, text="Риббон 16x16: 0/16000")
-        self.ribbon_label.pack(side="left", padx=(0, 6))
-        ctk.CTkButton(ribbon_box, text="Сброс", width=70, command=self._on_ribbon_reset).pack(side="left")
-
         self.theme_switch = ctk.CTkSwitch(top, text="Ночная тема", command=self._toggle_theme)
         self.theme_switch.pack(side="right", padx=(20, 10), pady=10)
         self.theme_switch.select()
-        self._update_ribbon_label()
 
         # Вверх: блок параметров (слева) + CSV менеджер (справа), 50/50
         top_split = ctk.CTkFrame(self, corner_radius=12)
@@ -1065,29 +785,6 @@ class App(ctk.CTk):
         self.skip_sticker_var = ctk.BooleanVar(value=False)
         self.skip_sticker_chk = ctk.CTkCheckBox(chk_col, text="Не печатать маркировочный стикер", variable=self.skip_sticker_var)
         self.skip_sticker_chk.pack(anchor="w", pady=(0, 4))
-
-        roll_row = ctk.CTkFrame(chk_col, fg_color="transparent")
-        roll_row.pack(anchor="w", pady=(0, 4), fill="x")
-        self.roll_remain_var = ctk.BooleanVar(value=False)
-        self.roll_remain_chk = ctk.CTkCheckBox(
-            roll_row,
-            text="Печать остатка в рулоне",
-            variable=self.roll_remain_var,
-            command=self._on_roll_remain_toggle,
-        )
-        self.roll_remain_chk.pack(side="left")
-        ctk.CTkLabel(roll_row, text="В рулоне:").pack(side="left", padx=(8, 4))
-        self.roll_remain_entry = ctk.CTkEntry(roll_row, width=80)
-        self.roll_remain_entry.insert(0, str(ROLL_SIZE_DEFAULT))
-        vcmd_roll = (self.register(lambda s: re.fullmatch(r"[0-9]*", s or "") is not None), "%P")
-        self.roll_remain_entry.configure(validate="key", validatecommand=vcmd_roll)
-        self.roll_remain_entry.pack(side="left")
-        ctk.CTkLabel(roll_row, text="шт.").pack(side="left", padx=(4, 0))
-        self.roll_remain_tip = SimpleTooltip(
-            self.roll_remain_entry,
-            "Число штук в полном рулоне. Используется для расчёта остатка. По умолчанию 2000.",
-        )
-        self._on_roll_remain_toggle()
 
         # CSV менеджер: папка + список файлов (правая половина)
         csv_block = ctk.CTkFrame(top_split, corner_radius=12)
@@ -1289,8 +986,6 @@ class App(ctk.CTk):
             service_menu.add_command(label="Редактор каталога товаров", command=self._open_product_catalog)
             service_menu.add_command(label="Открыть папку шаблонов", command=self._open_templates_dir)
             service_menu.add_command(label="Принтеры по шаблонам", command=self._open_template_printer_settings)
-            service_menu.add_command(label="Смена риббона (сброс счётчика)", command=self._on_ribbon_reset)
-
             codes_menu = Menu(self, tearoff=0)
             codes_menu.add_command(label="Отчет о вводе в оборот", command=self._open_turnover_report_dialog)
             codes_menu.add_command(label="Проверка кодов", command=self._open_crpt_checker_window)
@@ -1542,34 +1237,9 @@ class App(ctk.CTk):
             pass
         top = ctk.CTkFrame(win)
         top.pack(fill="x", padx=12, pady=(10, 6))
-        ribbon = stats.get("ribbon", {}) or {}
         labels_by_fmt = stats.get("labels_by_format") or {}
         ctk.CTkLabel(top, text=f"Всего напечатано марок: {stats.get('labels_total', 0)}").pack(anchor="w", pady=2)
         ctk.CTkLabel(top, text=f"16x16: {labels_by_fmt.get('16x16', 0)} | 30x20: {labels_by_fmt.get('30x20', 0)}").pack(anchor="w", pady=2)
-
-        ribbons_frame = ctk.CTkFrame(win)
-        ribbons_frame.pack(fill="both", expand=False, padx=12, pady=(4, 4))
-        ctk.CTkLabel(ribbons_frame, text="Риббоны по принтерам:").pack(anchor="w")
-        rf = ctk.CTkScrollableFrame(ribbons_frame, height=160)
-        rf.pack(fill="both", expand=True, pady=(4, 4))
-        ribbons_by_prn = ((stats.get("ribbons") or {}).get("by_printer") or {})
-        if not ribbons_by_prn:
-            ctk.CTkLabel(rf, text="Нет данных.").pack(anchor="w", padx=6, pady=4)
-        else:
-            for prn_key, entry in ribbons_by_prn.items():
-                cur = entry.get("current", {}) or {}
-                hist = list(entry.get("history") or [])
-                frame_p = ctk.CTkFrame(rf)
-                frame_p.pack(fill="x", padx=6, pady=4)
-                title = entry.get("name") or prn_key
-                ctk.CTkLabel(frame_p, text=f"{title}: {int(cur.get('labels_on_current_ribbon',0))} шт. (старт {cur.get('current_session_started_at','-')})",
-                             anchor="w").pack(anchor="w")
-                if not hist:
-                    ctk.CTkLabel(frame_p, text="  Нет завершённых сессий", anchor="w").pack(anchor="w", padx=4)
-                else:
-                    for h in list(reversed(hist))[:5]:
-                        txt = f"  {h.get('started_at','-')} → {h.get('ended_at','-')}: {h.get('labels',0)} шт."
-                        ctk.CTkLabel(frame_p, text=txt, anchor="w").pack(anchor="w")
 
         jobs_frame = ctk.CTkFrame(win)
         jobs_frame.pack(fill="both", expand=True, padx=12, pady=(4, 10))
@@ -1595,13 +1265,6 @@ class App(ctk.CTk):
                     f"Всего марок: {stats.get('labels_total',0)}",
                     f"16x16: {labels_by_fmt.get('16x16', 0)} | 30x20: {labels_by_fmt.get('30x20', 0)}",
                 ]
-                chunks.append("Риббоны:")
-                for prn_key, entry in ribbons_by_prn.items():
-                    cur = entry.get("current", {}) or {}
-                    title = entry.get("name") or prn_key
-                    chunks.append(f" - {title}: {int(cur.get('labels_on_current_ribbon',0))} (с {cur.get('current_session_started_at','-')})")
-                    for h in list(reversed(entry.get('history') or []))[:5]:
-                        chunks.append(f"    {h.get('started_at','-')} → {h.get('ended_at','-')}: {h.get('labels',0)}")
                 chunks.append("Задания:")
                 for j in list(reversed(jobs))[:20]:
                     status_txt = "OK" if j.get("success") else "FAIL"
@@ -1614,20 +1277,6 @@ class App(ctk.CTk):
             except Exception:
                 pass
         ctk.CTkButton(win, text="Скопировать в буфер", command=_copy_stats).pack(pady=(4, 6))
-
-    def _on_ribbon_reset(self):
-        """Ручной сброс счётчика риббона."""
-        try:
-            ok = mb.askyesno("Смена риббона", "Обнулить счётчик риббона (16x16)?", icon="warning")
-        except Exception:
-            ok = False
-        if not ok:
-            return
-        self._reset_ribbon_counter()
-        try:
-            self.logger.log("Счётчик риббона обнулён вручную.")
-        except Exception:
-            pass
 
     def _open_templates_dir(self):
         """Открывает папку templates (создаёт, если нет)."""
@@ -1731,41 +1380,6 @@ class App(ctk.CTk):
 
         ctk.CTkButton(btns, text="Сохранить", command=_save, width=120).pack(side="left", padx=6)
         ctk.CTkButton(btns, text="Отмена", command=win.destroy, width=90, fg_color="#444").pack(side="left", padx=6)
-
-    def _prompt_ribbon_printer(self):
-        """Небольшое окно выбора принтера для смены риббона."""
-        vals = []
-        try:
-            vals = list(self.prn_combo.cget("values") or [])
-        except Exception:
-            vals = []
-        cur = self._get_printer()
-        if vals and cur and cur not in vals:
-            vals.insert(0, cur)
-        if not vals:
-            vals = [cur or "По умолчанию"]
-
-        win = ctk.CTkToplevel(self)
-        win.title("Смена риббона")
-        win.geometry("360x140")
-        win.grab_set()
-        var = tk.StringVar(value=cur or vals[0])
-        ctk.CTkLabel(win, text="Выбери принтер для замены риббона:").pack(padx=12, pady=(12, 6), anchor="w")
-        opt = ctk.CTkOptionMenu(win, variable=var, values=vals)
-        opt.pack(padx=12, pady=6, fill="x")
-
-        result = {"val": None}
-        def _ok():
-            result["val"] = var.get()
-            win.destroy()
-        def _cancel():
-            win.destroy()
-        btns = ctk.CTkFrame(win)
-        btns.pack(pady=10)
-        ctk.CTkButton(btns, text="OK", command=_ok, width=90).pack(side="left", padx=6)
-        ctk.CTkButton(btns, text="Отмена", command=_cancel, width=90, fg_color="#444").pack(side="left", padx=6)
-        win.wait_window()
-        return result["val"]
 
     def _enable_log_copy(self):
         def _copy():
@@ -4392,54 +4006,6 @@ class App(ctk.CTk):
             mb.showerror("Пакет", f"Ожидается целое число, получено: '{t}'")
             return None
 
-    def _on_roll_remain_toggle(self):
-        enabled = self._bool_var(getattr(self, "roll_remain_var", False))
-        try:
-            self.roll_remain_entry.configure(state="normal" if enabled else "disabled")
-        except Exception:
-            pass
-
-    def _get_roll_size(self):
-        try:
-            raw = (self.roll_remain_entry.get() or "").strip()
-        except Exception:
-            raw = ""
-        try:
-            v = int(raw or 0)
-        except Exception:
-            v = 0
-        if v > 0:
-            return v
-        return ROLL_SIZE_DEFAULT
-
-    def _calc_roll_remainder(self, printed_count, roll_size):
-        try:
-            printed = int(printed_count or 0)
-            size = int(roll_size or 0)
-        except Exception:
-            return None
-        if printed <= 0 or size <= 0:
-            return None
-        mod = printed % size
-        if mod == 0:
-            return 0
-        return size - mod
-
-    def _build_roll_remainder_row(self, remainder_value, fmt_name=None):
-        cols = getattr(self, "REQ_COLS", ["ShortName","ShortGTIN","EXP_DATE","PROD_DATE","PART_NUM","DM","NUM"])
-        remainder_str = str(remainder_value)
-        row = {k: "" for k in cols}
-        row.update({
-            "NUM": remainder_str,
-            "ShortGTIN": remainder_str,
-            "ShortName": f"Остаток: {remainder_str}",
-            "DM": remainder_str,
-        })
-        if fmt_name:
-            row["_FORMAT"] = fmt_name
-        row["_ROLL_REMAIN"] = True
-        return row
-
     def _can_fast_enrich(self, rows):
         """Проверяем, одинаковый ли GTIN во всём пакете (можно обогащать один раз)."""
         try:
@@ -5953,8 +5519,6 @@ class App(ctk.CTk):
         success = False
         tmp_csv_path = os.path.abspath(os.path.join(BASE_DIR, "tmp_batch.csv"))
         total_rolls = len(batches_full) if batches_full else len(batches)
-        ribbon_blocked = False
-
         try:
             self._stickers_preprinted = False
             if target_batches is None and not self._bool_var(getattr(self, "skip_sticker_var", False)):
@@ -6059,16 +5623,7 @@ class App(ctk.CTk):
                     self.logger.log("КАЛИБРОВКА: 6 строк 'X' добавлены в начало пакета.")
 
                 fmt_name = enriched[0].get("_FORMAT") or "16x16"
-                remainder_added = 0
-                remainder_value = None
-                if self._bool_var(getattr(self, "roll_remain_var", False)):
-                    roll_size = self._get_roll_size()
-                    consumed = max(0, len(enriched) - calib_added)
-                    remainder_value = self._calc_roll_remainder(consumed, roll_size)
-                    if remainder_value and remainder_value > 0:
-                        enriched.append(self._build_roll_remainder_row(remainder_value, fmt_name=fmt_name))
-                        remainder_added = 1
-                        self.logger.log(f"ОСТАТОК В РУЛОНЕ: будет напечатано {remainder_value} (рулон {roll_size}).")
+                real_in_batch = len(enriched) - calib_added
 
                 self._pause_wait()
                 if self._should_stop():
@@ -6077,8 +5632,6 @@ class App(ctk.CTk):
 
                 fmt = None
                 try:
-                    labels_for_ribbon = len(enriched)
-                    real_in_batch = len(enriched) - calib_added - remainder_added
                     try:
                         self._apply_format_ui(fmt_name)
                         prn = self._get_printer()
@@ -6086,11 +5639,6 @@ class App(ctk.CTk):
                         last_fmt = fmt_name
                     except Exception:
                         pass
-
-                    if not self._ensure_ribbon_capacity(labels_for_ribbon, fmt_name, prn):
-                        ribbon_blocked = True
-                        success = False
-                        break
 
                     btw = self._get_btw_for_format(fmt_name)
                     if not btw:
@@ -6120,12 +5668,8 @@ class App(ctk.CTk):
                     extra_info = ""
                     if calib_added:
                         extra_info += f" (+{calib_added} калибровочных)"
-                    if remainder_added and remainder_value:
-                        extra_info += f" (+1 остаток={remainder_value})"
                     self.logger.log(f"Отправка на печать: {real_in_batch} строк." + extra_info)
                     fmt.PrintOut(False, self._dialog_flag())
-
-                    self._increment_ribbon_counter(labels_for_ribbon, fmt_name)
                     sent_total += real_in_batch
                     calib_total += calib_added
                     success = True
@@ -6145,7 +5689,7 @@ class App(ctk.CTk):
                     end_num = idx0 + end
                     sample_real = None
                     for e in enriched:
-                        if e.get("_CALIB") or e.get("_ROLL_REMAIN"):
+                        if e.get("_CALIB"):
                             continue
                         sample_real = e
                         break
@@ -6184,10 +5728,6 @@ class App(ctk.CTk):
                     if not cont:
                         self.logger.log("Печать остановлена по запросу пользователя.")
                         break
-
-            if ribbon_blocked:
-                self.logger.log("Печать остановлена: нет подтверждения по риббону.")
-                return
 
             if getattr(self, "_part_missing_logged", False) and target_batches is None:
                 try:
