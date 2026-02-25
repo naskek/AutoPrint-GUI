@@ -22,3 +22,6 @@ dist/
 *.swp
 *.tmp
 .env
+product_catalog.xlsx
+tmp_batch.csv
+Список товаров.xlsx

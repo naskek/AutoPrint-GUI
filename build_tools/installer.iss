@@ -24,7 +24,6 @@ DirExistsWarning=no
 Source: "..\dist\BarTenderGUI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Кладём в установку исходные файлы-ресурсы (если они лежат рядом с корнем проекта)
 Source: "..\product_catalog.xlsx"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist
-Source: "..\preview.png"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist
 Source: "..\tmp_batch.csv"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist
 Source: "..\config\stats.json"; DestDir: "{app}\config"; Flags: ignoreversion onlyifdoesntexist
 Source: "..\config\config.json"; DestDir: "{app}\config"; Flags: ignoreversion onlyifdoesntexist
@@ -34,10 +33,7 @@ Source: "..\templates\*"; DestDir: "{app}\templates"; Flags: ignoreversion recur
 [Icons]
 Name: "{group}\BarTender GUI"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\Удалить {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\BarTender GUI"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-
-[Tasks]
-Name: "desktopicon"; Description: "Создать значок на рабочем столе"; GroupDescription: "Дополнительно:"; Flags: unchecked
+Name: "{autodesktop}\BarTender GUI"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; Flags: nowait postinstall skipifsilent
