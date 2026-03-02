@@ -15,6 +15,7 @@ import json
 import tempfile
 import getpass
 import threading
+import hashlib
 
 import customtkinter as ctk
 import tkinter as tk
@@ -36,6 +37,38 @@ from crpt_client import (
 from services.crpt_settings import load_crpt_settings, set_runtime_overrides
 from services.crpt_token_manager import get_token_manager, CrptTokenError
 from services import crpt_auth
+try:
+    from db import (
+        db_enabled as _db_enabled,
+        init_db as _db_init,
+        save_import as _db_save_import,
+        list_recent_imports as _db_list_recent_imports,
+        find_import_by_file_hash as _db_find_import_by_file_hash,
+        create_print_job as _db_create_print_job,
+        add_print_job_rows as _db_add_print_job_rows,
+        update_print_job as _db_update_print_job,
+        list_recent_print_jobs as _db_list_recent_print_jobs,
+        get_print_job_rows as _db_get_print_job_rows,
+        get_import_rows as _db_get_import_rows,
+        search_import_rows as _db_search_import_rows,
+        list_recent_codes as _db_list_recent_codes,
+        search_codes as _db_search_codes,
+    )
+except Exception:
+    _db_enabled = None
+    _db_init = None
+    _db_save_import = None
+    _db_list_recent_imports = None
+    _db_find_import_by_file_hash = None
+    _db_create_print_job = None
+    _db_add_print_job_rows = None
+    _db_update_print_job = None
+    _db_list_recent_print_jobs = None
+    _db_get_print_job_rows = None
+    _db_get_import_rows = None
+    _db_search_import_rows = None
+    _db_list_recent_codes = None
+    _db_search_codes = None
 
 BASE_DIR = get_base_dir()
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
@@ -794,6 +827,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(csv_head, text="Папка CSV:").pack(side="left", padx=(0, 6))
         self.csv_dir_label = ctk.CTkLabel(csv_head, text=self._shorten_path(self.csv_dir), anchor="w")
         self.csv_dir_label.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(csv_head, text="БД (PoC)", width=90, command=self._open_db_browser_window).pack(side="left", padx=(0, 4))
         ctk.CTkButton(csv_head, text="Вверх", width=80, command=self._go_up_dir).pack(side="left", padx=(6, 4))
         ctk.CTkButton(csv_head, text="Сменить папку", width=110, command=self._choose_csv_dir).pack(side="left", padx=(4, 4))
         ctk.CTkButton(csv_head, text="Обновить", width=90, command=self._render_csv_list).pack(side="left", padx=(4, 0))
@@ -986,6 +1020,9 @@ class App(ctk.CTk):
             service_menu.add_command(label="Редактор каталога товаров", command=self._open_product_catalog)
             service_menu.add_command(label="Открыть папку шаблонов", command=self._open_templates_dir)
             service_menu.add_command(label="Принтеры по шаблонам", command=self._open_template_printer_settings)
+            service_menu.add_separator()
+            service_menu.add_command(label="База данных (PoC)", command=self._open_db_browser_window)
+            service_menu.add_command(label="История печати (PoC)", command=self._open_db_print_history_window)
             codes_menu = Menu(self, tearoff=0)
             codes_menu.add_command(label="Отчет о вводе в оборот", command=self._open_turnover_report_dialog)
             codes_menu.add_command(label="Проверка кодов", command=self._open_crpt_checker_window)
@@ -3482,6 +3519,1392 @@ class App(ctk.CTk):
                 out[key] = v
         return out
 
+    def _try_store_csv_import_db(self, rows, source_path):
+        """PoC: best-effort сохранение импортированного CSV в Postgres без влияния на печать."""
+        try:
+            if not (callable(_db_enabled) and callable(_db_init) and callable(_db_save_import)):
+                return
+            if not _db_enabled():
+                return
+            if not getattr(self, "_db_schema_ready", False):
+                _db_init()
+                self._db_schema_ready = True
+            source_name = os.path.basename(str(source_path or "")) or "unknown.csv"
+            total_rows = len(rows or [])
+            file_size, file_hash = self._db_get_source_file_meta(source_path)
+            if callable(_db_find_import_by_file_hash) and file_hash:
+                existing = _db_find_import_by_file_hash(file_hash)
+            else:
+                existing = None
+            if existing:
+                try:
+                    self._last_db_import_id = int(existing.get("id") or 0)
+                    self._last_db_import_rows = int(existing.get("row_count_inserted") or 0)
+                    self._last_db_import_duplicates = int(existing.get("row_count_duplicates") or 0)
+                    self._last_db_import_file_hash = str(existing.get("file_hash") or "")
+                    self._last_db_import_file_size = existing.get("file_size")
+                except Exception:
+                    pass
+                try:
+                    self.logger.log(
+                        f"[DB] Файл уже импортирован: import_id={int(existing.get('id') or 0)}, "
+                        f"всего={int(existing.get('row_count_total') or 0)}, "
+                        f"новых={int(existing.get('row_count_inserted') or 0)}, "
+                        f"дублей={int(existing.get('row_count_duplicates') or 0)}, "
+                        f"size={self._db_fmt_size(existing.get('file_size'))}, "
+                        f"hash={self._db_short_hash(existing.get('file_hash'), size=12)}"
+                    )
+                except Exception:
+                    pass
+                return
+            save_result = _db_save_import(rows or [], source_name, file_hash=file_hash, file_size=file_size)
+            if isinstance(save_result, tuple) and len(save_result) >= 3:
+                import_id, inserted_rows, duplicate_rows = save_result[0], save_result[1], save_result[2]
+            elif isinstance(save_result, tuple) and len(save_result) >= 2:
+                import_id, inserted_rows = save_result[0], save_result[1]
+                duplicate_rows = max(0, total_rows - int(inserted_rows or 0))
+            else:
+                import_id = int(save_result or 0)
+                inserted_rows = 0
+                duplicate_rows = total_rows
+            try:
+                self._last_db_import_id = import_id
+                self._last_db_import_rows = int(inserted_rows or 0)
+                self._last_db_import_duplicates = int(duplicate_rows or 0)
+                self._last_db_import_file_hash = file_hash or ""
+                self._last_db_import_file_size = file_size
+            except Exception:
+                pass
+            try:
+                hash_short = (str(file_hash or "")[:12] + "...") if file_hash else "-"
+                size_text = self._db_fmt_size(file_size)
+                if import_id:
+                    self.logger.log(
+                        f"[DB] Импорт сохранен: import_id={import_id}, всего={total_rows}, "
+                        f"добавлено={int(inserted_rows or 0)}, дубликаты={int(duplicate_rows or 0)}, "
+                        f"size={size_text}, hash={hash_short}"
+                    )
+                else:
+                    self.logger.log(
+                        f"[DB] Импорт не создан: всего={total_rows}, добавлено=0, "
+                        f"дубликаты={int(duplicate_rows or 0)}, size={size_text}, hash={hash_short} "
+                        f"(все DM уже есть в БД)"
+                    )
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                self.logger.err(f"[DB] Не удалось сохранить импорт в Postgres: {e}")
+            except Exception:
+                pass
+
+    def _db_get_source_file_meta(self, source_path):
+        path = str(source_path or "").strip()
+        if not path:
+            return None, None
+        try:
+            if not os.path.isfile(path):
+                return None, None
+        except Exception:
+            return None, None
+        file_size = None
+        try:
+            file_size = int(os.path.getsize(path))
+        except Exception:
+            file_size = None
+        try:
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+            return file_size, h.hexdigest()
+        except Exception:
+            return file_size, None
+
+    def _db_fmt_size(self, value):
+        try:
+            if value is None:
+                return "-"
+            n = int(value)
+            if n < 1024:
+                return f"{n} B"
+            if n < 1024 * 1024:
+                return f"{n / 1024:.1f} KB"
+            return f"{n / (1024 * 1024):.2f} MB"
+        except Exception:
+            return str(value)
+
+    def _db_short_hash(self, value, size: int = 12):
+        s = str(value or "").strip()
+        if not s:
+            return "-"
+        if len(s) <= size:
+            return s
+        return s[:size] + "..."
+
+    def _db_fmt_duration_ms(self, value):
+        try:
+            if value is None:
+                return "-"
+            ms = int(value)
+            if ms < 1000:
+                return f"{ms} ms"
+            sec = ms / 1000.0
+            if sec < 60:
+                return f"{sec:.1f} s"
+            mins = int(sec // 60)
+            rem = int(sec % 60)
+            return f"{mins}m {rem}s"
+        except Exception:
+            return str(value)
+
+    def _db_print_tracking_ready(self):
+        if not (
+            callable(_db_enabled)
+            and callable(_db_init)
+            and callable(_db_create_print_job)
+            and callable(_db_add_print_job_rows)
+            and callable(_db_update_print_job)
+        ):
+            return False
+        try:
+            if not _db_enabled():
+                return False
+        except Exception:
+            return False
+        try:
+            if not getattr(self, "_db_schema_ready", False):
+                _db_init()
+                self._db_schema_ready = True
+        except Exception:
+            return False
+        return True
+
+    def _db_get_print_user(self):
+        try:
+            return os.getlogin()
+        except Exception:
+            try:
+                return getpass.getuser()
+            except Exception:
+                return None
+
+    def _db_try_create_print_job(self, **kwargs):
+        try:
+            if not self._db_print_tracking_ready():
+                return None
+            return _db_create_print_job(**kwargs)
+        except Exception as e:
+            try:
+                self.logger.err(f"[DB] Не удалось создать запись print_job: {e}")
+            except Exception:
+                pass
+            return None
+
+    def _db_try_add_print_job_rows(self, print_job_id, rows, **kwargs):
+        try:
+            if not print_job_id:
+                return 0
+            if not self._db_print_tracking_ready():
+                return 0
+            return int(_db_add_print_job_rows(int(print_job_id), rows or [], **kwargs) or 0)
+        except Exception as e:
+            try:
+                self.logger.err(f"[DB] Не удалось сохранить строки print_job #{print_job_id}: {e}")
+            except Exception:
+                pass
+            return 0
+
+    def _db_try_update_print_job(self, print_job_id, **kwargs):
+        try:
+            if not print_job_id:
+                return
+            if not self._db_print_tracking_ready():
+                return
+            _db_update_print_job(int(print_job_id), **kwargs)
+        except Exception as e:
+            try:
+                self.logger.err(f"[DB] Не удалось обновить print_job #{print_job_id}: {e}")
+            except Exception:
+                pass
+
+    def _db_poc_ensure_ready(self, require_enabled: bool = True):
+        if not (
+            callable(_db_enabled)
+            and callable(_db_init)
+            and callable(_db_list_recent_imports)
+            and callable(_db_find_import_by_file_hash)
+            and callable(_db_create_print_job)
+            and callable(_db_add_print_job_rows)
+            and callable(_db_update_print_job)
+            and callable(_db_list_recent_print_jobs)
+            and callable(_db_get_print_job_rows)
+            and callable(_db_get_import_rows)
+            and callable(_db_search_import_rows)
+            and callable(_db_list_recent_codes)
+            and callable(_db_search_codes)
+        ):
+            raise RuntimeError("DB PoC недоступен: модуль db.py не загружен или не хватает функций.")
+        if require_enabled and not _db_enabled():
+            raise RuntimeError("DB PoC отключен. Установите AUTOPRINT_DB_ENABLED=1 в .env")
+        if not getattr(self, "_db_schema_ready", False):
+            _db_init()
+            self._db_schema_ready = True
+
+    def _db_browser_set_status(self, text: str):
+        try:
+            if getattr(self, "_db_browser_status_label", None):
+                self._db_browser_status_label.configure(text=str(text or ""))
+        except Exception:
+            pass
+
+    def _db_browser_clear_tree(self, tree):
+        try:
+            for iid in tree.get_children():
+                tree.delete(iid)
+        except Exception:
+            pass
+
+    def _db_browser_fill_rows(self, rows, source_filename: str = "", mode: str = "import"):
+        tree = getattr(self, "_db_browser_rows_tree", None)
+        if not tree:
+            return
+        self._db_browser_clear_tree(tree)
+        count = 0
+        for row in (rows or []):
+            try:
+                if mode == "search":
+                    import_id = int(row.get("import_id") or 0)
+                    src = str(row.get("source_filename") or "")
+                else:
+                    import_id = int(getattr(self, "_db_browser_selected_import_id", 0) or 0)
+                    src = source_filename or ""
+                values = (
+                    import_id,
+                    int(row.get("row_no") or 0),
+                    str(row.get("dm") or ""),
+                    str(row.get("gtin") or ""),
+                    str(row.get("name") or ""),
+                    src,
+                )
+                tree.insert("", "end", values=values)
+                count += 1
+            except Exception:
+                continue
+        return count
+
+    def _db_browser_get_import_meta(self, import_id: int):
+        try:
+            cache = getattr(self, "_db_browser_imports_meta", None) or {}
+            return cache.get(int(import_id))
+        except Exception:
+            return None
+
+    def _db_browser_format_import_status(self, item: dict | None, shown_rows: int | None = None) -> str:
+        if not item:
+            if shown_rows is None:
+                return "Готово."
+            return f"Показано строк: {int(shown_rows or 0)}"
+        import_id = int(item.get("id") or 0)
+        total = int(item.get("row_count_total") or 0)
+        inserted = int(item.get("row_count_inserted") or 0)
+        dups = int(item.get("row_count_duplicates") or 0)
+        size_text = self._db_fmt_size(item.get("file_size"))
+        hash_text = self._db_short_hash(item.get("file_hash"), size=16)
+        base = (
+            f"Импорт #{import_id}: всего={total}, новых={inserted}, дублей={dups}, "
+            f"размер={size_text}, hash={hash_text}"
+        )
+        if shown_rows is not None:
+            base += f", показано строк={int(shown_rows or 0)}"
+        return base
+
+    def _db_browser_show_recent_imports(self):
+        try:
+            self._db_poc_ensure_ready(require_enabled=True)
+            imports = _db_list_recent_imports(limit=50)
+            tree = getattr(self, "_db_browser_imports_tree", None)
+            if not tree:
+                return
+            self._db_browser_clear_tree(tree)
+            meta_map = {}
+            for item in imports:
+                iid = str(item.get("id"))
+                meta_map[int(item.get("id") or 0)] = dict(item)
+                tree.insert(
+                    "",
+                    "end",
+                    iid=iid,
+                    values=(
+                        int(item.get("id") or 0),
+                        str(item.get("created_at") or ""),
+                        int(item.get("row_count_total") or 0),
+                        int(item.get("row_count_inserted") or 0),
+                        int(item.get("row_count_duplicates") or 0),
+                        str(item.get("source_filename") or ""),
+                    ),
+                )
+            self._db_browser_imports_meta = meta_map
+            self._db_browser_fill_rows([], "", mode="import")
+            self._db_browser_selected_import_id = None
+            self._db_browser_selected_import_source = ""
+            self._db_browser_set_status(f"Импорты: {len(imports)} (последние 50)")
+            try:
+                self.logger.log(f"[DB] Открыт список импортов: {len(imports)}")
+            except Exception:
+                pass
+        except Exception as e:
+            self._db_browser_set_status(f"Ошибка: {e}")
+            try:
+                self.logger.err(f"[DB] Не удалось загрузить список импортов: {e}")
+            except Exception:
+                pass
+
+    def _db_browser_open_import_rows(self, import_id: int, source_filename: str = ""):
+        try:
+            self._db_poc_ensure_ready(require_enabled=True)
+            rows = _db_get_import_rows(import_id, limit=500, offset=0)
+            self._db_browser_selected_import_id = int(import_id)
+            self._db_browser_selected_import_source = str(source_filename or "")
+            shown = self._db_browser_fill_rows(rows, source_filename=source_filename, mode="import") or 0
+            meta = self._db_browser_get_import_meta(import_id)
+            self._db_browser_set_status(self._db_browser_format_import_status(meta, shown_rows=shown))
+            try:
+                self.logger.log(f"[DB] Открыт импорт #{import_id}: rows={shown}")
+            except Exception:
+                pass
+        except Exception as e:
+            self._db_browser_set_status(f"Ошибка открытия импорта #{import_id}: {e}")
+            try:
+                self.logger.err(f"[DB] Не удалось открыть импорт #{import_id}: {e}")
+            except Exception:
+                pass
+
+    def _db_browser_on_import_select(self, _event=None):
+        tree = getattr(self, "_db_browser_imports_tree", None)
+        if not tree:
+            return
+        try:
+            sel = tree.selection()
+        except Exception:
+            sel = ()
+        if not sel:
+            return
+        iid = sel[0]
+        try:
+            vals = tree.item(iid, "values") or []
+        except Exception:
+            vals = []
+        try:
+            import_id = int(vals[0]) if vals else int(iid)
+        except Exception:
+            return
+        source_filename = str(vals[5]) if len(vals) >= 6 else ""
+        self._db_browser_open_import_rows(import_id, source_filename=source_filename)
+
+    def _db_browser_search_rows(self):
+        try:
+            self._db_poc_ensure_ready(require_enabled=True)
+            entry = getattr(self, "_db_browser_search_entry", None)
+            query = (entry.get() if entry else "").strip()
+            if not query:
+                self._db_browser_set_status("Введите запрос для поиска по DM / GTIN / NAME.")
+                return
+            rows = _db_search_import_rows(query, limit=200)
+            self._db_browser_fill_rows(rows, mode="search")
+            self._db_browser_set_status(f"Поиск '{query}': найдено {len(rows)} строк (лимит 200)")
+            try:
+                self.logger.log(f"[DB] Поиск '{query}': rows={len(rows)}")
+            except Exception:
+                pass
+        except Exception as e:
+            self._db_browser_set_status(f"Ошибка поиска: {e}")
+            try:
+                self.logger.err(f"[DB] Поиск в БД не удался: {e}")
+            except Exception:
+                pass
+
+    def _open_db_browser_window(self, initial_view: str = "imports"):
+        try:
+            self._db_poc_ensure_ready(require_enabled=True)
+        except Exception as e:
+            try:
+                self.logger.err(f"[DB] Окно БД недоступно: {e}")
+            except Exception:
+                pass
+            try:
+                mb.showerror("База данных (PoC)", str(e))
+            except Exception:
+                pass
+            return
+
+        win = getattr(self, "_db_browser_window", None)
+        try:
+            if win and win.winfo_exists():
+                win.deiconify()
+                win.lift()
+                try:
+                    win.attributes("-topmost", True)
+                    win.after(150, lambda: win.attributes("-topmost", False))
+                except Exception:
+                    pass
+                try:
+                    win.focus_force()
+                except Exception:
+                    pass
+                try:
+                    self._db_browser_switch_view(initial_view or "imports")
+                except Exception:
+                    self._db_browser_show_recent_imports()
+                return
+        except Exception:
+            pass
+
+        win = ctk.CTkToplevel(self)
+        self._db_browser_window = win
+        win.title("База данных (PoC)")
+        try:
+            win.geometry("1220x700")
+            win.minsize(980, 520)
+        except Exception:
+            pass
+        try:
+            win.transient(self)
+        except Exception:
+            pass
+        try:
+            win.lift()
+            win.attributes("-topmost", True)
+            win.after(150, lambda: win.attributes("-topmost", False))
+            win.focus_force()
+        except Exception:
+            pass
+
+        top = ctk.CTkFrame(win)
+        top.pack(fill="x", padx=10, pady=(10, 6))
+        self._db_browser_view_label = ctk.CTkLabel(top, text="Раздел: Импорты")
+        self._db_browser_view_label.pack(side="left", padx=(6, 8), pady=6)
+        ctk.CTkButton(top, text="Импорты", width=90, command=lambda: self._db_browser_switch_view("imports")).pack(side="left", padx=(0, 4), pady=6)
+        ctk.CTkButton(top, text="Коды", width=70, command=lambda: self._db_browser_switch_view("codes")).pack(side="left", padx=(0, 4), pady=6)
+        ctk.CTkButton(top, text="История", width=90, command=lambda: self._db_browser_switch_view("history")).pack(side="left", padx=(0, 10), pady=6)
+        ctk.CTkLabel(top, text="Поиск (DM / GTIN / NAME):").pack(side="left", padx=(6, 6), pady=6)
+        self._db_browser_search_entry = ctk.CTkEntry(top, width=340, placeholder_text="Например: 0460..., GTIN, название")
+        self._db_browser_search_entry.pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Поиск", width=90, command=self._db_browser_search_rows).pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Последние импорты", width=140, command=self._db_browser_show_recent_imports).pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="История печати", width=120, command=lambda: self._db_browser_switch_view("history")).pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(
+            top,
+            text="Открыть импорт по ID",
+            width=150,
+            command=self._db_browser_open_import_by_id_prompt,
+        ).pack(side="left", padx=(0, 6), pady=6)
+
+        try:
+            self._db_browser_search_entry.bind("<Return>", lambda _e: self._db_browser_search_rows())
+        except Exception:
+            pass
+
+        views_host = ctk.CTkFrame(win)
+        views_host.pack(fill="both", expand=True, padx=0, pady=0)
+        self._db_browser_views_host = views_host
+
+        imports_view = ctk.CTkFrame(views_host)
+        codes_view = ctk.CTkFrame(views_host)
+        history_view = ctk.CTkFrame(views_host)
+
+        body = ctk.CTkFrame(imports_view)
+        body.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        try:
+            body.grid_columnconfigure(0, weight=2)
+            body.grid_columnconfigure(1, weight=5)
+            body.grid_rowconfigure(1, weight=1)
+        except Exception:
+            pass
+
+        ctk.CTkLabel(body, text="Импорты").grid(row=0, column=0, sticky="w", padx=6, pady=(6, 4))
+        ctk.CTkLabel(body, text="Строки").grid(row=0, column=1, sticky="w", padx=6, pady=(6, 4))
+
+        imports_wrap = tk.Frame(body)
+        imports_wrap.grid(row=1, column=0, sticky="nsew", padx=(6, 4), pady=(0, 6))
+        rows_wrap = tk.Frame(body)
+        rows_wrap.grid(row=1, column=1, sticky="nsew", padx=(4, 6), pady=(0, 6))
+
+        self._db_browser_imports_tree = ttk.Treeview(
+            imports_wrap,
+            columns=("id", "created_at", "total", "new", "dup", "source"),
+            show="headings",
+            height=14,
+        )
+        imp_tree = self._db_browser_imports_tree
+        imp_tree.heading("id", text="ID")
+        imp_tree.heading("created_at", text="Создан")
+        imp_tree.heading("total", text="Всего")
+        imp_tree.heading("new", text="Новых")
+        imp_tree.heading("dup", text="Дубл.")
+        imp_tree.heading("source", text="Файл")
+        imp_tree.column("id", width=60, anchor="e", stretch=False)
+        imp_tree.column("created_at", width=170, anchor="w", stretch=False)
+        imp_tree.column("total", width=60, anchor="e", stretch=False)
+        imp_tree.column("new", width=60, anchor="e", stretch=False)
+        imp_tree.column("dup", width=60, anchor="e", stretch=False)
+        imp_tree.column("source", width=320, anchor="w", stretch=True)
+        imp_scroll = ttk.Scrollbar(imports_wrap, orient="vertical", command=imp_tree.yview)
+        imp_tree.configure(yscrollcommand=imp_scroll.set)
+        imp_tree.pack(side="left", fill="both", expand=True)
+        imp_scroll.pack(side="right", fill="y")
+
+        self._db_browser_rows_tree = ttk.Treeview(
+            rows_wrap,
+            columns=("import_id", "row_no", "dm", "gtin", "name", "source"),
+            show="headings",
+            height=14,
+        )
+        rows_tree = self._db_browser_rows_tree
+        rows_tree.heading("import_id", text="Import ID")
+        rows_tree.heading("row_no", text="Row")
+        rows_tree.heading("dm", text="DM")
+        rows_tree.heading("gtin", text="GTIN")
+        rows_tree.heading("name", text="NAME")
+        rows_tree.heading("source", text="Файл")
+        rows_tree.column("import_id", width=80, anchor="e", stretch=False)
+        rows_tree.column("row_no", width=60, anchor="e", stretch=False)
+        rows_tree.column("dm", width=260, anchor="w", stretch=True)
+        rows_tree.column("gtin", width=130, anchor="w", stretch=False)
+        rows_tree.column("name", width=240, anchor="w", stretch=True)
+        rows_tree.column("source", width=160, anchor="w", stretch=True)
+        rows_scroll_y = ttk.Scrollbar(rows_wrap, orient="vertical", command=rows_tree.yview)
+        rows_scroll_x = ttk.Scrollbar(rows_wrap, orient="horizontal", command=rows_tree.xview)
+        rows_tree.configure(yscrollcommand=rows_scroll_y.set, xscrollcommand=rows_scroll_x.set)
+        rows_tree.pack(side="top", fill="both", expand=True)
+        rows_scroll_x.pack(side="bottom", fill="x")
+        rows_scroll_y.pack(side="right", fill="y")
+
+        try:
+            imp_tree.bind("<<TreeviewSelect>>", self._db_browser_on_import_select)
+            imp_tree.bind("<Double-1>", self._db_browser_on_import_select)
+            rows_tree.bind("<Double-1>", self._db_browser_open_import_from_row)
+        except Exception:
+            pass
+
+        bottom = ctk.CTkFrame(imports_view)
+        bottom.pack(fill="x", padx=10, pady=(0, 10))
+        self._db_browser_status_label = ctk.CTkLabel(bottom, text="Готово.", anchor="w")
+        self._db_browser_status_label.pack(side="left", fill="x", expand=True, padx=6, pady=6)
+
+        self._db_build_codes_panel(codes_view)
+        self._db_build_history_panel(history_view)
+        self._db_browser_views = {"imports": imports_view, "codes": codes_view, "history": history_view}
+
+        def _on_close():
+            try:
+                self._db_browser_window = None
+            except Exception:
+                pass
+            try:
+                self._db_browser_views = {}
+            except Exception:
+                pass
+            try:
+                if getattr(self, "_db_print_history_window", None) is win:
+                    self._db_print_history_window = None
+            except Exception:
+                pass
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        try:
+            win.protocol("WM_DELETE_WINDOW", _on_close)
+        except Exception:
+            pass
+
+        self._db_browser_selected_import_id = None
+        self._db_browser_selected_import_source = ""
+        self._db_codes_meta = {}
+        self._db_print_history_jobs_meta = {}
+        self._db_browser_active_view = None
+        self._db_browser_switch_view(initial_view or "imports")
+
+    def _db_browser_open_import_by_id_prompt(self):
+        try:
+            import_id = sd.askinteger("Импорт", "Введите ID импорта:", parent=getattr(self, "_db_browser_window", self), minvalue=1)
+        except Exception:
+            import_id = None
+        if not import_id:
+            return
+        self._db_browser_open_import_rows(int(import_id), source_filename="")
+
+    def _db_browser_open_import_from_row(self, _event=None):
+        tree = getattr(self, "_db_browser_rows_tree", None)
+        if not tree:
+            return
+        try:
+            sel = tree.selection()
+        except Exception:
+            sel = ()
+        if not sel:
+            return
+        try:
+            vals = tree.item(sel[0], "values") or []
+        except Exception:
+            vals = []
+        if not vals:
+            return
+        try:
+            import_id = int(vals[0])
+        except Exception:
+            return
+        source_filename = str(vals[5]) if len(vals) >= 6 else ""
+        self._db_browser_open_import_rows(import_id, source_filename=source_filename)
+
+    def _db_browser_switch_view(self, view_name: str, refresh: bool = True):
+        name = str(view_name or "").strip().lower()
+        if name not in ("imports", "history", "codes"):
+            name = "imports"
+        views = getattr(self, "_db_browser_views", None) or {}
+        if not views:
+            return
+        for key, frame in views.items():
+            try:
+                frame.pack_forget()
+            except Exception:
+                pass
+        frame = views.get(name)
+        if frame:
+            try:
+                frame.pack(fill="both", expand=True)
+            except Exception:
+                pass
+        self._db_browser_active_view = name
+        try:
+            if getattr(self, "_db_browser_view_label", None):
+                titles = {"imports": "Импорты", "history": "История печати", "codes": "Коды"}
+                self._db_browser_view_label.configure(text=f"Раздел: {titles.get(name, name)}")
+        except Exception:
+            pass
+        if not refresh:
+            return
+        try:
+            if name == "history":
+                self._db_print_history_window = getattr(self, "_db_browser_window", self)
+                self._db_print_history_show_jobs()
+            elif name == "codes":
+                self._db_codes_show_recent()
+            else:
+                self._db_browser_show_recent_imports()
+        except Exception:
+            pass
+
+    def _db_codes_set_status(self, text: str):
+        try:
+            if getattr(self, "_db_codes_status_label", None):
+                self._db_codes_status_label.configure(text=str(text or ""))
+        except Exception:
+            pass
+
+    def _db_codes_get_selected_filter(self):
+        try:
+            raw = str(self._db_codes_status_filter_combo.get() or "").strip()
+        except Exception:
+            raw = "Все"
+        if not raw or raw == "Все":
+            return None
+        if raw == "Не печатались":
+            return "never_printed"
+        return raw
+
+    def _db_codes_fill_rows(self, rows):
+        tree = getattr(self, "_db_codes_tree", None)
+        if not tree:
+            return 0
+        self._db_browser_clear_tree(tree)
+        meta = {}
+        count = 0
+        for item in (rows or []):
+            try:
+                dm = str(item.get("dm") or "")
+                if not dm:
+                    continue
+                meta[dm] = dict(item)
+                tree.insert(
+                    "",
+                    "end",
+                    iid=dm,
+                    values=(
+                        dm,
+                        str(item.get("gtin") or ""),
+                        str(item.get("name") or ""),
+                        str(item.get("last_print_status") or ("never_printed" if int(item.get("print_success_count") or 0) <= 0 else "")),
+                        int(item.get("print_success_count") or 0),
+                        "" if item.get("last_print_job_id") is None else int(item.get("last_print_job_id") or 0),
+                        str(item.get("last_seen_at") or ""),
+                        str(item.get("part_num") or ""),
+                    ),
+                )
+                count += 1
+            except Exception:
+                continue
+        self._db_codes_meta = meta
+        return count
+
+    def _db_codes_format_status(self, item: dict | None) -> str:
+        if not item:
+            return "Готово."
+        dm = str(item.get("dm") or "")
+        gtin = str(item.get("gtin") or "")
+        prints = int(item.get("print_success_count") or 0)
+        last_status = str(item.get("last_print_status") or ("never_printed" if prints <= 0 else ""))
+        last_job = item.get("last_print_job_id")
+        last_seen = str(item.get("last_seen_at") or "")
+        import_count = int(item.get("import_count") or 0)
+        first_import_id = item.get("first_seen_import_id")
+        last_import_id = item.get("last_seen_import_id")
+        crpt_status = str(item.get("crpt_status") or "")
+        text = (
+            f"DM={self._db_short_hash(dm, size=26)}; GTIN={gtin or '-'}; "
+            f"imports={import_count}; last_import={last_import_id if last_import_id is not None else '-'}; "
+            f"first_import={first_import_id if first_import_id is not None else '-'}; "
+            f"prints={prints}; status={last_status or '-'}; "
+            f"last_job={last_job if last_job is not None else '-'}; last_seen={last_seen or '-'}"
+        )
+        if crpt_status:
+            text += f"; CRPT={crpt_status}"
+        return text
+
+    def _db_codes_show_recent(self):
+        try:
+            self._db_poc_ensure_ready(require_enabled=True)
+            status_filter = self._db_codes_get_selected_filter()
+            rows = _db_list_recent_codes(limit=200, print_status=status_filter)
+            shown = self._db_codes_fill_rows(rows)
+            label = "все" if not status_filter else status_filter
+            self._db_codes_set_status(f"Коды: {shown} (последние 200, фильтр: {label})")
+            try:
+                self.logger.log(f"[DB] Коды загружены: rows={shown}, filter={label}")
+            except Exception:
+                pass
+        except Exception as e:
+            self._db_codes_set_status(f"Ошибка загрузки кодов: {e}")
+            try:
+                self.logger.err(f"[DB] Не удалось загрузить коды: {e}")
+            except Exception:
+                pass
+
+    def _db_codes_search(self):
+        try:
+            self._db_poc_ensure_ready(require_enabled=True)
+            entry = getattr(self, "_db_codes_search_entry", None)
+            query = (entry.get() if entry else "").strip()
+            if not query:
+                self._db_codes_show_recent()
+                return
+            status_filter = self._db_codes_get_selected_filter()
+            rows = _db_search_codes(query, limit=200, print_status=status_filter)
+            shown = self._db_codes_fill_rows(rows)
+            self._db_codes_set_status(f"Поиск кодов '{query}': найдено {shown} (лимит 200)")
+            try:
+                self.logger.log(f"[DB] Поиск кодов '{query}': rows={shown}")
+            except Exception:
+                pass
+        except Exception as e:
+            self._db_codes_set_status(f"Ошибка поиска кодов: {e}")
+            try:
+                self.logger.err(f"[DB] Поиск кодов не удался: {e}")
+            except Exception:
+                pass
+
+    def _db_codes_get_selected_meta(self):
+        tree = getattr(self, "_db_codes_tree", None)
+        if not tree:
+            return None
+        try:
+            sel = tree.selection()
+        except Exception:
+            sel = ()
+        if not sel:
+            return None
+        dm = str(sel[0])
+        try:
+            return (getattr(self, "_db_codes_meta", None) or {}).get(dm)
+        except Exception:
+            return None
+
+    def _db_codes_on_select(self, _event=None):
+        item = self._db_codes_get_selected_meta()
+        self._db_codes_set_status(self._db_codes_format_status(item))
+
+    def _db_codes_open_last_job_for_selected(self):
+        item = self._db_codes_get_selected_meta()
+        if not item:
+            self._db_codes_set_status("Выберите код.")
+            return
+        print_job_id = item.get("last_print_job_id")
+        if not print_job_id:
+            self._db_codes_set_status(self._db_codes_format_status(item) + "; нет истории печати")
+            return
+        try:
+            self._db_browser_switch_view("history", refresh=False)
+            self._db_print_history_show_jobs()
+        except Exception:
+            pass
+        try:
+            self._db_print_history_open_job_rows(int(print_job_id))
+        except Exception as e:
+            self._db_codes_set_status(f"Не удалось открыть print_job #{print_job_id}: {e}")
+
+    def _db_build_codes_panel(self, parent):
+        top = ctk.CTkFrame(parent)
+        top.pack(fill="x", padx=10, pady=(10, 6))
+        ctk.CTkLabel(top, text="Поиск кода (DM / GTIN / NAME):").pack(side="left", padx=(6, 6), pady=6)
+        self._db_codes_search_entry = ctk.CTkEntry(top, width=360, placeholder_text="DM / GTIN / название")
+        self._db_codes_search_entry.pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkLabel(top, text="Статус:").pack(side="left", padx=(2, 6), pady=6)
+        self._db_codes_status_filter_combo = ctk.CTkComboBox(
+            top,
+            width=140,
+            values=["Все", "Не печатались", "done", "error", "cancelled", "printing", "prepared", "created"],
+            state="readonly",
+        )
+        self._db_codes_status_filter_combo.set("Все")
+        self._db_codes_status_filter_combo.pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Поиск", width=90, command=self._db_codes_search).pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Последние", width=90, command=self._db_codes_show_recent).pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Открыть last job", width=120, command=self._db_codes_open_last_job_for_selected).pack(side="left", padx=(0, 6), pady=6)
+        try:
+            self._db_codes_search_entry.bind("<Return>", lambda _e: self._db_codes_search())
+        except Exception:
+            pass
+        try:
+            self._db_codes_status_filter_combo.configure(command=lambda _v: self._db_codes_show_recent())
+        except Exception:
+            pass
+
+        body = ctk.CTkFrame(parent)
+        body.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        wrap = tk.Frame(body)
+        wrap.pack(fill="both", expand=True, padx=6, pady=6)
+        self._db_codes_tree = ttk.Treeview(
+            wrap,
+            columns=("dm", "gtin", "name", "print_status", "prints", "last_job", "last_seen", "part"),
+            show="headings",
+            height=16,
+        )
+        tree = self._db_codes_tree
+        tree.heading("dm", text="DM")
+        tree.heading("gtin", text="GTIN")
+        tree.heading("name", text="NAME")
+        tree.heading("print_status", text="Статус печати")
+        tree.heading("prints", text="Печатей")
+        tree.heading("last_job", text="Last Job")
+        tree.heading("last_seen", text="Last Seen")
+        tree.heading("part", text="PART")
+        tree.column("dm", width=320, anchor="w", stretch=True)
+        tree.column("gtin", width=140, anchor="w", stretch=False)
+        tree.column("name", width=280, anchor="w", stretch=True)
+        tree.column("print_status", width=110, anchor="w", stretch=False)
+        tree.column("prints", width=70, anchor="e", stretch=False)
+        tree.column("last_job", width=80, anchor="e", stretch=False)
+        tree.column("last_seen", width=165, anchor="w", stretch=False)
+        tree.column("part", width=130, anchor="w", stretch=False)
+        scroll_y = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
+        scroll_x = ttk.Scrollbar(wrap, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        tree.pack(side="top", fill="both", expand=True)
+        scroll_x.pack(side="bottom", fill="x")
+        scroll_y.pack(side="right", fill="y")
+        try:
+            tree.bind("<<TreeviewSelect>>", self._db_codes_on_select)
+            tree.bind("<Double-1>", lambda _e: self._db_codes_open_last_job_for_selected())
+        except Exception:
+            pass
+
+        bottom = ctk.CTkFrame(parent)
+        bottom.pack(fill="x", padx=10, pady=(0, 10))
+        self._db_codes_status_label = ctk.CTkLabel(bottom, text="Готово.", anchor="w")
+        self._db_codes_status_label.pack(side="left", fill="x", expand=True, padx=6, pady=6)
+
+    def _db_build_history_panel(self, parent):
+        self._db_print_history_window = getattr(self, "_db_browser_window", self)
+        top = ctk.CTkFrame(parent)
+        top.pack(fill="x", padx=10, pady=(10, 6))
+        ctk.CTkLabel(top, text="Статус:").pack(side="left", padx=(6, 6), pady=6)
+        self._db_print_history_filter_combo = ctk.CTkComboBox(
+            top,
+            width=130,
+            values=["Все", "done", "printing", "error", "cancelled", "prepared", "created"],
+            state="readonly",
+            command=lambda _v: self._db_print_history_show_jobs(),
+        )
+        self._db_print_history_filter_combo.set("Все")
+        self._db_print_history_filter_combo.pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Обновить", width=90, command=self._db_print_history_show_jobs).pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Открыть job по ID", width=130, command=self._db_print_history_open_job_by_id_prompt).pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Импорты", width=90, command=lambda: self._db_browser_switch_view("imports")).pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Коды", width=90, command=lambda: self._db_browser_switch_view("codes")).pack(side="left", padx=(0, 6), pady=6)
+
+        body = ctk.CTkFrame(parent)
+        body.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        try:
+            body.grid_columnconfigure(0, weight=4)
+            body.grid_columnconfigure(1, weight=5)
+            body.grid_rowconfigure(1, weight=1)
+        except Exception:
+            pass
+
+        ctk.CTkLabel(body, text="Задания печати").grid(row=0, column=0, sticky="w", padx=6, pady=(6, 4))
+        ctk.CTkLabel(body, text="Строки задания").grid(row=0, column=1, sticky="w", padx=6, pady=(6, 4))
+
+        jobs_wrap = tk.Frame(body)
+        jobs_wrap.grid(row=1, column=0, sticky="nsew", padx=(6, 4), pady=(0, 6))
+        rows_wrap = tk.Frame(body)
+        rows_wrap.grid(row=1, column=1, sticky="nsew", padx=(4, 6), pady=(0, 6))
+
+        self._db_print_history_jobs_tree = ttk.Treeview(
+            jobs_wrap,
+            columns=("id", "created", "status", "fmt", "rows", "cal", "printer", "batch", "source"),
+            show="headings",
+            height=16,
+        )
+        jobs_tree = self._db_print_history_jobs_tree
+        jobs_tree.heading("id", text="ID")
+        jobs_tree.heading("created", text="Создан")
+        jobs_tree.heading("status", text="Статус")
+        jobs_tree.heading("fmt", text="Формат")
+        jobs_tree.heading("rows", text="Строк")
+        jobs_tree.heading("cal", text="Кал.")
+        jobs_tree.heading("printer", text="Принтер")
+        jobs_tree.heading("batch", text="Пакет")
+        jobs_tree.heading("source", text="Файл")
+        jobs_tree.column("id", width=60, anchor="e", stretch=False)
+        jobs_tree.column("created", width=165, anchor="w", stretch=False)
+        jobs_tree.column("status", width=90, anchor="w", stretch=False)
+        jobs_tree.column("fmt", width=70, anchor="w", stretch=False)
+        jobs_tree.column("rows", width=55, anchor="e", stretch=False)
+        jobs_tree.column("cal", width=45, anchor="e", stretch=False)
+        jobs_tree.column("printer", width=160, anchor="w", stretch=True)
+        jobs_tree.column("batch", width=110, anchor="w", stretch=False)
+        jobs_tree.column("source", width=250, anchor="w", stretch=True)
+        jobs_scroll_y = ttk.Scrollbar(jobs_wrap, orient="vertical", command=jobs_tree.yview)
+        jobs_scroll_x = ttk.Scrollbar(jobs_wrap, orient="horizontal", command=jobs_tree.xview)
+        jobs_tree.configure(yscrollcommand=jobs_scroll_y.set, xscrollcommand=jobs_scroll_x.set)
+        jobs_tree.pack(side="top", fill="both", expand=True)
+        jobs_scroll_x.pack(side="bottom", fill="x")
+        jobs_scroll_y.pack(side="right", fill="y")
+
+        self._db_print_history_rows_tree = ttk.Treeview(
+            rows_wrap,
+            columns=("job_id", "row_in_job", "src_row", "cal", "dm", "gtin", "name", "part"),
+            show="headings",
+            height=16,
+        )
+        rows_tree = self._db_print_history_rows_tree
+        rows_tree.heading("job_id", text="Job")
+        rows_tree.heading("row_in_job", text="№ в job")
+        rows_tree.heading("src_row", text="Исх.стр.")
+        rows_tree.heading("cal", text="Cal")
+        rows_tree.heading("dm", text="DM")
+        rows_tree.heading("gtin", text="GTIN")
+        rows_tree.heading("name", text="NAME")
+        rows_tree.heading("part", text="PART")
+        rows_tree.column("job_id", width=60, anchor="e", stretch=False)
+        rows_tree.column("row_in_job", width=70, anchor="e", stretch=False)
+        rows_tree.column("src_row", width=70, anchor="e", stretch=False)
+        rows_tree.column("cal", width=40, anchor="center", stretch=False)
+        rows_tree.column("dm", width=260, anchor="w", stretch=True)
+        rows_tree.column("gtin", width=130, anchor="w", stretch=False)
+        rows_tree.column("name", width=240, anchor="w", stretch=True)
+        rows_tree.column("part", width=120, anchor="w", stretch=False)
+        rows_scroll_y = ttk.Scrollbar(rows_wrap, orient="vertical", command=rows_tree.yview)
+        rows_scroll_x = ttk.Scrollbar(rows_wrap, orient="horizontal", command=rows_tree.xview)
+        rows_tree.configure(yscrollcommand=rows_scroll_y.set, xscrollcommand=rows_scroll_x.set)
+        rows_tree.pack(side="top", fill="both", expand=True)
+        rows_scroll_x.pack(side="bottom", fill="x")
+        rows_scroll_y.pack(side="right", fill="y")
+
+        try:
+            jobs_tree.bind("<<TreeviewSelect>>", self._db_print_history_on_job_select)
+            jobs_tree.bind("<Double-1>", self._db_print_history_on_job_select)
+        except Exception:
+            pass
+
+        bottom = ctk.CTkFrame(parent)
+        bottom.pack(fill="x", padx=10, pady=(0, 10))
+        self._db_print_history_status_label = ctk.CTkLabel(bottom, text="Готово.", anchor="w")
+        self._db_print_history_status_label.pack(side="left", fill="x", expand=True, padx=6, pady=6)
+
+    def _db_print_history_set_status(self, text: str):
+        try:
+            if getattr(self, "_db_print_history_status_label", None):
+                self._db_print_history_status_label.configure(text=str(text or ""))
+        except Exception:
+            pass
+
+    def _db_print_history_get_selected_filter(self):
+        try:
+            raw = str(self._db_print_history_filter_combo.get() or "").strip()
+        except Exception:
+            raw = "Все"
+        return None if (not raw or raw == "Все") else raw
+
+    def _db_print_history_get_job_meta(self, print_job_id: int):
+        try:
+            cache = getattr(self, "_db_print_history_jobs_meta", None) or {}
+            return cache.get(int(print_job_id))
+        except Exception:
+            return None
+
+    def _db_print_history_format_job_status(self, item: dict | None, shown_rows: int | None = None) -> str:
+        if not item:
+            return "Готово."
+        job_id = int(item.get("id") or 0)
+        status = str(item.get("status") or "-")
+        fmt_name = str(item.get("format") or "-")
+        printer = str(item.get("printer") or "-")
+        rows_in_batch = item.get("rows_in_batch")
+        calib = item.get("calibration_rows")
+        duration = self._db_fmt_duration_ms(item.get("duration_ms"))
+        batch_idx = item.get("batch_index")
+        src = str(item.get("source_filename") or "")
+        err = str(item.get("error_text") or "").strip()
+        msg = (
+            f"Job #{job_id}: status={status}, fmt={fmt_name}, printer={printer}, "
+            f"batch={batch_idx if batch_idx is not None else '-'}, "
+            f"rows={rows_in_batch if rows_in_batch is not None else '-'}, "
+            f"calib={calib if calib is not None else '-'}, duration={duration}"
+        )
+        if src:
+            msg += f", file={src}"
+        if shown_rows is not None:
+            msg += f", показано строк={int(shown_rows or 0)}"
+        if err:
+            if len(err) > 180:
+                err = err[:177] + "..."
+            msg += f", error={err}"
+        return msg
+
+    def _db_print_history_show_jobs(self):
+        try:
+            self._db_poc_ensure_ready(require_enabled=True)
+            status_filter = self._db_print_history_get_selected_filter()
+            jobs = _db_list_recent_print_jobs(limit=200, status=status_filter)
+            tree = getattr(self, "_db_print_history_jobs_tree", None)
+            if not tree:
+                return
+            self._db_browser_clear_tree(tree)
+            meta_map = {}
+            for item in jobs:
+                job_id = int(item.get("id") or 0)
+                meta_map[job_id] = dict(item)
+                batch_text = ""
+                if item.get("batch_index") is not None:
+                    try:
+                        batch_text = f"{int(item.get('batch_index'))}"
+                        if item.get("batch_start_row") is not None and item.get("batch_end_row") is not None:
+                            batch_text += f" ({int(item.get('batch_start_row'))}-{int(item.get('batch_end_row'))})"
+                    except Exception:
+                        batch_text = str(item.get("batch_index") or "")
+                tree.insert(
+                    "",
+                    "end",
+                    iid=str(job_id),
+                    values=(
+                        job_id,
+                        str(item.get("created_at") or ""),
+                        str(item.get("status") or ""),
+                        str(item.get("format") or ""),
+                        int(item.get("rows_in_batch") or 0),
+                        int(item.get("calibration_rows") or 0),
+                        str(item.get("printer") or ""),
+                        batch_text,
+                        str(item.get("source_filename") or ""),
+                    ),
+                )
+            self._db_print_history_jobs_meta = meta_map
+            self._db_browser_clear_tree(getattr(self, "_db_print_history_rows_tree", None))
+            self._db_print_history_selected_job_id = None
+            label = "все" if not status_filter else status_filter
+            self._db_print_history_set_status(f"История печати: {len(jobs)} заданий (фильтр: {label}, лимит 200)")
+            try:
+                self.logger.log(f"[DB] История печати загружена: jobs={len(jobs)}, filter={label}")
+            except Exception:
+                pass
+        except Exception as e:
+            self._db_print_history_set_status(f"Ошибка загрузки истории печати: {e}")
+            try:
+                self.logger.err(f"[DB] Не удалось загрузить историю печати: {e}")
+            except Exception:
+                pass
+
+    def _db_print_history_open_job_rows(self, print_job_id: int):
+        try:
+            self._db_poc_ensure_ready(require_enabled=True)
+            rows = _db_get_print_job_rows(print_job_id, limit=2000, offset=0)
+            tree = getattr(self, "_db_print_history_rows_tree", None)
+            if not tree:
+                return
+            self._db_browser_clear_tree(tree)
+            shown = 0
+            for row in rows:
+                tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        int(print_job_id),
+                        int(row.get("row_no_in_job") or 0),
+                        "" if row.get("source_row_no") is None else int(row.get("source_row_no") or 0),
+                        "Y" if bool(row.get("is_calibration")) else "",
+                        str(row.get("dm") or ""),
+                        str(row.get("gtin") or ""),
+                        str(row.get("name") or ""),
+                        str(row.get("part_num") or ""),
+                    ),
+                )
+                shown += 1
+            self._db_print_history_selected_job_id = int(print_job_id)
+            meta = self._db_print_history_get_job_meta(print_job_id)
+            self._db_print_history_set_status(self._db_print_history_format_job_status(meta, shown_rows=shown))
+            try:
+                self.logger.log(f"[DB] Открыт print_job #{print_job_id}: rows={shown}")
+            except Exception:
+                pass
+        except Exception as e:
+            self._db_print_history_set_status(f"Ошибка открытия print_job #{print_job_id}: {e}")
+            try:
+                self.logger.err(f"[DB] Не удалось открыть print_job #{print_job_id}: {e}")
+            except Exception:
+                pass
+
+    def _db_print_history_on_job_select(self, _event=None):
+        tree = getattr(self, "_db_print_history_jobs_tree", None)
+        if not tree:
+            return
+        try:
+            sel = tree.selection()
+        except Exception:
+            sel = ()
+        if not sel:
+            return
+        try:
+            vals = tree.item(sel[0], "values") or []
+        except Exception:
+            vals = []
+        if not vals:
+            return
+        try:
+            print_job_id = int(vals[0])
+        except Exception:
+            return
+        self._db_print_history_open_job_rows(print_job_id)
+
+    def _db_print_history_open_job_by_id_prompt(self):
+        try:
+            print_job_id = sd.askinteger(
+                "История печати",
+                "Введите ID задания печати:",
+                parent=getattr(self, "_db_print_history_window", self),
+                minvalue=1,
+            )
+        except Exception:
+            print_job_id = None
+        if not print_job_id:
+            return
+        self._db_print_history_open_job_rows(int(print_job_id))
+
+    def _open_db_print_history_window(self):
+        # PoC v2: история печати встроена в окно "База данных (PoC)".
+        try:
+            self._open_db_browser_window(initial_view="history")
+            return
+        except TypeError:
+            # На случай запуска старой версии сигнатуры во время частичного обновления.
+            try:
+                self._open_db_browser_window()
+                self._db_browser_switch_view("history")
+                return
+            except Exception:
+                pass
+        try:
+            self._db_poc_ensure_ready(require_enabled=True)
+        except Exception as e:
+            try:
+                self.logger.err(f"[DB] Окно истории печати недоступно: {e}")
+            except Exception:
+                pass
+            try:
+                mb.showerror("История печати (PoC)", str(e))
+            except Exception:
+                pass
+            return
+
+        win = getattr(self, "_db_print_history_window", None)
+        try:
+            if win and win.winfo_exists():
+                win.deiconify()
+                win.lift()
+                try:
+                    win.attributes("-topmost", True)
+                    win.after(150, lambda: win.attributes("-topmost", False))
+                except Exception:
+                    pass
+                try:
+                    win.focus_force()
+                except Exception:
+                    pass
+                self._db_print_history_show_jobs()
+                return
+        except Exception:
+            pass
+
+        win = ctk.CTkToplevel(self)
+        self._db_print_history_window = win
+        win.title("История печати (PoC)")
+        try:
+            win.geometry("1320x760")
+            win.minsize(1100, 560)
+        except Exception:
+            pass
+        try:
+            win.transient(self)
+        except Exception:
+            pass
+        try:
+            win.lift()
+            win.attributes("-topmost", True)
+            win.after(150, lambda: win.attributes("-topmost", False))
+            win.focus_force()
+        except Exception:
+            pass
+
+        top = ctk.CTkFrame(win)
+        top.pack(fill="x", padx=10, pady=(10, 6))
+        ctk.CTkLabel(top, text="Статус:").pack(side="left", padx=(6, 6), pady=6)
+        self._db_print_history_filter_combo = ctk.CTkComboBox(
+            top,
+            width=130,
+            values=["Все", "done", "printing", "error", "cancelled", "prepared", "created"],
+            state="readonly",
+            command=lambda _v: self._db_print_history_show_jobs(),
+        )
+        self._db_print_history_filter_combo.set("Все")
+        self._db_print_history_filter_combo.pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Обновить", width=90, command=self._db_print_history_show_jobs).pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Открыть job по ID", width=130, command=self._db_print_history_open_job_by_id_prompt).pack(side="left", padx=(0, 6), pady=6)
+        ctk.CTkButton(top, text="Открыть БД (импорты)", width=150, command=self._open_db_browser_window).pack(side="left", padx=(0, 6), pady=6)
+
+        body = ctk.CTkFrame(win)
+        body.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        try:
+            body.grid_columnconfigure(0, weight=4)
+            body.grid_columnconfigure(1, weight=5)
+            body.grid_rowconfigure(1, weight=1)
+        except Exception:
+            pass
+
+        ctk.CTkLabel(body, text="Задания печати").grid(row=0, column=0, sticky="w", padx=6, pady=(6, 4))
+        ctk.CTkLabel(body, text="Строки задания").grid(row=0, column=1, sticky="w", padx=6, pady=(6, 4))
+
+        jobs_wrap = tk.Frame(body)
+        jobs_wrap.grid(row=1, column=0, sticky="nsew", padx=(6, 4), pady=(0, 6))
+        rows_wrap = tk.Frame(body)
+        rows_wrap.grid(row=1, column=1, sticky="nsew", padx=(4, 6), pady=(0, 6))
+
+        self._db_print_history_jobs_tree = ttk.Treeview(
+            jobs_wrap,
+            columns=("id", "created", "status", "fmt", "rows", "cal", "printer", "batch", "source"),
+            show="headings",
+            height=16,
+        )
+        jobs_tree = self._db_print_history_jobs_tree
+        jobs_tree.heading("id", text="ID")
+        jobs_tree.heading("created", text="Создан")
+        jobs_tree.heading("status", text="Статус")
+        jobs_tree.heading("fmt", text="Формат")
+        jobs_tree.heading("rows", text="Строк")
+        jobs_tree.heading("cal", text="Кал.")
+        jobs_tree.heading("printer", text="Принтер")
+        jobs_tree.heading("batch", text="Пакет")
+        jobs_tree.heading("source", text="Файл")
+        jobs_tree.column("id", width=60, anchor="e", stretch=False)
+        jobs_tree.column("created", width=165, anchor="w", stretch=False)
+        jobs_tree.column("status", width=90, anchor="w", stretch=False)
+        jobs_tree.column("fmt", width=70, anchor="w", stretch=False)
+        jobs_tree.column("rows", width=55, anchor="e", stretch=False)
+        jobs_tree.column("cal", width=45, anchor="e", stretch=False)
+        jobs_tree.column("printer", width=160, anchor="w", stretch=True)
+        jobs_tree.column("batch", width=110, anchor="w", stretch=False)
+        jobs_tree.column("source", width=250, anchor="w", stretch=True)
+        jobs_scroll_y = ttk.Scrollbar(jobs_wrap, orient="vertical", command=jobs_tree.yview)
+        jobs_scroll_x = ttk.Scrollbar(jobs_wrap, orient="horizontal", command=jobs_tree.xview)
+        jobs_tree.configure(yscrollcommand=jobs_scroll_y.set, xscrollcommand=jobs_scroll_x.set)
+        jobs_tree.pack(side="top", fill="both", expand=True)
+        jobs_scroll_x.pack(side="bottom", fill="x")
+        jobs_scroll_y.pack(side="right", fill="y")
+
+        self._db_print_history_rows_tree = ttk.Treeview(
+            rows_wrap,
+            columns=("job_id", "row_in_job", "src_row", "cal", "dm", "gtin", "name", "part"),
+            show="headings",
+            height=16,
+        )
+        rows_tree = self._db_print_history_rows_tree
+        rows_tree.heading("job_id", text="Job")
+        rows_tree.heading("row_in_job", text="№ в job")
+        rows_tree.heading("src_row", text="Исх.стр.")
+        rows_tree.heading("cal", text="Cal")
+        rows_tree.heading("dm", text="DM")
+        rows_tree.heading("gtin", text="GTIN")
+        rows_tree.heading("name", text="NAME")
+        rows_tree.heading("part", text="PART")
+        rows_tree.column("job_id", width=60, anchor="e", stretch=False)
+        rows_tree.column("row_in_job", width=70, anchor="e", stretch=False)
+        rows_tree.column("src_row", width=70, anchor="e", stretch=False)
+        rows_tree.column("cal", width=40, anchor="center", stretch=False)
+        rows_tree.column("dm", width=260, anchor="w", stretch=True)
+        rows_tree.column("gtin", width=130, anchor="w", stretch=False)
+        rows_tree.column("name", width=240, anchor="w", stretch=True)
+        rows_tree.column("part", width=120, anchor="w", stretch=False)
+        rows_scroll_y = ttk.Scrollbar(rows_wrap, orient="vertical", command=rows_tree.yview)
+        rows_scroll_x = ttk.Scrollbar(rows_wrap, orient="horizontal", command=rows_tree.xview)
+        rows_tree.configure(yscrollcommand=rows_scroll_y.set, xscrollcommand=rows_scroll_x.set)
+        rows_tree.pack(side="top", fill="both", expand=True)
+        rows_scroll_x.pack(side="bottom", fill="x")
+        rows_scroll_y.pack(side="right", fill="y")
+
+        try:
+            jobs_tree.bind("<<TreeviewSelect>>", self._db_print_history_on_job_select)
+            jobs_tree.bind("<Double-1>", self._db_print_history_on_job_select)
+        except Exception:
+            pass
+
+        bottom = ctk.CTkFrame(win)
+        bottom.pack(fill="x", padx=10, pady=(0, 10))
+        self._db_print_history_status_label = ctk.CTkLabel(bottom, text="Готово.", anchor="w")
+        self._db_print_history_status_label.pack(side="left", fill="x", expand=True, padx=6, pady=6)
+
+        def _on_close():
+            try:
+                self._db_print_history_window = None
+            except Exception:
+                pass
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        try:
+            win.protocol("WM_DELETE_WINDOW", _on_close)
+        except Exception:
+            pass
+
+        self._db_print_history_jobs_meta = {}
+        self._db_print_history_selected_job_id = None
+        self._db_print_history_show_jobs()
+
     def _check_template_db(self, fmt, expected_path: str):
         """
         Проверяет, привязан ли шаблон BarTender к ожидаемому tmp_batch.csv.
@@ -3906,6 +5329,7 @@ class App(ctk.CTk):
             pass
         try:
             self.csv_rows = load_kontur_raw(p_abs)
+            self._try_store_csv_import_db(self.csv_rows, p_abs)
             head = self.csv_rows[0] if self.csv_rows else {"DM": "", "NAME": ""}
             self.logger.log(f"CSV: строк={len(self.csv_rows)}; пример DM='{head.get('DM','')}', NAME='{head.get('NAME','')}'")
             try:
@@ -5054,6 +6478,7 @@ class App(ctk.CTk):
         if not self.csv_rows:
             try:
                 self.csv_rows = load_kontur_raw(self.csv_path)
+                self._try_store_csv_import_db(self.csv_rows, self.csv_path)
             except Exception as e:
                 self.logger.err(f"CSV ошибка: {e}")
                 return
@@ -5481,6 +6906,7 @@ class App(ctk.CTk):
         if not getattr(self, "csv_rows", None):
             try:
                 self.csv_rows = load_kontur_raw(self.csv_path)
+                self._try_store_csv_import_db(self.csv_rows, self.csv_path)
             except Exception as e:
                 self.logger.err(f"CSV ошибка: {e}")
                 return
@@ -5498,6 +6924,22 @@ class App(ctk.CTk):
 
         job_name = os.path.basename(self.csv_path) if self.csv_path else ""
         job_started_at = time.time()
+        db_print_tracking = self._db_print_tracking_ready()
+        db_import_id = getattr(self, "_last_db_import_id", None)
+        db_source_file_hash = str(getattr(self, "_last_db_import_file_hash", "") or "")
+        db_source_file_size = getattr(self, "_last_db_import_file_size", None)
+        if db_print_tracking and (not db_source_file_hash or db_source_file_size is None):
+            try:
+                db_source_file_size, db_source_file_hash = self._db_get_source_file_meta(self.csv_path)
+            except Exception:
+                pass
+        if db_print_tracking and not db_import_id and db_source_file_hash and callable(_db_find_import_by_file_hash):
+            try:
+                _existing_import = _db_find_import_by_file_hash(db_source_file_hash)
+                if _existing_import:
+                    db_import_id = int(_existing_import.get("id") or 0) or None
+            except Exception:
+                pass
 
         prn = self._get_printer()
         if not prn:
@@ -5577,6 +7019,7 @@ class App(ctk.CTk):
                             enr["DM"] = base.get("DM", "")
                             enr["NUM"] = str(idx1)
                             enr["_FORMAT"] = fmt_fast
+                            enr["_SOURCE_ROW_NO"] = idx1
                             enriched.append(enr)
                             if (i + 1) % PROGRESS_EVERY == 0:
                                 self._set_progress(i + 1, len(rows), f"Подготовка пакета {bidx}")
@@ -5600,6 +7043,10 @@ class App(ctk.CTk):
                             if not getattr(self, "_part_missing_logged", False):
                                 self.logger.err(f"Строка {idx1}: данные не сформированы - пропуск")
                             continue
+                        try:
+                            enr["_SOURCE_ROW_NO"] = idx1
+                        except Exception:
+                            pass
                         enriched.append(enr)
                         if (i + 1) % PROGRESS_EVERY == 0:
                             self._set_progress(i + 1, len(rows), f"Подготовка пакета {bidx}")
@@ -5631,6 +7078,10 @@ class App(ctk.CTk):
                 self._write_tmp_batch_csv(enriched, tmp_csv_path, add_calib=False)
 
                 fmt = None
+                print_job_id = None
+                print_job_t0 = None
+                batch_start_num = idx0 + start + 1
+                batch_end_num = idx0 + end
                 try:
                     try:
                         self._apply_format_ui(fmt_name)
@@ -5644,6 +7095,45 @@ class App(ctk.CTk):
                     if not btw:
                         self.logger.err(f"Пакет {bidx}: не найден BTW для формата {fmt_name}.")
                         continue
+                    if db_print_tracking:
+                        try:
+                            print_job_id = self._db_try_create_print_job(
+                                import_id=db_import_id,
+                                source_filename=job_name,
+                                source_file_hash=db_source_file_hash or None,
+                                source_file_size=db_source_file_size,
+                                csv_path=self.csv_path,
+                                batch_index=bidx,
+                                batch_start_row=batch_start_num,
+                                batch_end_row=batch_end_num,
+                                total_rows=total,
+                                rows_in_batch=real_in_batch,
+                                calibration_rows=calib_added,
+                                printer=prn,
+                                format_name=fmt_name,
+                                template_path=btw,
+                                user_name=self._db_get_print_user(),
+                                status="prepared",
+                            )
+                            print_job_t0 = time.time()
+                            if print_job_id:
+                                saved_rows = self._db_try_add_print_job_rows(print_job_id, enriched)
+                                self._db_try_update_print_job(
+                                    print_job_id,
+                                    status="printing",
+                                    printer=prn,
+                                    format_name=fmt_name,
+                                    template_path=btw,
+                                )
+                                try:
+                                    self.logger.log(
+                                        f"[DB] print_job создан: id={print_job_id}, rows={saved_rows}, "
+                                        f"batch={bidx}, fmt={fmt_name}"
+                                    )
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
 
                     fmt = self.bt.open_format(btw)
                     try:
@@ -5673,9 +7163,43 @@ class App(ctk.CTk):
                     sent_total += real_in_batch
                     calib_total += calib_added
                     success = True
+                    if print_job_id:
+                        try:
+                            dur_ms = int(max(0.0, (time.time() - (print_job_t0 or time.time()))) * 1000)
+                        except Exception:
+                            dur_ms = None
+                        self._db_try_update_print_job(
+                            print_job_id,
+                            status="done",
+                            error_text="",
+                            finished=True,
+                            duration_ms=dur_ms,
+                            printer=prn,
+                            format_name=fmt_name,
+                            template_path=btw,
+                        )
                     self.logger.log(f"Пакет {bidx} отправлен. Всего отправлено: {sent_total}/{total}" + (f"; калибровочных: {calib_total}" if calib_added else ""))
                     self._set_progress(len(rows), len(rows), f"Пакет {bidx}")
                 except Exception as e:
+                    if print_job_id:
+                        try:
+                            dur_ms = int(max(0.0, (time.time() - (print_job_t0 or time.time()))) * 1000)
+                        except Exception:
+                            dur_ms = None
+                        err_text = str(e or "")
+                        if len(err_text) > 2000:
+                            err_text = err_text[:1997] + "..."
+                        job_status = "cancelled" if (self.cancel_requested or self._should_stop()) else "error"
+                        self._db_try_update_print_job(
+                            print_job_id,
+                            status=job_status,
+                            error_text=err_text,
+                            finished=True,
+                            duration_ms=dur_ms,
+                            printer=prn,
+                            format_name=fmt_name,
+                            template_path=btw if 'btw' in locals() else None,
+                        )
                     self.logger.err(f"Сбой печати пакета {bidx}: {e}\\n{traceback.format_exc()}")
                 finally:
                     if fmt:
@@ -5685,8 +7209,8 @@ class App(ctk.CTk):
                             pass
 
                 try:
-                    start_num = idx0 + start + 1
-                    end_num = idx0 + end
+                    start_num = batch_start_num
+                    end_num = batch_end_num
                     sample_real = None
                     for e in enriched:
                         if e.get("_CALIB"):

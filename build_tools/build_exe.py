@@ -33,10 +33,14 @@ def main() -> int:
         "BarTenderGUI",
         "--collect-all",
         "customtkinter",
+        "--collect-all",
+        "psycopg",
         "--hidden-import",
         "darkdetect",
         "--hidden-import",
         "tkcalendar",
+        "--hidden-import",
+        "psycopg_binary",
     ]
 
     for rel_path, dest in data_files:

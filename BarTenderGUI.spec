@@ -3,8 +3,10 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('D:\\AutoPrint V3.1\\product_catalog.xlsx', '.'), ('D:\\AutoPrint V3.1\\tmp_batch.csv', '.'), ('D:\\AutoPrint V3.1\\config\\stats.json', 'config'), ('D:\\AutoPrint V3.1\\config\\config.json', 'config'), ('D:\\AutoPrint V3.1\\templates\\16x16.btw', 'templates'), ('D:\\AutoPrint V3.1\\templates\\30x20.btw', 'templates'), ('D:\\AutoPrint V3.1\\templates\\sticker60x40.btw', 'templates')]
 binaries = []
-hiddenimports = ['darkdetect', 'tkcalendar']
+hiddenimports = ['darkdetect', 'tkcalendar', 'psycopg_binary']
 tmp_ret = collect_all('customtkinter')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('psycopg')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
