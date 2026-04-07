@@ -63,8 +63,17 @@ def _parse_shelf_life(text: str):
     return res
 
 
+def _legacy_template_from_pack(pack_text: str) -> str:
+    pack = _norm(pack_text)
+    if "ведро" in pack:
+        return "30x20"
+    if any(w in pack for w in ("банка", "туба")):
+        return "16x16"
+    return ""
+
+
 def read_product_map(xlsx_path: str):
-    """Читает: GTIN, Упаковка, Срок годности, Шаблон партии, ShortName."""
+    """Читает: GTIN, Упаковка, Шаблон печати, Срок годности, Шаблон партии, ShortName."""
     mapping = {}
     if not xlsx_path or not os.path.isfile(xlsx_path) or not load_workbook:
         return mapping
@@ -78,6 +87,11 @@ def read_product_map(xlsx_path: str):
         idx_pack = col.get("Упаковка") or col.get("УПАКОВКА")
         idx_shelf = col.get("Срок годности") or col.get("СРОК ГОДНОСТИ")
         idx_part = col.get("Шаблон партии") or col.get("ШАБЛОН ПАРТИИ") or col.get("Партия") or col.get("ПАРТИЯ")
+        idx_template = (
+            col.get("Шаблон печати") or col.get("ШАБЛОН ПЕЧАТИ")
+            or col.get("Шаблон") or col.get("ШАБЛОН")
+            or col.get("Template") or col.get("TEMPLATE")
+        )
         idx_short = (col.get("ShortName") or col.get("SHORTNAME") or col.get("Shortname") or col.get("shortname")
                      or col.get("Short Name") or col.get("SHORT NAME") or col.get("Короткое имя") or col.get("КОРОТКОЕ ИМЯ"))
         idx_brand = col.get("Бренд") or col.get("бренд") or col.get("Brand") or col.get("BRAND")
@@ -116,24 +130,24 @@ def read_product_map(xlsx_path: str):
             g = only_digits(cell(row, idx_gtin))
             if not g:
                 continue
-            pack = _norm(cell(row, idx_pack))
+            pack_raw = cell(row, idx_pack)
             shelf = cell(row, idx_shelf)
-            fmt = ""
-            if "ведро" in pack:
-                fmt = "30x20"
-            elif any(w in pack for w in ("банка", "туба")):
-                fmt = "16x16"
+            template_id = cell(row, idx_template)
+            template_id = re.sub(r"\s+", " ", (template_id or "").strip())
+            if not template_id:
+                template_id = _legacy_template_from_pack(pack_raw)
             shelf_parsed = _parse_shelf_life(shelf)
             part_tpl = cell(row, idx_part)
             short_from_xlsx = cell(row, idx_short)
             mapping[g] = {
-                "FORMAT": fmt,
+                "TEMPLATE_ID": template_id,
+                "FORMAT": template_id,  # backward compatibility with older code paths
                 "SHELF": shelf_parsed,
                 "PART_TEMPLATE": part_tpl,
                 "SHORTNAME": short_from_xlsx,
                 "BRAND": cell(row, idx_brand),
                 "CLIENT": cell(row, idx_client),
-                "PACKAGING": cell(row, idx_packaging) or cell(row, idx_pack),
+                "PACKAGING": cell(row, idx_packaging) or pack_raw,
                 "WEIGHT": cell(row, idx_weight),
             }
         mapping["_HAS_SHORT_COL"] = has_short
@@ -143,11 +157,14 @@ def read_product_map(xlsx_path: str):
 
 
 def choose_format_for(gtin, product_map, manual_choice):
-    if manual_choice in ("16x16", "30x20"):
+    manual_choice = re.sub(r"\s+", " ", str(manual_choice or "").strip())
+    if manual_choice and manual_choice.lower() != "auto":
         return manual_choice
     info = product_map.get(only_digits(gtin), {})
-    fmt = (info.get("FORMAT") or "") if info else ""
-    return fmt if fmt in ("16x16", "30x20") else "16x16"
+    fmt = ""
+    if info:
+        fmt = (info.get("TEMPLATE_ID") or info.get("FORMAT") or "").strip()
+    return fmt or "16x16"
 
 
 def make_part_num(prod_date, part_template: str | None):

@@ -83,6 +83,7 @@ APP_VERSION = "3.0"
 PREVIEW_NAME = "preview.png"
 STICKER_BTW_NAME = "sticker60x40.btw"
 STATS_PATH = os.path.join(CONFIG_DIR, "stats.json")
+DEFAULT_REQ_COLS = ["ShortName", "ShortGTIN", "EXP_DATE", "PROD_DATE", "PART_NUM", "DM", "NUM"]
 CATALOG_HEADERS = [
     "GTIN",
     "Наименование",
@@ -97,6 +98,7 @@ CATALOG_HEADERS = [
     "Нанесение кодов",
     "ТН ВЭД",
     "ShortName",
+    "Шаблон печати",
     "Шаблон партии",
     "Клиент",
     "Упаковка отображаемая",
@@ -663,7 +665,7 @@ class App(ctk.CTk):
         self.cancel_requested = False
         self.is_paused = False
         super().__init__()
-        self.REQ_COLS = ["ShortName","ShortGTIN","EXP_DATE","PROD_DATE","PART_NUM","DM","NUM"]
+        self.REQ_COLS = list(DEFAULT_REQ_COLS)
         self.title(APP_TITLE)
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -673,6 +675,7 @@ class App(ctk.CTk):
         self._apply_auto_scaling()
 
         self.cfg = load_config()
+        self.label_templates = self._load_label_templates_from_cfg()
         # статистика печати отключена
         self.stats = None
         self.app_started_at = time.time()
@@ -696,6 +699,12 @@ class App(ctk.CTk):
         self.csv_rows = []
         self.preview_ctkimg = None
         self.product_map = {}
+        # DB runtime state (не блокируем UI, если контейнер БД недоступен)
+        self._db_schema_ready = False
+        self._db_available = None
+        self._db_probe_in_progress = False
+        self._db_last_error = ""
+        self._db_next_probe_after = 0.0
 
         self._build_ui()
         self._build_menu()
@@ -712,6 +721,10 @@ class App(ctk.CTk):
         self._refresh_client_combo(None)
         try:
             self.logger.log(f"[INFO] Загружено статусов CSV: {len(self.csv_stats)}")
+        except Exception:
+            pass
+        try:
+            self._db_probe_async(init_schema=True, quiet=False, force=True)
         except Exception:
             pass
 
@@ -754,8 +767,8 @@ class App(ctk.CTk):
         top = ctk.CTkFrame(self, corner_radius=12)
         top.pack(fill="x", padx=12, pady=(12, 6))
 
-        ctk.CTkLabel(top, text="Формат (Auto/ручной):").pack(side="left", padx=(8, 4), pady=10)
-        self.format_combo = ctk.CTkComboBox(top, values=["Auto", "16x16", "30x20"], state="readonly", width=120)
+        ctk.CTkLabel(top, text="Шаблон (Auto/ручной):").pack(side="left", padx=(8, 4), pady=10)
+        self.format_combo = ctk.CTkComboBox(top, values=["Auto"] + self._manual_template_choices(), state="readonly", width=120)
         self.format_combo.set("Auto")
         self.format_combo.pack(side="left", padx=(0, 10), pady=10)
         self.format_combo.configure(command=self._on_format_change)
@@ -1017,6 +1030,7 @@ class App(ctk.CTk):
             view_menu.add_cascade(label="Масштаб", menu=scale_menu)
 
             service_menu = Menu(self, tearoff=0)
+            service_menu.add_command(label="Редактор шаблонов", command=self._open_template_editor)
             service_menu.add_command(label="Редактор каталога товаров", command=self._open_product_catalog)
             service_menu.add_command(label="Открыть папку шаблонов", command=self._open_templates_dir)
             service_menu.add_command(label="Принтеры по шаблонам", command=self._open_template_printer_settings)
@@ -1275,8 +1289,13 @@ class App(ctk.CTk):
         top = ctk.CTkFrame(win)
         top.pack(fill="x", padx=12, pady=(10, 6))
         labels_by_fmt = stats.get("labels_by_format") or {}
+        format_chunks = []
+        for key in sorted(labels_by_fmt.keys(), key=lambda x: (x == "other", str(x))):
+            val = labels_by_fmt.get(key, 0)
+            if val or key != "other":
+                format_chunks.append(f"{key}: {val}")
         ctk.CTkLabel(top, text=f"Всего напечатано марок: {stats.get('labels_total', 0)}").pack(anchor="w", pady=2)
-        ctk.CTkLabel(top, text=f"16x16: {labels_by_fmt.get('16x16', 0)} | 30x20: {labels_by_fmt.get('30x20', 0)}").pack(anchor="w", pady=2)
+        ctk.CTkLabel(top, text=" | ".join(format_chunks) if format_chunks else "По шаблонам: нет данных").pack(anchor="w", pady=2)
 
         jobs_frame = ctk.CTkFrame(win)
         jobs_frame.pack(fill="both", expand=True, padx=12, pady=(4, 10))
@@ -1300,7 +1319,7 @@ class App(ctk.CTk):
             try:
                 chunks = [
                     f"Всего марок: {stats.get('labels_total',0)}",
-                    f"16x16: {labels_by_fmt.get('16x16', 0)} | 30x20: {labels_by_fmt.get('30x20', 0)}",
+                    " | ".join(format_chunks) if format_chunks else "По шаблонам: нет данных",
                 ]
                 chunks.append("Задания:")
                 for j in list(reversed(jobs))[:20]:
@@ -1336,11 +1355,68 @@ class App(ctk.CTk):
             except Exception:
                 pass
 
-    def _open_template_printer_settings(self):
-        """Окно настроек принтеров по шаблонам."""
+    def _part_mode_label(self, mode: str) -> str:
+        mapping = {
+            "blank": "Пусто",
+            "manual": "Вручную",
+            "catalog": "Из шаблона партии",
+        }
+        return mapping.get(self._normalize_part_mode(mode), "Пусто")
+
+    def _part_mode_from_label(self, label: str) -> str:
+        reverse = {
+            "Пусто": "blank",
+            "Вручную": "manual",
+            "Из шаблона партии": "catalog",
+        }
+        return reverse.get(str(label or "").strip(), "blank")
+
+    def _template_required_fields(self, part_mode: str):
+        required = ["ShortName", "ShortGTIN", "EXP_DATE", "PROD_DATE", "DM", "NUM"]
+        if self._normalize_part_mode(part_mode) in ("manual", "catalog"):
+            required.append("PART_NUM")
+        return required
+
+    def _validate_template_file(self, template_path: str, part_mode: str = "blank"):
+        if not self.bt:
+            raise RuntimeError("BarTender COM не инициализирован.")
+        if not template_path or not os.path.isfile(template_path):
+            raise FileNotFoundError(template_path or "Файл шаблона не найден")
+
+        fmt = None
+        try:
+            fmt = self.bt.open_format(template_path)
+            report = self._template_batch_report(fmt, part_mode=part_mode)
+            dm_report = self._template_dm_validation_report(fmt, batch_report=report)
+        finally:
+            try:
+                if fmt:
+                    fmt.Close(1)
+            except Exception:
+                pass
+
+        return {
+            "ok": not report["missing_named"],
+            "fields": report["named_fields"],
+            "required": report["required"],
+            "missing": report["missing_named"],
+            "batch_ok": report["can_batch"],
+            "batch_message": report["batch_message"],
+            "db_fields": report["db_fields"],
+            "missing_db": report["missing_db"],
+            "template_only": report["template_only"],
+            "db_count": report["db_count"],
+            "use_database": report["use_database"],
+            "dm_present": dm_report["present"],
+            "dm_message": dm_report["message"],
+            "dm_details": dm_report["details"],
+            "dm_com_values": dm_report["com_values"],
+        }
+
+    def _open_template_editor(self):
         win = ctk.CTkToplevel(self)
-        win.title("Принтеры по шаблонам")
-        win.geometry("440x260")
+        win.title("Редактор шаблонов")
+        win.geometry("980x560")
         win.grab_set()
         try:
             win.lift()
@@ -1350,61 +1426,364 @@ class App(ctk.CTk):
         except Exception:
             pass
 
-        fmt_map = self.cfg.get("format_printers") or {}
+        ctk.CTkLabel(
+            win,
+            text="Шаблоны сохраняются в папку templates. Товару назначается ID шаблона из этого списка.",
+        ).pack(anchor="w", padx=12, pady=(12, 6))
+
+        frame = ctk.CTkFrame(win)
+        frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+
+        cols = ("id", "name", "file", "part_mode", "printer", "status")
+        tree = ttk.Treeview(frame, columns=cols, show="headings", height=14)
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.heading("id", text="ID")
+        tree.heading("name", text="Название")
+        tree.heading("file", text="BTW файл")
+        tree.heading("part_mode", text="Партия")
+        tree.heading("printer", text="Принтер")
+        tree.heading("status", text="Статус")
+        tree.column("id", width=110, anchor="w")
+        tree.column("name", width=180, anchor="w")
+        tree.column("file", width=180, anchor="w")
+        tree.column("part_mode", width=150, anchor="w")
+        tree.column("printer", width=220, anchor="w")
+        tree.column("status", width=120, anchor="w")
+        tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+
+        def _template_status(template_id):
+            path = self._resolve_template_btw_path(template_id)
+            return "OK" if path else "Файл не найден"
+
+        def refresh_tree():
+            tree.delete(*tree.get_children())
+            for template_id, meta in self._iter_label_templates():
+                tree.insert(
+                    "",
+                    "end",
+                    iid=template_id,
+                    values=(
+                        template_id,
+                        meta.get("name") or template_id,
+                        meta.get("file_name") or "",
+                        self._part_mode_label(meta.get("part_mode")),
+                        meta.get("printer") or "(по умолчанию)",
+                        _template_status(template_id),
+                    ),
+                )
+
+        def edit_template(existing_id=None):
+            existing = self._get_label_template(existing_id) or {}
+            dlg = ctk.CTkToplevel(win)
+            dlg.title("Новый шаблон" if not existing_id else f"Шаблон: {existing_id}")
+            dlg.geometry("700x360")
+            dlg.grab_set()
+            try:
+                dlg.lift()
+                dlg.attributes("-topmost", True)
+                dlg.after(150, lambda: dlg.attributes("-topmost", False))
+                dlg.focus_force()
+            except Exception:
+                pass
+
+            body = ctk.CTkFrame(dlg)
+            body.pack(fill="both", expand=True, padx=12, pady=12)
+            body.grid_columnconfigure(1, weight=1)
+
+            row = 0
+            ctk.CTkLabel(body, text="ID шаблона:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=6)
+            id_entry = ctk.CTkEntry(body, width=220)
+            id_entry.grid(row=row, column=1, sticky="ew", pady=6)
+            id_entry.insert(0, existing_id or "")
+            if existing_id:
+                id_entry.configure(state="disabled")
+
+            row += 1
+            ctk.CTkLabel(body, text="Название:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=6)
+            name_entry = ctk.CTkEntry(body)
+            name_entry.grid(row=row, column=1, sticky="ew", pady=6)
+            name_entry.insert(0, existing.get("name") or existing_id or "")
+
+            row += 1
+            ctk.CTkLabel(body, text="BTW файл:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=6)
+            file_row = ctk.CTkFrame(body, fg_color="transparent")
+            file_row.grid(row=row, column=1, sticky="ew", pady=6)
+            file_row.grid_columnconfigure(0, weight=1)
+            file_entry = ctk.CTkEntry(file_row)
+            file_entry.grid(row=0, column=0, sticky="ew")
+            file_entry.insert(0, existing.get("file_name") or "")
+
+            row += 1
+            ctk.CTkLabel(body, text="Режим партии:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=6)
+            part_options = ["Пусто", "Вручную", "Из шаблона партии"]
+            part_var = tk.StringVar(value=self._part_mode_label(existing.get("part_mode")))
+            ctk.CTkOptionMenu(body, variable=part_var, values=part_options).grid(row=row, column=1, sticky="w", pady=6)
+
+            row += 1
+            ctk.CTkLabel(body, text="Принтер по умолчанию:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=6)
+            printer_values = self._get_printer_values()
+            current_printer = str(existing.get("printer") or "").strip()
+            extras = [current_printer] if current_printer and current_printer not in printer_values else []
+            printer_options = ["(по умолчанию)"] + extras + printer_values if printer_values else ["(по умолчанию)"]
+            printer_var = tk.StringVar(value=current_printer or "(по умолчанию)")
+            ctk.CTkOptionMenu(body, variable=printer_var, values=printer_options).grid(row=row, column=1, sticky="ew", pady=6)
+
+            row += 1
+            status_label = ctk.CTkLabel(body, text="Подсказка: импортируйте BTW, затем проверьте поля.")
+            status_label.grid(row=row, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+            def _current_template_id():
+                if existing_id:
+                    return existing_id
+                return self._normalize_template_id(id_entry.get())
+
+            def _current_template_path():
+                template_id = _current_template_id()
+                file_name = self._sanitize_template_filename(file_entry.get() or "", template_id)
+                if file_name:
+                    path = default_template_path(file_name)
+                    if os.path.isfile(path):
+                        return path
+                return self._resolve_template_btw_path(template_id)
+
+            def on_import():
+                template_id = _current_template_id()
+                src = fd.askopenfilename(
+                    title="Выбери BTW шаблон",
+                    filetypes=[("BarTender Template", "*.btw")],
+                )
+                if not src:
+                    return
+                try:
+                    target, file_name = self._copy_template_into_workspace(src, template_id)
+                    file_entry.delete(0, "end")
+                    file_entry.insert(0, file_name)
+                    status_label.configure(text=f"Импортировано в templates: {os.path.basename(target)}")
+                except Exception as e:
+                    mb.showerror("Шаблон", f"Не удалось импортировать BTW:\n{e}")
+
+            def on_validate():
+                template_id = _current_template_id()
+                if not template_id:
+                    mb.showerror("Шаблон", "Сначала укажите ID шаблона.")
+                    return
+                path = _current_template_path()
+                if not path:
+                    mb.showerror("Шаблон", "Файл BTW не найден. Сначала импортируйте или укажите файл.")
+                    return
+                try:
+                    report = self._validate_template_file(path, self._part_mode_from_label(part_var.get()))
+                    fields_preview = ", ".join(report["fields"][:12]) or "-"
+                    if len(report["fields"]) > 12:
+                        fields_preview += ", ..."
+                    lines = [f"Найдены поля ({len(report['fields'])}): {fields_preview}"]
+                    if report["missing"]:
+                        lines.insert(0, f"Не хватает NamedSubStrings: {', '.join(report['missing'])}")
+                    else:
+                        lines.insert(0, "Шаблон принимает нужные поля для прямой подстановки.")
+
+                    lines.append("")
+                    lines.append("Пакетная печать:")
+                    lines.append(report.get("batch_message") or "-")
+
+                    missing_db = report.get("missing_db") or []
+                    if missing_db:
+                        lines.append("")
+                        lines.append("Не хватает Database Fields: " + ", ".join(missing_db))
+
+                    template_only = report.get("template_only") or []
+                    if template_only:
+                        lines.append(
+                            "Внимание: эти поля заведены как Template Field, а не Database Field: "
+                            + ", ".join(template_only)
+                        )
+
+                    dm_details = report.get("dm_details") or []
+                    if dm_details:
+                        lines.append("")
+                        lines.append("DataMatrix / Честный Знак:")
+                        lines.extend(dm_details)
+
+                    text = "\n".join(lines)
+                    if report["missing"] or not report.get("batch_ok"):
+                        status_label.configure(
+                            text=(
+                                f"Проверка: поля OK, но batch нет"
+                                if (not report["missing"] and not report.get("batch_ok"))
+                                else f"Проверка: не хватает полей ({', '.join(report['missing'])})"
+                            )
+                        )
+                        mb.showwarning("Проверка шаблона", text)
+                    else:
+                        ok_text = f"Проверка OK: batch готов, полей {len(report['fields'])}"
+                        if report.get("dm_present"):
+                            ok_text += "; DM проверьте вручную"
+                        status_label.configure(text=ok_text)
+                        mb.showinfo("Проверка шаблона", text)
+                except Exception as e:
+                    status_label.configure(text=f"Проверка не удалась: {e}")
+                    mb.showerror("Проверка шаблона", f"Не удалось проверить шаблон:\n{e}")
+
+            def on_save():
+                template_id = _current_template_id()
+                if not template_id:
+                    mb.showerror("Шаблон", "ID шаблона обязателен.")
+                    return
+                if (not existing_id) and template_id in (self.label_templates or {}):
+                    mb.showerror("Шаблон", f"Шаблон '{template_id}' уже существует.")
+                    return
+                file_name = self._sanitize_template_filename(file_entry.get() or "", template_id)
+                if not file_name:
+                    file_name = self._sanitize_template_filename(f"{template_id}.btw", template_id)
+                meta = {
+                    "id": template_id,
+                    "name": self._normalize_template_id(name_entry.get()) or template_id,
+                    "file_name": file_name,
+                    "printer": "" if printer_var.get() in ("(по умолчанию)", "(нет принтеров)", "") else printer_var.get(),
+                    "part_mode": self._part_mode_from_label(part_var.get()),
+                }
+                self.label_templates[template_id] = meta
+                self._save_label_templates_to_cfg()
+                self._refresh_format_choices(preserve_value=self.format_combo.get())
+                self._refresh_printers()
+                try:
+                    self._apply_format_ui(self.format_combo.get())
+                except Exception:
+                    pass
+                refresh_tree()
+                try:
+                    self.logger.log(f"[Шаблон] Сохранён шаблон '{template_id}' ({file_name}).")
+                except Exception:
+                    pass
+                dlg.destroy()
+
+            ctk.CTkButton(file_row, text="Импорт…", width=110, command=on_import).grid(row=0, column=1, padx=(8, 0))
+
+            btns = ctk.CTkFrame(dlg)
+            btns.pack(pady=(0, 12))
+            ctk.CTkButton(btns, text="Проверить поля", command=on_validate, width=130).pack(side="left", padx=6)
+            ctk.CTkButton(btns, text="Сохранить", command=on_save, width=120).pack(side="left", padx=6)
+            ctk.CTkButton(btns, text="Отмена", command=dlg.destroy, width=90, fg_color="#444").pack(side="left", padx=6)
+
+        def on_add():
+            edit_template()
+
+        def on_edit():
+            sel = tree.selection()
+            if not sel:
+                return
+            edit_template(sel[0])
+
+        def on_delete():
+            sel = tree.selection()
+            if not sel:
+                return
+            template_id = sel[0]
+            if template_id in ("16x16", "30x20"):
+                mb.showerror("Шаблон", "Базовые шаблоны 16x16 и 30x20 удалять нельзя.")
+                return
+            usage_count = 0
+            path = str(self.cfg.get("product_map_path") or "").strip()
+            try:
+                if path and os.path.isfile(path):
+                    rows = self._load_catalog_rows(path)
+                    usage_count = sum(
+                        1
+                        for row in rows
+                        if self._normalize_template_id(row.get("Шаблон печати", "")) == template_id
+                    )
+            except Exception:
+                usage_count = 0
+            prompt = f"Удалить шаблон '{template_id}'?"
+            if usage_count:
+                prompt += f"\nОн назначен товарам: {usage_count}."
+            if not mb.askyesno("Шаблон", prompt):
+                return
+            self.label_templates.pop(template_id, None)
+            self._save_label_templates_to_cfg()
+            self._refresh_format_choices(preserve_value=self.format_combo.get())
+            self._refresh_printers()
+            refresh_tree()
+
+        btns = ctk.CTkFrame(win)
+        btns.pack(pady=(0, 12))
+        ctk.CTkButton(btns, text="Добавить", command=on_add, width=110).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="Редактировать", command=on_edit, width=130).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="Удалить", command=on_delete, width=110).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="Открыть папку", command=self._open_templates_dir, width=120).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="Закрыть", command=win.destroy, width=90, fg_color="#444").pack(side="left", padx=6)
+
+        tree.bind("<Double-1>", lambda _e: on_edit())
+        refresh_tree()
+
+    def _open_template_printer_settings(self):
+        """Окно настроек принтеров по шаблонам."""
+        win = ctk.CTkToplevel(self)
+        win.title("Принтеры по шаблонам")
+        win.geometry("520x420")
+        win.grab_set()
+        try:
+            win.lift()
+            win.attributes("-topmost", True)
+            win.after(150, lambda: win.attributes("-topmost", False))
+            win.focus_force()
+        except Exception:
+            pass
+
         values = self._get_printer_values()
         extras = []
-        for v in (fmt_map.get("16x16"), fmt_map.get("30x20"), self.cfg.get("sticker_printer")):
+        for _template_id, meta in self._iter_label_templates():
+            v = str(meta.get("printer") or "").strip()
             if v and v not in values and v not in extras:
                 extras.append(v)
+        sticker_printer = str(self.cfg.get("sticker_printer") or "").strip()
+        if sticker_printer and sticker_printer not in values and sticker_printer not in extras:
+            extras.append(sticker_printer)
         values = extras + values
         options = ["(по умолчанию)"] + values if values else ["(по умолчанию)"]
 
-        def _cur_or_default(val):
-            return val if val else "(по умолчанию)"
-
-        body = ctk.CTkFrame(win)
+        body = ctk.CTkScrollableFrame(win)
         body.pack(fill="both", expand=True, padx=12, pady=12)
         body.grid_columnconfigure(1, weight=1)
 
-        var_16 = tk.StringVar(value=_cur_or_default(fmt_map.get("16x16")))
-        var_30 = tk.StringVar(value=_cur_or_default(fmt_map.get("30x20")))
-        var_st = tk.StringVar(value=_cur_or_default(self.cfg.get("sticker_printer")))
+        template_vars = {}
+        row = 0
+        for template_id, meta in self._iter_label_templates():
+            current = str(meta.get("printer") or "").strip() or "(по умолчанию)"
+            template_vars[template_id] = tk.StringVar(value=current)
+            ctk.CTkLabel(
+                body,
+                text=f"{template_id} ({self._template_display_name(template_id)})",
+            ).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=6)
+            ctk.CTkOptionMenu(body, variable=template_vars[template_id], values=options).grid(
+                row=row, column=1, sticky="ew", pady=6
+            )
+            row += 1
 
-        ctk.CTkLabel(body, text="Шаблон 16x16:").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=6)
-        ctk.CTkOptionMenu(body, variable=var_16, values=options).grid(row=0, column=1, sticky="ew", pady=6)
-
-        ctk.CTkLabel(body, text="Шаблон 30x20:").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=6)
-        ctk.CTkOptionMenu(body, variable=var_30, values=options).grid(row=1, column=1, sticky="ew", pady=6)
-
-        ctk.CTkLabel(body, text="Стикер 60x40:").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=6)
-        ctk.CTkOptionMenu(body, variable=var_st, values=options).grid(row=2, column=1, sticky="ew", pady=6)
+        var_st = tk.StringVar(value=sticker_printer or "(по умолчанию)")
+        ctk.CTkLabel(body, text="Стикер 60x40").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=6)
+        ctk.CTkOptionMenu(body, variable=var_st, values=options).grid(row=row, column=1, sticky="ew", pady=6)
 
         btns = ctk.CTkFrame(win)
         btns.pack(pady=(0, 12))
 
-        def _apply_format_setting(fmt_key, var):
-            val = (var.get() or "").strip()
-            if val in ("(по умолчанию)", "(нет принтеров)", ""):
-                if fmt_key in fmt_map:
-                    fmt_map.pop(fmt_key, None)
-            else:
-                fmt_map[fmt_key] = val
-
         def _save():
-            _apply_format_setting("16x16", var_16)
-            _apply_format_setting("30x20", var_30)
-            if fmt_map:
-                self.cfg["format_printers"] = fmt_map
-            else:
-                self.cfg.pop("format_printers", None)
-
-            st_val = (var_st.get() or "").strip()
+            for template_id, var in template_vars.items():
+                val = str(var.get() or "").strip()
+                meta = self.label_templates.get(template_id) or {"id": template_id}
+                meta["printer"] = "" if val in ("(по умолчанию)", "(нет принтеров)", "") else val
+                self.label_templates[template_id] = meta
+            st_val = str(var_st.get() or "").strip()
             if st_val in ("(по умолчанию)", "(нет принтеров)", ""):
                 self.cfg.pop("sticker_printer", None)
             else:
                 self.cfg["sticker_printer"] = st_val
 
-            save_config(self.cfg)
+            self._save_label_templates_to_cfg()
             try:
                 self.logger.log("[Пресет] Принтеры по шаблонам сохранены.")
             except Exception:
@@ -1483,6 +1862,181 @@ class App(ctk.CTk):
             self.logger.err(f"COM не стартовал: {e}")
             mb.showerror("BarTender COM", f"Не удалось запустить COM:\n{e}")
 
+    def _normalize_template_id(self, value: str) -> str:
+        return re.sub(r"\s+", " ", str(value or "").strip())
+
+    def _sanitize_template_filename(self, value: str, template_id: str = "") -> str:
+        raw = os.path.basename(str(value or "").strip())
+        if not raw and template_id:
+            raw = f"{self._normalize_template_id(template_id)}.btw"
+        raw = re.sub(r'[\\/:*?"<>|]+', "_", raw).strip(" .")
+        if raw and not raw.lower().endswith(".btw"):
+            raw += ".btw"
+        return raw
+
+    def _normalize_part_mode(self, value: str) -> str:
+        mode = str(value or "").strip().lower()
+        aliases = {
+            "manual": "manual",
+            "вручную": "manual",
+            "ручной": "manual",
+            "blank": "blank",
+            "empty": "blank",
+            "пусто": "blank",
+            "catalog": "catalog",
+            "auto": "catalog",
+            "из шаблона партии": "catalog",
+        }
+        return aliases.get(mode, "blank")
+
+    def _default_label_templates(self):
+        old_printers = self.cfg.get("format_printers") or {}
+        defaults = {}
+        for template_id, name, file_name, part_mode in (
+            ("16x16", "Банка 16x16", "16x16.btw", "blank"),
+            ("30x20", "Ведро 30x20", "30x20.btw", "manual"),
+            ("58x60", "Ведро 58x60", "58x60.btw", "manual"),
+        ):
+            defaults[template_id] = {
+                "id": template_id,
+                "name": name,
+                "file_name": file_name,
+                "printer": str(old_printers.get(template_id) or "").strip(),
+                "part_mode": part_mode,
+            }
+        return defaults
+
+    def _load_label_templates_from_cfg(self):
+        templates = self._default_label_templates()
+        raw = self.cfg.get("label_templates") or {}
+        items = []
+        if isinstance(raw, dict):
+            items = list(raw.items())
+        elif isinstance(raw, list):
+            items = [(item.get("id"), item) for item in raw if isinstance(item, dict)]
+
+        for key, meta in items:
+            if not isinstance(meta, dict):
+                continue
+            template_id = self._normalize_template_id(meta.get("id") or key)
+            if not template_id:
+                continue
+            current = dict(templates.get(template_id) or {})
+            current["id"] = template_id
+            current["name"] = self._normalize_template_id(meta.get("name") or current.get("name") or template_id) or template_id
+            current["file_name"] = self._sanitize_template_filename(
+                meta.get("file_name") or meta.get("filename") or current.get("file_name") or "",
+                template_id,
+            )
+            current["printer"] = str(meta.get("printer") or current.get("printer") or "").strip()
+            current["part_mode"] = self._normalize_part_mode(meta.get("part_mode") or current.get("part_mode"))
+            templates[template_id] = current
+        return templates
+
+    def _save_label_templates_to_cfg(self):
+        payload = {}
+        format_printers = {}
+        for template_id, meta in self._iter_label_templates():
+            payload[template_id] = {
+                "id": template_id,
+                "name": self._normalize_template_id(meta.get("name") or template_id) or template_id,
+                "file_name": self._sanitize_template_filename(meta.get("file_name") or "", template_id),
+                "printer": str(meta.get("printer") or "").strip(),
+                "part_mode": self._normalize_part_mode(meta.get("part_mode")),
+            }
+            if payload[template_id]["printer"]:
+                format_printers[template_id] = payload[template_id]["printer"]
+        self.label_templates = payload
+        self.cfg["label_templates"] = payload
+        if format_printers:
+            self.cfg["format_printers"] = format_printers
+        else:
+            self.cfg.pop("format_printers", None)
+        save_config(self.cfg)
+
+    def _iter_label_templates(self):
+        templates = self.label_templates if isinstance(getattr(self, "label_templates", None), dict) else {}
+        return [(k, dict(v or {})) for k, v in templates.items()]
+
+    def _manual_template_choices(self):
+        return [template_id for template_id, _meta in self._iter_label_templates()]
+
+    def _refresh_format_choices(self, preserve_value=None):
+        combo = getattr(self, "format_combo", None)
+        if not combo:
+            return
+        values = ["Auto"] + self._manual_template_choices()
+        current = self._normalize_template_id(preserve_value if preserve_value is not None else combo.get())
+        combo.configure(values=values)
+        combo.set(current if current in values else "Auto")
+
+    def _get_label_template(self, template_id: str):
+        key = self._normalize_template_id(template_id)
+        if not key:
+            return None
+        meta = (self.label_templates or {}).get(key)
+        return dict(meta or {}) if isinstance(meta, dict) else None
+
+    def _template_display_name(self, template_id: str) -> str:
+        meta = self._get_label_template(template_id) or {}
+        return str(meta.get("name") or template_id or "").strip()
+
+    def _resolve_template_btw_path(self, template_id: str) -> str:
+        template_id = self._normalize_template_id(template_id)
+        if not template_id:
+            return ""
+        meta = self._get_label_template(template_id) or {}
+        candidates = []
+
+        file_name = self._sanitize_template_filename(meta.get("file_name") or "", template_id)
+        if file_name:
+            candidates.append(default_template_path(file_name))
+            candidates.append(os.path.join(TEMPLATES_DIR, file_name))
+
+        legacy_formats = self.cfg.get("formats") or {}
+        legacy_path = str(legacy_formats.get(template_id) or "").strip()
+        if legacy_path:
+            candidates.append(legacy_path)
+
+        if template_id == "16x16":
+            candidates.append(str(self.cfg.get("btw_16") or "").strip())
+        elif template_id == "30x20":
+            candidates.append(str(self.cfg.get("btw_30") or "").strip())
+
+        candidates.append(default_template_path(f"{template_id}.btw"))
+
+        seen = set()
+        for candidate in candidates:
+            path = str(candidate or "").strip()
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            if os.path.isfile(path):
+                return path
+        return ""
+
+    def _copy_template_into_workspace(self, src_path: str, template_id: str = ""):
+        src_path = str(src_path or "").strip()
+        if not src_path or not os.path.isfile(src_path):
+            raise FileNotFoundError(src_path or "Template file is missing")
+        meta = self._get_label_template(template_id) or {}
+        file_name = self._sanitize_template_filename(
+            meta.get("file_name") or os.path.basename(src_path),
+            template_id,
+        )
+        os.makedirs(TEMPLATES_DIR, exist_ok=True)
+        target = os.path.join(TEMPLATES_DIR, file_name)
+        import shutil as _shutil
+        _shutil.copy2(src_path, target)
+        return target, file_name
+
+    def _template_part_mode(self, template_id: str) -> str:
+        meta = self._get_label_template(template_id) or {}
+        return self._normalize_part_mode(meta.get("part_mode"))
+
+    def _template_requires_manual_part(self, template_id: str) -> bool:
+        return self._template_part_mode(template_id) == "manual"
+
     def _get_printer_values(self):
         try:
             values = list(self.prn_combo.cget("values") or [])
@@ -1518,18 +2072,22 @@ class App(ctk.CTk):
         return None
 
     def _get_format_printer_preference(self, fmt: str):
+        meta = self._get_label_template(fmt) or {}
+        printer = str(meta.get("printer") or "").strip()
+        if printer:
+            return printer
         try:
             fmt_map = self.cfg.get("format_printers") or {}
         except Exception:
             fmt_map = {}
-        return (fmt_map.get(fmt) or "").strip()
+        return str(fmt_map.get(fmt) or "").strip()
 
     def _refresh_printers(self):
         items = enum_printers() or ["(нет принтеров)"]
         self.prn_combo.configure(values=items)
         cur_fmt = (self.format_combo.get() or "").strip() if hasattr(self, "format_combo") else ""
         target = None
-        if cur_fmt in ("16x16", "30x20"):
+        if cur_fmt and cur_fmt != "Auto":
             target = self._match_printer_value(self._get_format_printer_preference(cur_fmt))
         if not target:
             target = self._pick_printer_by_keywords(("TSC310", "TSC 310", "TSC TE310", "TE310"))
@@ -1538,7 +2096,7 @@ class App(ctk.CTk):
     def _set_default_printer_for_format(self, fmt: str):
         """Выбирает принтер по умолчанию для формата, если он есть в списке."""
         fmt = (fmt or "").strip()
-        if fmt not in ("16x16", "30x20"):
+        if not fmt or fmt == "Auto":
             return
         pref = self._get_format_printer_preference(fmt)
         target = self._match_printer_value(pref)
@@ -1568,11 +2126,13 @@ class App(ctk.CTk):
         """Переключает доступность поля партии и дефолтный принтер под выбранный формат."""
         fmt = (fmt or "").strip()
         try:
-            if fmt == "16x16":
+            if not fmt or fmt == "Auto":
+                self.part_entry.configure(state="normal")
+            elif self._template_requires_manual_part(fmt):
+                self.part_entry.configure(state="normal")
+            else:
                 self.part_entry.configure(state="disabled")
                 self.part_entry.delete(0, "end")
-            else:
-                self.part_entry.configure(state="normal")
         except Exception:
             pass
         self._set_default_printer_for_format(fmt)
@@ -1581,8 +2141,8 @@ class App(ctk.CTk):
         self._apply_format_ui(value)
 
     def _load_presets(self):
-        p16 = (self.cfg.get("formats", {}) or {}).get("16x16", "")
-        p30 = (self.cfg.get("formats", {}) or {}).get("30x20", "")
+        p16 = self._resolve_template_btw_path("16x16")
+        p30 = self._resolve_template_btw_path("30x20")
         if p16 and os.path.isfile(p16):
             self.btw16_entry.insert(0, p16)
         if p30 and os.path.isfile(p30):
@@ -1842,6 +2402,7 @@ class App(ctk.CTk):
             "GTIN",
             "Наименование",
             "ShortName",
+            "Шаблон печати",
             "Бренд",
             "Вес",
             "Срок годности",
@@ -1934,15 +2495,54 @@ class App(ctk.CTk):
         def edit_item(existing=None, idx=None):
             dlg = ctk.CTkToplevel(win)
             dlg.title("Добавить товар" if existing is None else "Редактировать товар")
-            dlg.geometry("540x600")
+            screen_h = 760
+            try:
+                screen_h = max(520, int(dlg.winfo_screenheight() or 760) - 120)
+            except Exception:
+                pass
+            dlg.geometry(f"760x{min(820, screen_h)}")
+            try:
+                dlg.minsize(680, 520)
+            except Exception:
+                pass
+
+            outer = ctk.CTkFrame(dlg)
+            outer.pack(fill="both", expand=True, padx=10, pady=10)
+            form = ctk.CTkScrollableFrame(outer)
+            form.pack(fill="both", expand=True)
+
             entries = {}
+            template_label_to_id = {"(не выбран)": ""}
+            template_options = ["(не выбран)"]
+            for template_id, meta in self._iter_label_templates():
+                name = self._template_display_name(template_id)
+                label = template_id if not name or name == template_id else f"{template_id} | {name}"
+                template_label_to_id[label] = template_id
+                template_options.append(label)
+            existing_template_id = self._normalize_template_id((existing or {}).get("Шаблон печати", ""))
+            if existing_template_id and existing_template_id not in (self.label_templates or {}):
+                missing_label = f"{existing_template_id} | не найден"
+                template_label_to_id[missing_label] = existing_template_id
+                template_options.append(missing_label)
+
+            form.grid_columnconfigure(1, weight=1)
             for i, h in enumerate(CATALOG_HEADERS):
-                ctk.CTkLabel(dlg, text=h).grid(row=i, column=0, sticky="w", padx=8, pady=4)
-                ent = ctk.CTkEntry(dlg, width=380)
-                ent.grid(row=i, column=1, sticky="ew", padx=8, pady=4)
-                ent.insert(0, (existing or {}).get(h, ""))
+                ctk.CTkLabel(form, text=h, width=180, anchor="w").grid(row=i, column=0, sticky="w", padx=8, pady=4)
+                if h == "Шаблон печати":
+                    ent = ctk.CTkComboBox(form, width=420, values=template_options, state="readonly")
+                    ent.grid(row=i, column=1, sticky="ew", padx=8, pady=4)
+                    selected_label = "(не выбран)"
+                    if existing_template_id:
+                        for label, template_id in template_label_to_id.items():
+                            if template_id == existing_template_id:
+                                selected_label = label
+                                break
+                    ent.set(selected_label)
+                else:
+                    ent = ctk.CTkEntry(form, width=420)
+                    ent.grid(row=i, column=1, sticky="ew", padx=8, pady=4)
+                    ent.insert(0, (existing or {}).get(h, ""))
                 entries[h] = ent
-            dlg.grid_columnconfigure(1, weight=1)
 
             def on_save():
                 gtin = entries["GTIN"].get().strip()
@@ -1952,7 +2552,17 @@ class App(ctk.CTk):
                 if not gtin.isdigit():
                     mb.showerror("Каталог товаров", "GTIN должен содержать только цифры.")
                     return
+                selected_template_label = entries["Шаблон печати"].get()
+                template_id = self._normalize_template_id(template_label_to_id.get(selected_template_label, ""))
+                if template_id and template_id not in (self.label_templates or {}):
+                    mb.showerror(
+                        "Каталог товаров",
+                        f"Шаблон '{template_id}' не найден в редакторе шаблонов.\n"
+                        "Выберите существующий шаблон из списка или очистите поле.",
+                    )
+                    return
                 item = {h: entries[h].get().strip() for h in CATALOG_HEADERS}
+                item["Шаблон печати"] = template_id
                 if existing is None:
                     rows.append(item)
                 else:
@@ -1972,7 +2582,7 @@ class App(ctk.CTk):
                     mb.showerror("Каталог товаров", "Не удалось сохранить каталог. Проверьте, не открыт ли файл в Excel.")
 
             btn_frame = ctk.CTkFrame(dlg)
-            btn_frame.grid(row=len(CATALOG_HEADERS), column=0, columnspan=2, pady=10)
+            btn_frame.pack(fill="x", padx=10, pady=(0, 10))
             ctk.CTkButton(btn_frame, text="Сохранить", command=on_save).pack(side="left", padx=6)
             ctk.CTkButton(btn_frame, text="Отмена", command=dlg.destroy).pack(side="left", padx=6)
 
@@ -3460,15 +4070,21 @@ class App(ctk.CTk):
         p = fd.askopenfilename(title=f"Выбери BTW для {fmt}", filetypes=[("BarTender Template", "*.btw")])
         if not p:
             return
-        if fmt == "16x16":
-            self.btw16_entry.delete(0, "end")
-            self.btw16_entry.insert(0, p)
-        else:
-            self.btw30_entry.delete(0, "end")
-            self.btw30_entry.insert(0, p)
-        self.cfg.setdefault("formats", {})[fmt] = p
-        save_config(self.cfg)
-        self.logger.log(f"[Пресет] Сохранён путь для {fmt}: {p}")
+        try:
+            target, file_name = self._copy_template_into_workspace(p, fmt)
+            meta = self._get_label_template(fmt) or {"id": fmt, "name": fmt, "part_mode": "blank", "printer": ""}
+            meta["file_name"] = file_name
+            self.label_templates[fmt] = meta
+            self._save_label_templates_to_cfg()
+            if fmt == "16x16":
+                self.btw16_entry.delete(0, "end")
+                self.btw16_entry.insert(0, target)
+            elif fmt == "30x20":
+                self.btw30_entry.delete(0, "end")
+                self.btw30_entry.insert(0, target)
+            self.logger.log(f"[Шаблон] Сохранён BTW для {fmt}: {target}")
+        except Exception as e:
+            mb.showerror("BTW", f"Не удалось сохранить шаблон:\n{e}")
 
     def _choose_csv(self):
         p = fd.askopenfilename(title="Выбери kontur.csv/tsv",
@@ -3519,6 +4135,86 @@ class App(ctk.CTk):
                 out[key] = v
         return out
 
+    def _db_probe_async(self, init_schema: bool = True, quiet: bool = True, force: bool = False):
+        if not (callable(_db_enabled) and callable(_db_init)):
+            return
+        try:
+            if not _db_enabled():
+                self._db_available = False
+                self._db_last_error = "DB PoC отключен (AUTOPRINT_DB_ENABLED=0)"
+                return
+        except Exception:
+            return
+        now = time.time()
+        if not force:
+            if getattr(self, "_db_probe_in_progress", False):
+                return
+            if now < float(getattr(self, "_db_next_probe_after", 0.0) or 0.0):
+                return
+        self._db_probe_in_progress = True
+        self._db_next_probe_after = now + 2.0
+
+        def _worker():
+            ok = False
+            err_text = ""
+            try:
+                if init_schema:
+                    _db_init()
+                elif callable(_db_list_recent_imports):
+                    _db_list_recent_imports(limit=1)
+                else:
+                    _db_init()
+                ok = True
+            except Exception as e:
+                err_text = str(e or "").strip() or "нет связи с БД"
+
+            def _done():
+                self._db_probe_in_progress = False
+                if ok:
+                    self._db_available = True
+                    self._db_last_error = ""
+                    if init_schema:
+                        self._db_schema_ready = True
+                    if not quiet:
+                        try:
+                            self.logger.log("[DB] Подключение к БД: OK")
+                        except Exception:
+                            pass
+                else:
+                    self._db_available = False
+                    if init_schema:
+                        self._db_schema_ready = False
+                    self._db_last_error = err_text
+                    if not quiet:
+                        try:
+                            self.logger.err(f"[DB] Нет связи с БД: {err_text}")
+                        except Exception:
+                            pass
+
+            try:
+                self.after(0, _done)
+            except Exception:
+                pass
+
+        try:
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception:
+            self._db_probe_in_progress = False
+
+    def _db_unavailable_message(self) -> str:
+        err = str(getattr(self, "_db_last_error", "") or "").strip()
+        if err:
+            return f"Нет связи с БД: {err}"
+        return "Нет связи с БД. Проверьте Docker/Postgres и AUTOPRINT_DB_URL."
+
+    def _db_require_schema_ready(self):
+        if getattr(self, "_db_schema_ready", False):
+            return
+        self._db_probe_async(init_schema=True, quiet=True, force=False)
+        if getattr(self, "_db_available", None) is False:
+            raise RuntimeError(self._db_unavailable_message())
+        raise RuntimeError("Инициализация БД выполняется. Повторите через 1-2 секунды.")
+
     def _try_store_csv_import_db(self, rows, source_path):
         """PoC: best-effort сохранение импортированного CSV в Postgres без влияния на печать."""
         try:
@@ -3527,8 +4223,13 @@ class App(ctk.CTk):
             if not _db_enabled():
                 return
             if not getattr(self, "_db_schema_ready", False):
-                _db_init()
-                self._db_schema_ready = True
+                self._db_probe_async(init_schema=True, quiet=True, force=False)
+                if getattr(self, "_db_available", None) is False:
+                    try:
+                        self.logger.err(f"[DB] Импорт пропущен: {self._db_unavailable_message()}")
+                    except Exception:
+                        pass
+                return
             source_name = os.path.basename(str(source_path or "")) or "unknown.csv"
             total_rows = len(rows or [])
             file_size, file_hash = self._db_get_source_file_meta(source_path)
@@ -3675,11 +4376,8 @@ class App(ctk.CTk):
                 return False
         except Exception:
             return False
-        try:
-            if not getattr(self, "_db_schema_ready", False):
-                _db_init()
-                self._db_schema_ready = True
-        except Exception:
+        if not getattr(self, "_db_schema_ready", False):
+            self._db_probe_async(init_schema=True, quiet=True, force=False)
             return False
         return True
 
@@ -3750,9 +4448,7 @@ class App(ctk.CTk):
             raise RuntimeError("DB PoC недоступен: модуль db.py не загружен или не хватает функций.")
         if require_enabled and not _db_enabled():
             raise RuntimeError("DB PoC отключен. Установите AUTOPRINT_DB_ENABLED=1 в .env")
-        if not getattr(self, "_db_schema_ready", False):
-            _db_init()
-            self._db_schema_ready = True
+        self._db_require_schema_ready()
 
     def _db_browser_set_status(self, text: str):
         try:
@@ -4474,7 +5170,7 @@ class App(ctk.CTk):
         jobs_tree.heading("id", text="ID")
         jobs_tree.heading("created", text="Создан")
         jobs_tree.heading("status", text="Статус")
-        jobs_tree.heading("fmt", text="Формат")
+        jobs_tree.heading("fmt", text="Шаблон")
         jobs_tree.heading("rows", text="Строк")
         jobs_tree.heading("cal", text="Кал.")
         jobs_tree.heading("printer", text="Принтер")
@@ -4823,7 +5519,7 @@ class App(ctk.CTk):
         jobs_tree.heading("id", text="ID")
         jobs_tree.heading("created", text="Создан")
         jobs_tree.heading("status", text="Статус")
-        jobs_tree.heading("fmt", text="Формат")
+        jobs_tree.heading("fmt", text="Шаблон")
         jobs_tree.heading("rows", text="Строк")
         jobs_tree.heading("cal", text="Кал.")
         jobs_tree.heading("printer", text="Принтер")
@@ -4951,6 +5647,320 @@ class App(ctk.CTk):
         except Exception:
             # не валим печать, если не смогли проверить
             return True
+
+    def _template_db_connection_count(self, fmt) -> int:
+        total = 0
+        for attr in ("DatabaseConnections", "Databases"):
+            try:
+                coll = getattr(fmt, attr, None)
+            except Exception:
+                coll = None
+            if not coll:
+                continue
+            try:
+                total += int(coll.Count or 0)
+            except Exception:
+                pass
+        return total
+
+    def _template_used_names(self, fmt, field_type: int):
+        try:
+            text = fmt.UsedNames(field_type, "\n")
+        except Exception:
+            return []
+        result = []
+        for raw_line in str(text or "").splitlines():
+            line = raw_line.strip()
+            if line:
+                result.append(line)
+        return result
+
+    def _normalize_used_field_name(self, raw_name: str) -> str:
+        text = str(raw_name or "").strip()
+        if not text:
+            return ""
+        parts = [part for part in text.split(".") if part]
+        return parts[-1] if parts else text
+
+    def _template_batch_report(self, fmt, part_mode: str = "blank", recordset_name: str = "tmp_batch"):
+        available_runtime_fields = set(getattr(self, "REQ_COLS", DEFAULT_REQ_COLS) or DEFAULT_REQ_COLS)
+        available_runtime_fields.update({"ShirtName"})
+        named_fields = []
+        try:
+            named_fields = sorted({s.Name for s in fmt.NamedSubStrings})
+        except Exception:
+            named_fields = []
+
+        db_used_names = self._template_used_names(fmt, 1)
+        template_used_names = self._template_used_names(fmt, 2)
+        tmp_prefix = ((recordset_name or "tmp_batch").strip() or "tmp_batch").lower() + "."
+
+        db_fields = sorted(
+            {
+                self._normalize_used_field_name(name)
+                for name in db_used_names
+                if self._normalize_used_field_name(name)
+            }
+        )
+        template_fields = sorted(
+            {
+                self._normalize_used_field_name(name)
+                for name in template_used_names
+                if self._normalize_used_field_name(name)
+            }
+        )
+
+        db_count = self._template_db_connection_count(fmt)
+        try:
+            use_database = bool(fmt.UseDatabase)
+        except Exception:
+            use_database = False
+
+        has_tmp_batch_refs = any(name.lower().startswith(tmp_prefix) for name in (db_used_names + template_used_names))
+        raw_used_fields = sorted(
+            {
+                name
+                for name in (db_fields + template_fields)
+                if name
+            }
+        )
+        if not raw_used_fields:
+            raw_used_fields = sorted(
+                {
+                    name
+                    for name in named_fields
+                    if name
+                }
+            )
+        used_fields = [name for name in raw_used_fields if name in available_runtime_fields]
+        missing_named = [name for name in used_fields if name not in named_fields]
+        missing_db = [name for name in used_fields if name not in db_fields]
+        template_only = [name for name in missing_db if name in template_fields]
+        missing_runtime = [name for name in raw_used_fields if name not in available_runtime_fields]
+        has_db_runtime = bool(db_count > 0 or use_database)
+        can_batch = bool(has_db_runtime and has_tmp_batch_refs and not missing_db and not missing_runtime and used_fields)
+
+        reasons = []
+        if not has_db_runtime:
+            if has_tmp_batch_refs:
+                reasons.append("tmp_batch упоминается в шаблоне, но рабочая база данных BarTender не включена")
+            else:
+                reasons.append("шаблон не связан с tmp_batch")
+        if missing_db:
+            reasons.append("в Database Fields отсутствуют поля: " + ", ".join(missing_db))
+        if template_only:
+            reasons.append("эти поля заданы как Template Field, а не как Database Field: " + ", ".join(template_only))
+        if missing_runtime:
+            reasons.append("в программе не формируются поля: " + ", ".join(missing_runtime))
+
+        if can_batch:
+            batch_message = "Шаблон готов к пакетной печати через tmp_batch."
+        else:
+            batch_message = "; ".join(reasons) if reasons else "Шаблон будет печататься по одной этикетке."
+
+        return {
+            "required": used_fields,
+            "used_fields": used_fields,
+            "named_fields": named_fields,
+            "missing_named": missing_named,
+            "db_fields": db_fields,
+            "missing_db": missing_db,
+            "template_fields": template_fields,
+            "template_only": template_only,
+            "missing_runtime": missing_runtime,
+            "db_count": db_count,
+            "use_database": use_database,
+            "has_tmp_batch_refs": has_tmp_batch_refs,
+            "can_batch": can_batch,
+            "batch_message": batch_message,
+        }
+
+    def _template_dm_validation_report(self, fmt, batch_report=None):
+        batch_report = batch_report or {}
+        used_names = set(batch_report.get("used_fields") or [])
+        used_names.update(batch_report.get("named_fields") or [])
+        used_names.update(batch_report.get("db_fields") or [])
+        used_names.update(batch_report.get("template_fields") or [])
+
+        present = "DM" in used_names
+        if not present:
+            return {
+                "present": False,
+                "message": "",
+                "details": [],
+                "com_values": {},
+            }
+
+        details = [
+            'Для ЧЗ проверьте в свойствах DataMatrix -> "Метод печати": '
+            '"Штрих-коды и читаемый текст контролируются программой".'
+        ]
+        com_values = {}
+        try:
+            pm = getattr(getattr(fmt, "PrintSetup", None), "PrintMethod", None)
+        except Exception:
+            pm = None
+
+        if pm is not None:
+            for attr in ("Unsupported2DBarCodes", "Unsupported1DBarCodes", "TrueTypeText"):
+                try:
+                    com_values[attr] = int(getattr(pm, attr))
+                except Exception:
+                    pass
+
+        if com_values:
+            details.append(
+                "COM-диагностика формата: "
+                + ", ".join(f"{key}={value}" for key, value in com_values.items())
+            )
+
+        details.append(
+            "BarTender COM не отдаёт точное состояние этого параметра у самого объекта DM, "
+            "поэтому эта часть проверки остаётся ручной."
+        )
+
+        return {
+            "present": True,
+            "message": details[0],
+            "details": details,
+            "com_values": com_values,
+        }
+
+    def _print_rows_direct(self, fmt, rows_enriched, prn_name: str, batch_label: str = "") -> int:
+        rows_seq = list(rows_enriched or [])
+        if not rows_seq:
+            return 0
+        try:
+            self.bt.set_common_print_flags(fmt)
+        except Exception:
+            pass
+        try:
+            fmt.PrintSetup.Printer = prn_name
+        except Exception:
+            pass
+        try:
+            fmt.PrintSetup.PrinterName = prn_name
+        except Exception:
+            pass
+        prompt = bool(self._dialog_flag())
+        if prompt and len(rows_seq) > 1:
+            try:
+                self.logger.log(
+                    f"{batch_label}Шаблон печатается без tmp_batch.csv, поэтому диалог печати отключён для пакетной печати."
+                )
+            except Exception:
+                pass
+            prompt = False
+
+        printed = 0
+        for idx, enr in enumerate(rows_seq, start=1):
+            self._pause_wait()
+            if self._should_stop():
+                raise Exception("Печать остановлена пользователем.")
+            try:
+                fmt.PrintSetup.IdenticalCopiesOfLabel = 1
+            except Exception:
+                pass
+            applied = self.bt.apply_fields(fmt, enr)
+            if not applied:
+                try:
+                    self.logger.err(
+                        f"{batch_label}Строка {idx}: не удалось подставить поля в шаблон."
+                    )
+                except Exception:
+                    pass
+            ok = self._bt_print(fmt, 1, prompt)
+            if not ok:
+                raise Exception(f"Строка {idx}: BarTender не подтвердил печать.")
+            prompt = False
+            printed += 1
+        return printed
+
+    def _collect_bt_messages(self, messages_obj):
+        lines = []
+        coll = None
+        try:
+            coll = getattr(messages_obj, "value", None)
+        except Exception:
+            coll = None
+        if coll is None:
+            coll = messages_obj
+        try:
+            count = int(coll.Count or 0)
+        except Exception:
+            count = 0
+        for idx in range(1, count + 1):
+            try:
+                msg = coll.Item(idx)
+            except Exception:
+                try:
+                    msg = coll.GetMessage(idx)
+                except Exception:
+                    continue
+            try:
+                text = str(getattr(msg, "Message", "") or "").strip()
+            except Exception:
+                text = ""
+            if not text:
+                continue
+            try:
+                severity = str(getattr(msg, "Severity", "") or "").strip()
+            except Exception:
+                severity = ""
+            try:
+                type_text = str(getattr(msg, "TypeText", "") or "").strip()
+            except Exception:
+                type_text = ""
+            prefix = " / ".join([part for part in (type_text, severity) if part])
+            lines.append(f"{prefix}: {text}" if prefix else text)
+        return lines
+
+    def _bt_batch_print(self, fmt, prn_name: str, print_job_name: str, copies: int, show_dialog: bool):
+        try:
+            fmt.PrintSetup.Printer = prn_name
+        except Exception:
+            pass
+        try:
+            fmt.PrintSetup.PrinterName = prn_name
+        except Exception:
+            pass
+        try:
+            fmt.PrintSetup.IdenticalCopiesOfLabel = int(copies)
+        except Exception:
+            pass
+
+        if show_dialog:
+            try:
+                self.logger.log("BT Batch Print: включён диалог печати, использую совместимый PrintOut.")
+            except Exception:
+                pass
+            return self._bt_print(fmt, copies, show_dialog)
+
+        try:
+            import pythoncom
+            from win32com.client import VARIANT
+
+            messages = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_DISPATCH, None)
+            timeout_ms = 30000
+            self.logger.log(
+                f"BT Batch Print: Print(Job='{print_job_name}', WaitForSpool=True, TimeoutMs={timeout_ms})"
+            )
+            result = fmt.Print(print_job_name or "", True, timeout_ms, messages)
+            message_lines = self._collect_bt_messages(messages)
+            for line in message_lines:
+                try:
+                    self.logger.log(f"BT Batch Message: {line}")
+                except Exception:
+                    pass
+            if int(result) != 0:
+                raise Exception(f"BarTender вернул код результата {result}.")
+            return True
+        except Exception as e:
+            try:
+                self.logger.err(f"BT Batch Print: Print(...) не сработал, fallback на PrintOut: {e}")
+            except Exception:
+                pass
+            return self._bt_print(fmt, copies, False)
 
     def _rebind_template_db(self, fmt, csv_path: str):
         """
@@ -5150,7 +6160,7 @@ class App(ctk.CTk):
                     f"{ts}",
                     f"Пользователь: {user}",
                     f"Принтер: {printer}",
-                    f"Формат: {fmt}",
+                    f"Шаблон: {fmt}",
                     f"Строк отправлено: {sent if sent is not None else '-'}",
                 ]
                 if calib:
@@ -6030,23 +7040,24 @@ class App(ctk.CTk):
 
         """
 
-        BTW ищем в подпапке templates рядом с .exe/.py. Если нет — спрашиваем путь и копируем выбранный файл
-        туда под именем по умолчанию (16x16.btw/30x20.btw), чтобы exe всё "запомнил".
+        BTW ищем по описанию шаблона в templates рядом с .exe/.py.
+        Если файла нет — спрашиваем путь и копируем выбранный BTW в templates.
 
         """
 
-        default_name = "16x16.btw" if fmt_name == "16x16" else "30x20.btw"
+        fmt_name = self._normalize_template_id(fmt_name)
+        resolved = self._resolve_template_btw_path(fmt_name)
+        if resolved:
+            return resolved
 
-        default_path = default_template_path(default_name)
-        legacy_path = os.path.join(BASE_DIR, default_name)
-
-        for candidate in (default_path, legacy_path):
-            if os.path.isfile(candidate):
-                return candidate
-
-        # если ранее в полях что-то было - используем
+        # если ранее в скрытых полях что-то было - используем для старых 16x16/30x20
         try:
-            path = (self.btw16_entry.get().strip() if fmt_name == "16x16" else self.btw30_entry.get().strip())
+            if fmt_name == "16x16":
+                path = self.btw16_entry.get().strip()
+            elif fmt_name == "30x20":
+                path = self.btw30_entry.get().strip()
+            else:
+                path = ""
         except Exception:
             path = ""
         if path and os.path.isfile(path):
@@ -6054,34 +7065,37 @@ class App(ctk.CTk):
 
         try:
             if getattr(self, "logger", None):
-                self.logger.err(f"BTW не найден: {default_path}. Укажи путь к шаблону {fmt_name}.")
+                self.logger.err(f"BTW для шаблона '{fmt_name}' не найден. Укажи путь к файлу BTW.")
         except Exception:
             pass
 
         p = fd.askopenfilename(title=f"Укажи BTW для {fmt_name}", filetypes=[("BarTender Template", "*.btw")])
         if p and os.path.isfile(p):
-            # копируем в templates под стандартным именем
             try:
-                os.makedirs(TEMPLATES_DIR, exist_ok=True)
-            except Exception:
-                pass
-            try:
-                target = os.path.join(TEMPLATES_DIR, default_name)
-                import shutil as _shutil
-                _shutil.copy2(p, target)
-                # запишем в поля на всякий случай
+                target, file_name = self._copy_template_into_workspace(p, fmt_name)
+                meta = self._get_label_template(fmt_name) or {
+                    "id": fmt_name,
+                    "name": fmt_name,
+                    "part_mode": "blank",
+                    "printer": "",
+                }
+                meta["file_name"] = file_name
+                self.label_templates[fmt_name] = meta
+                self._save_label_templates_to_cfg()
                 try:
                     if fmt_name == "16x16":
-                        self.btw16_entry.delete(0, "end"); self.btw16_entry.insert(0, target)
-                    else:
-                        self.btw30_entry.delete(0, "end"); self.btw30_entry.insert(0, target)
+                        self.btw16_entry.delete(0, "end")
+                        self.btw16_entry.insert(0, target)
+                    elif fmt_name == "30x20":
+                        self.btw30_entry.delete(0, "end")
+                        self.btw30_entry.insert(0, target)
                 except Exception:
                     pass
                 return target
             except Exception:
                 return p
 
-        mb.showerror("BTW", f"Шаблон для формата {fmt_name} не найден.")
+        mb.showerror("BTW", f"Шаблон BTW для '{fmt_name}' не найден.")
         return None
 
     
@@ -6098,20 +7112,21 @@ class App(ctk.CTk):
             mode_choice=self.format_combo.get()
         )
 
-        # партия задаётся вручную только для формата 30x20
+        # режим партии определяется шаблоном печати
         manual = (self.part_entry.get() or "").strip()
-        if (enr.get("_FORMAT") == "30x20"):
+        template_id = self._normalize_template_id(enr.get("_FORMAT"))
+        part_mode = self._template_part_mode(template_id)
+        if part_mode == "manual":
             if not manual and not allow_empty_part:
-                # подсветим и сообщим
                 self._mark_part_entry(True)
                 if not getattr(self, "_part_missing_logged", False):
                     self._part_missing_logged = True
-                    self.logger.err("Не заполнен номер партии для формата 30x20.")
+                    self.logger.err(f"Не заполнен номер партии для шаблона {template_id}.")
                 return None
             enr["PART_NUM"] = manual
-        else:
+        elif part_mode == "blank":
             enr["PART_NUM"] = ""
-        if manual or allow_empty_part or enr.get("_FORMAT") != "30x20":
+        if manual or allow_empty_part or part_mode != "manual":
             self._mark_part_entry(False)
 
         gtin_key = only_digits(base_row.get("GTIN", ""))
@@ -6119,7 +7134,7 @@ class App(ctk.CTk):
         shelf = info.get("SHELF") or {}
         shelf_desc = shelf.get("raw") or "-"
         self.logger.log(
-            f"GTIN lookup: FORMAT='{info.get('FORMAT','-') or '-'}', "
+            f"GTIN lookup: TEMPLATE='{info.get('TEMPLATE_ID') or info.get('FORMAT','-') or '-'}', "
             f"SHELF='{shelf_desc}', SHELF_PARSED={enr.get('_SHELF_LOG','')}, "
             f"PART_TPL={'-' if not info.get('PART_TEMPLATE') else info.get('PART_TEMPLATE')}, "
             f"ShortNameExcel='{(info.get('SHORTNAME') or '').strip()}', GTIN={gtin_key}"
@@ -6492,8 +7507,8 @@ class App(ctk.CTk):
         if not enr:
             return
     
-        src = "manual" if self.format_combo.get() in ("16x16", "30x20") else "auto"
-        self.logger.log(f"Выбран формат: {enr['_FORMAT']} (источник: {src}, комбо: {self.format_combo.get()}, GTIN={base.get('GTIN','')})")
+        src = "manual" if (self.format_combo.get() or "").strip() != "Auto" else "auto"
+        self.logger.log(f"Выбран шаблон: {enr['_FORMAT']} (источник: {src}, комбо: {self.format_combo.get()}, GTIN={base.get('GTIN','')})")
         fmt_name = enr["_FORMAT"]
         # если формат вычислен (Auto), синхронизируем UI/принтер под реальный формат
         try:
@@ -6522,7 +7537,7 @@ class App(ctk.CTk):
     
             if self.bt.export_preview(fmt, out):
                 self._show_preview_path(out)
-                self.logger.log(f"Превью сохранено: {out} (формат {fmt_name})")
+                self.logger.log(f"Превью сохранено: {out} (шаблон {fmt_name})")
             else:
                 self.logger.err("Не удалось сформировать превью.")
         except Exception as e:
@@ -6895,10 +7910,10 @@ class App(ctk.CTk):
         try:
             self._part_missing_logged = False
             cur_fmt = (self.format_combo.get() or "").strip()
-            if cur_fmt == "30x20" and not (self.part_entry.get() or "").strip():
+            if cur_fmt and cur_fmt != "Auto" and self._template_requires_manual_part(cur_fmt) and not (self.part_entry.get() or "").strip():
                 self._mark_part_entry(True)
-                self.logger.err("Не заполнен номер партии для формата 30x20.")
-                mb.showerror("Партия", "Для формата 30x20 заполни номер партии.")
+                self.logger.err(f"Не заполнен номер партии для шаблона {cur_fmt}.")
+                mb.showerror("Партия", f"Для шаблона {cur_fmt} заполни номер партии.")
                 return
         except Exception:
             pass
@@ -7053,7 +8068,7 @@ class App(ctk.CTk):
 
                 if not enriched:
                     if getattr(self, "_part_missing_logged", False):
-                        self.logger.err("Печать остановлена: заполните номер партии для формата 30x20.")
+                        self.logger.err("Печать остановлена: заполните номер партии для выбранного шаблона.")
                         break
                     else:
                         self.logger.err(f"Пакет {bidx}: нет валидных строк для печати.")
@@ -7093,7 +8108,7 @@ class App(ctk.CTk):
 
                     btw = self._get_btw_for_format(fmt_name)
                     if not btw:
-                        self.logger.err(f"Пакет {bidx}: не найден BTW для формата {fmt_name}.")
+                        self.logger.err(f"Пакет {bidx}: не найден BTW для шаблона {fmt_name}.")
                         continue
                     if db_print_tracking:
                         try:
@@ -7137,19 +8152,35 @@ class App(ctk.CTk):
 
                     fmt = self.bt.open_format(btw)
                     try:
-                        self._rebind_template_db(fmt, tmp_csv_path)
+                        batch_report = self._template_batch_report(
+                            fmt,
+                            part_mode=self._template_part_mode(fmt_name),
+                        )
                     except Exception:
-                        pass
-                    try:
-                        self._check_template_db(fmt, tmp_csv_path)
-                    except Exception:
-                        pass
+                        batch_report = {
+                            "can_batch": False,
+                            "batch_message": "Не удалось проанализировать шаблон для пакетной печати.",
+                        }
 
-                    fmt.PrintSetup.Printer = prn
-                    fmt.PrintSetup.IdenticalCopiesOfLabel = int(copies)
-                    fmt.UseDatabase = True
-                    fmt.SelectRecordsAtPrint = False
-                    fmt.RecordRange = f"1-{len(enriched)}"
+                    can_use_tmp_batch = False
+                    if batch_report.get("can_batch"):
+                        try:
+                            self._rebind_template_db(fmt, tmp_csv_path)
+                        except Exception:
+                            pass
+                        try:
+                            can_use_tmp_batch = bool(self._check_template_db(fmt, tmp_csv_path))
+                        except Exception:
+                            can_use_tmp_batch = False
+                    else:
+                        try:
+                            self.logger.log(
+                                f"Шаблон {fmt_name} не готов к пакетной печати через tmp_batch: "
+                                f"{batch_report.get('batch_message')}. "
+                                f"Переключаю печать на прямую подстановку полей."
+                            )
+                        except Exception:
+                            pass
 
                     self._pause_wait()
                     if self._should_stop():
@@ -7158,8 +8189,33 @@ class App(ctk.CTk):
                     extra_info = ""
                     if calib_added:
                         extra_info += f" (+{calib_added} калибровочных)"
-                    self.logger.log(f"Отправка на печать: {real_in_batch} строк." + extra_info)
-                    fmt.PrintOut(False, self._dialog_flag())
+
+                    if can_use_tmp_batch:
+                        fmt.UseDatabase = True
+                        fmt.SelectRecordsAtPrint = False
+                        fmt.RecordRange = f"1-{len(enriched)}"
+                        self.logger.log(f"Отправка на печать: {real_in_batch} строк через tmp_batch." + extra_info)
+                        batch_job_name = f"AutoPrint {fmt_name} {batch_start_num}-{batch_end_num}"
+                        ok = self._bt_batch_print(
+                            fmt,
+                            prn,
+                            batch_job_name,
+                            copies,
+                            self._dialog_flag(),
+                        )
+                        if not ok:
+                            raise Exception("BarTender не подтвердил пакетную печать.")
+                    else:
+                        self.logger.log(
+                            f"Отправка на печать: {real_in_batch} строк прямой подстановкой полей." + extra_info
+                        )
+                        self._print_rows_direct(
+                            fmt,
+                            enriched,
+                            prn,
+                            batch_label=f"Пакет {bidx}: ",
+                        )
+
                     sent_total += real_in_batch
                     calib_total += calib_added
                     success = True

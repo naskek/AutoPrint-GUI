@@ -25,3 +25,6 @@ dist/
 product_catalog.xlsx
 tmp_batch.csv
 Список товаров.xlsx
+_btxml_*/
+_saved_db_*/
+tmp_batch_xmltest.csv

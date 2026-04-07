@@ -1,7 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('D:\\AutoPrint V3.1\\product_catalog.xlsx', '.'), ('D:\\AutoPrint V3.1\\tmp_batch.csv', '.'), ('D:\\AutoPrint V3.1\\config\\stats.json', 'config'), ('D:\\AutoPrint V3.1\\config\\config.json', 'config'), ('D:\\AutoPrint V3.1\\templates\\16x16.btw', 'templates'), ('D:\\AutoPrint V3.1\\templates\\30x20.btw', 'templates'), ('D:\\AutoPrint V3.1\\templates\\sticker60x40.btw', 'templates')]
+ROOT = Path(__file__).resolve().parent
+datas = []
+
+for src, dest in [
+    (ROOT / 'product_catalog.xlsx', '.'),
+    (ROOT / 'tmp_batch.csv', '.'),
+    (ROOT / 'config' / 'stats.json', 'config'),
+    (ROOT / 'config' / 'config.json', 'config'),
+]:
+    if src.exists():
+        datas.append((str(src), dest))
+
+templates_dir = ROOT / 'templates'
+if templates_dir.exists():
+    for template_path in templates_dir.glob('*.btw'):
+        datas.append((str(template_path), 'templates'))
+
 binaries = []
 hiddenimports = ['darkdetect', 'tkcalendar', 'psycopg_binary']
 tmp_ret = collect_all('customtkinter')
@@ -11,7 +29,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['D:\\AutoPrint V3.1\\bartender_gui.py'],
+    [str(ROOT / 'bartender_gui.py')],
     pathex=[],
     binaries=binaries,
     datas=datas,

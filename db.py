@@ -42,7 +42,12 @@ def get_conn():
     db_url = get_db_url()
     if not db_url:
         raise RuntimeError("Не задан AUTOPRINT_DB_URL в .env")
-    return psycopg.connect(db_url)
+    timeout_raw = str(os.environ.get("AUTOPRINT_DB_CONNECT_TIMEOUT", "") or "").strip()
+    try:
+        connect_timeout = max(1, int(timeout_raw)) if timeout_raw else 2
+    except Exception:
+        connect_timeout = 2
+    return psycopg.connect(db_url, connect_timeout=connect_timeout)
 
 
 def init_db() -> None:
