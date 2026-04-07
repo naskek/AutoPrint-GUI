@@ -28,3 +28,6 @@ tmp_batch.csv
 _btxml_*/
 _saved_db_*/
 tmp_batch_xmltest.csv
+templates/*.btw
+templates/preview.png
+!templates/.gitkeep
