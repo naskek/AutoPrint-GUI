@@ -37,6 +37,7 @@ from crpt_client import (
 from services.crpt_settings import load_crpt_settings, set_runtime_overrides
 from services.crpt_token_manager import get_token_manager, CrptTokenError
 from services import crpt_auth
+from licensing import ensure_license_or_exit
 try:
     from db import (
         db_enabled as _db_enabled,
@@ -8329,8 +8330,11 @@ class App(ctk.CTk):
         finally:
             duration = max(0.0, time.time() - job_started_at)
 def main():
+    if ensure_license_or_exit() is None:
+        return 1
     app = App()
     app.mainloop()
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

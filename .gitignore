@@ -22,6 +22,9 @@ dist/
 *.swp
 *.tmp
 .env
+config/license.json
+*.pem
+*.key
 product_catalog.xlsx
 tmp_batch.csv
 Список товаров.xlsx
