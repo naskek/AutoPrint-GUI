@@ -1,0 +1,133 @@
+name: Release AutoPrint
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  PUBLIC_RELEASE_REPO: naskek/AutoPrint-GUI-Releases
+  PUBLIC_RELEASE_TOKEN: ${{ secrets.AUTOPRINT_RELEASE_TOKEN }}
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: build_tools/requirements.txt
+
+      - name: Validate tag matches application version
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if (-not $tag.StartsWith("v")) { throw "Release tag must start with v" }
+          $tagVersion = $tag.Substring(1)
+          $appVersion = python -c "from app_version import APP_VERSION; print(APP_VERSION)"
+          if ($tagVersion -ne $appVersion) {
+            throw "Tag version $tagVersion does not match app_version.py $appVersion"
+          }
+          "APP_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Validate Python sources
+        shell: pwsh
+        run: |
+          python -m py_compile app_version.py updater.py autoprint_main.py build_tools/build_exe.py
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r build_tools/requirements.txt
+
+      - name: Build PyInstaller application
+        shell: pwsh
+        run: python build_tools/build_exe.py
+
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw "ISCC.exe not found" }
+          & $iscc "build_tools\installer.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Resolve installer
+        shell: pwsh
+        run: |
+          $installer = "dist\installer\BarTenderGUI_Setup_$env:APP_VERSION.exe"
+          if (-not (Test-Path $installer)) { throw "Installer not found: $installer" }
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "INSTALLER_PATH=$installer" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALLER_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Installer SHA256: $hash"
+
+      - name: Publish private source release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $notes = @"
+          AutoPrint $env:APP_VERSION
+
+          SHA-256: $env:INSTALLER_SHA256
+          "@
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $env:INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --clobber
+          } else {
+            gh release create $tag $env:INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --title "AutoPrint $env:APP_VERSION" --notes $notes
+          }
+
+      - name: Publish public updater release
+        if: env.PUBLIC_RELEASE_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.AUTOPRINT_RELEASE_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $notes = @"
+          AutoPrint $env:APP_VERSION
+
+          Compiled update package. Source code is stored separately in the private AutoPrint-GUI repository.
+          SHA-256: $env:INSTALLER_SHA256
+          "@
+          gh release view $tag --repo $env:PUBLIC_RELEASE_REPO *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $env:INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --clobber
+          } else {
+            gh release create $tag $env:INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --title "AutoPrint $env:APP_VERSION" --notes $notes
+          }
+
+      - name: Public updater channel not configured
+        if: env.PUBLIC_RELEASE_TOKEN == ''
+        shell: pwsh
+        run: |
+          Write-Warning "AUTOPRINT_RELEASE_TOKEN is not configured. Private Release was created, but in-app updates cannot see it."
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: AutoPrint-Windows-Installer-${{ env.APP_VERSION }}
+          path: dist/installer/BarTenderGUI_Setup_*.exe
+          if-no-files-found: error
+          retention-days: 30
