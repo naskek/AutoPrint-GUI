@@ -15,7 +15,6 @@ def _version_tuple(version: str) -> tuple[int, int, int, int]:
 
 def _write_windows_version_file(root: Path, version: str) -> Path:
     numeric = _version_tuple(version)
-    version4 = ".".join(str(x) for x in numeric)
     out = root / "build" / "version_info.txt"
     out.parent.mkdir(parents=True, exist_ok=True)
     content = (
@@ -29,7 +28,7 @@ def _write_windows_version_file(root: Path, version: str) -> Path:
         "    StringFileInfo([StringTable('040904B0', [\n"
         "      StringStruct('CompanyName', 'AutoPrint'),\n"
         "      StringStruct('FileDescription', 'AutoPrint BarTender GUI'),\n"
-        f"      StringStruct('FileVersion', '{version4}'),\n"
+        f"      StringStruct('FileVersion', '{version}'),\n"
         "      StringStruct('InternalName', 'BarTenderGUI'),\n"
         "      StringStruct('OriginalFilename', 'BarTenderGUI.exe'),\n"
         "      StringStruct('ProductName', 'AutoPrint'),\n"
