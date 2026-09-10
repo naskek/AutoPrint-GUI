@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import sys
+import queue
 import threading
 from tkinter import messagebox as mb
 
@@ -19,6 +19,11 @@ bartender_gui.APP_TITLE = f"BarTender GUI V{APP_VERSION}"
 
 
 class AutoPrintApp(bartender_gui.App):
+    def __init__(self):
+        self._update_ui_queue: queue.Queue = queue.Queue()
+        super().__init__()
+        self.after(100, self._drain_update_ui_queue)
+
     def _build_menu(self):
         super()._build_menu()
         try:
@@ -43,6 +48,32 @@ class AutoPrintApp(bartender_gui.App):
         except Exception:
             pass
 
+    def _post_update_ui(self, callback) -> None:
+        try:
+            self._update_ui_queue.put_nowait(callback)
+        except Exception:
+            pass
+
+    def _drain_update_ui_queue(self) -> None:
+        try:
+            while True:
+                callback = self._update_ui_queue.get_nowait()
+                try:
+                    callback()
+                except Exception as exc:
+                    try:
+                        self.logger.err(f"Updater UI error: {exc}")
+                    except Exception:
+                        pass
+        except queue.Empty:
+            pass
+
+        try:
+            if self.winfo_exists():
+                self.after(100, self._drain_update_ui_queue)
+        except Exception:
+            pass
+
     def _set_update_button(self, text: str, enabled: bool = True) -> None:
         try:
             self.update_btn.configure(text=text, state="normal" if enabled else "disabled")
@@ -56,9 +87,9 @@ class AutoPrintApp(bartender_gui.App):
             try:
                 release = check_for_update(APP_VERSION)
             except Exception as exc:
-                self.after(0, lambda e=exc: self._update_check_failed(e))
+                self._post_update_ui(lambda e=exc: self._update_check_failed(e))
                 return
-            self.after(0, lambda r=release: self._update_check_finished(r))
+            self._post_update_ui(lambda r=release: self._update_check_finished(r))
 
         threading.Thread(target=worker, name="autoprint-update-check", daemon=True).start()
 
@@ -99,9 +130,9 @@ class AutoPrintApp(bartender_gui.App):
             try:
                 installer = download_release(release)
             except Exception as exc:
-                self.after(0, lambda e=exc: self._update_download_failed(e))
+                self._post_update_ui(lambda e=exc: self._update_download_failed(e))
                 return
-            self.after(0, lambda p=installer, r=release: self._install_downloaded_update(p, r))
+            self._post_update_ui(lambda p=installer, r=release: self._install_downloaded_update(p, r))
 
         threading.Thread(target=worker, name="autoprint-update-download", daemon=True).start()
 
