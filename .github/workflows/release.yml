@@ -39,10 +39,11 @@ jobs:
           }
           "APP_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Validate Python sources
+      - name: Validate Python sources and updater tests
         shell: pwsh
         run: |
-          python -m py_compile app_version.py updater.py autoprint_main.py build_tools/build_exe.py
+          python -m py_compile app_version.py updater.py autoprint_main.py build_tools/build_exe.py tests/test_updater.py
+          python -m unittest discover -s tests -v
 
       - name: Install build dependencies
         shell: pwsh
@@ -94,8 +95,10 @@ jobs:
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $env:INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --clobber
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
             gh release create $tag $env:INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --title "AutoPrint $env:APP_VERSION" --notes $notes
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
       - name: Publish public updater release
@@ -114,8 +117,10 @@ jobs:
           gh release view $tag --repo $env:PUBLIC_RELEASE_REPO *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $env:INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --clobber
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
             gh release create $tag $env:INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --title "AutoPrint $env:APP_VERSION" --notes $notes
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
       - name: Public updater channel not configured
@@ -127,7 +132,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6
         with:
-          name: AutoPrint-Windows-Installer-${{ env.APP_VERSION }}
+          name: AutoPrint-Windows-Installer-release
           path: dist/installer/BarTenderGUI_Setup_*.exe
           if-no-files-found: error
           retention-days: 30
