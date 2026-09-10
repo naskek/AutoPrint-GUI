@@ -9,11 +9,13 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from licensing import LicenseErrorCode, LicenseValidationError, load_and_validate_license
+from licensing.signature import PRODUCTION_PUBLIC_KEYS
 
 
 APP_ID = "autoprint-gui"
 KEY_ID = "test-key"
 MACHINE_HASH = "sha256:" + ("a" * 64)
+PRODUCTION_KEY_ID = "autoprint-license-ed25519-2026-09"
 
 
 def _signed_document(private_key, payload=None, key_id=KEY_ID):
@@ -44,6 +46,12 @@ def _raw_public_key(private_key):
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
     )
+
+
+class ProductionKeyringTests(unittest.TestCase):
+    def test_current_production_public_key_is_configured(self):
+        self.assertIn(PRODUCTION_KEY_ID, PRODUCTION_PUBLIC_KEYS)
+        self.assertEqual(len(PRODUCTION_PUBLIC_KEYS[PRODUCTION_KEY_ID]), 32)
 
 
 class LicenseValidationTests(unittest.TestCase):

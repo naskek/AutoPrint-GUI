@@ -12,8 +12,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 # Production public keys are inserted here after generation in the private
 # AutoPrint-License-Tools repository, for example:
 # "autoprint-license-ed25519-2026-01": base64.b64decode("...")
-# Keeping this empty fails closed without creating a development backdoor.
-PRODUCTION_PUBLIC_KEYS: dict[str, bytes] = {}
+# Keeping only issuer public keys here avoids creating a development backdoor.
+PRODUCTION_PUBLIC_KEYS: dict[str, bytes] = {
+    "autoprint-license-ed25519-2026-09": base64.b64decode(
+        "lo94pqcubiDdSVhFrc+RUCR9TgKQnqrpk8biOmzUFHw="
+    ),
+}
 
 
 def canonicalize_payload(payload: object) -> bytes:
