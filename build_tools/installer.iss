@@ -4,7 +4,7 @@
 #define MyAppPublisher "AutoPrint"
 #define MyAppExeName "BarTenderGUI.exe"
 #define MyAppExePath "..\dist\BarTenderGUI\BarTenderGUI.exe"
-#define MyAppVersion GetFileProductVersionString(MyAppExePath)
+#define MyAppVersion GetFileVersionString(MyAppExePath)
 #define MyAppVersionNumbers GetVersionNumbersString(MyAppExePath)
 
 [Setup]
