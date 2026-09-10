@@ -18,28 +18,28 @@ def _write_windows_version_file(root: Path, version: str) -> Path:
     version4 = ".".join(str(x) for x in numeric)
     out = root / "build" / "version_info.txt"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(
-        f"""VSVersionInfo(\n"
-        f"  ffi=FixedFileInfo(\n"
+    content = (
+        "VSVersionInfo(\n"
+        "  ffi=FixedFileInfo(\n"
         f"    filevers={numeric!r},\n"
         f"    prodvers={numeric!r},\n"
-        f"    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)\n"
-        f"  ),\n"
-        f"  kids=[\n"
-        f"    StringFileInfo([StringTable('040904B0', [\n"
-        f"      StringStruct('CompanyName', 'AutoPrint'),\n"
-        f"      StringStruct('FileDescription', 'AutoPrint BarTender GUI'),\n"
+        "    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)\n"
+        "  ),\n"
+        "  kids=[\n"
+        "    StringFileInfo([StringTable('040904B0', [\n"
+        "      StringStruct('CompanyName', 'AutoPrint'),\n"
+        "      StringStruct('FileDescription', 'AutoPrint BarTender GUI'),\n"
         f"      StringStruct('FileVersion', '{version4}'),\n"
-        f"      StringStruct('InternalName', 'BarTenderGUI'),\n"
-        f"      StringStruct('OriginalFilename', 'BarTenderGUI.exe'),\n"
-        f"      StringStruct('ProductName', 'AutoPrint'),\n"
+        "      StringStruct('InternalName', 'BarTenderGUI'),\n"
+        "      StringStruct('OriginalFilename', 'BarTenderGUI.exe'),\n"
+        "      StringStruct('ProductName', 'AutoPrint'),\n"
         f"      StringStruct('ProductVersion', '{version}'),\n"
-        f"    ])]),\n"
-        f"    VarFileInfo([VarStruct('Translation', [1033, 1200])])\n"
-        f"  ]\n"
-        f")\n""",
-        encoding="utf-8",
+        "    ])]),\n"
+        "    VarFileInfo([VarStruct('Translation', [1033, 1200])])\n"
+        "  ]\n"
+        ")\n"
     )
+    out.write_text(content, encoding="utf-8")
     return out
 
 
