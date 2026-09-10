@@ -27,7 +27,8 @@ jobs:
       - name: Validate Python sources
         shell: pwsh
         run: |
-          python -m py_compile app_version.py updater.py autoprint_main.py build_tools/build_exe.py
+          python -m py_compile app_version.py updater.py autoprint_main.py build_tools/build_exe.py tests/test_updater.py
+          python -m unittest discover -s tests -v
 
       - name: Install build dependencies
         shell: pwsh
