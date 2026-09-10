@@ -663,6 +663,7 @@ class App(ctk.CTk):
         return False
 
     def __init__(self):
+        self._shutdown_started = False
         self.cancel_requested = False
         self.is_paused = False
         super().__init__()
@@ -710,6 +711,7 @@ class App(ctk.CTk):
         self._build_ui()
         self._build_menu()
         self._start_bt()
+        self.protocol("WM_DELETE_WINDOW", self._shutdown_app)
         self._refresh_printers()
         self._load_presets()
         self._auto_load_product_map()
@@ -917,17 +919,21 @@ class App(ctk.CTk):
         ctk.CTkButton(btn_row, text="Очистить", width=80, command=self._client_clear).pack(side="left")
         sticker_row = ctk.CTkFrame(client_col)
         sticker_row.pack(fill="x", pady=(6, 0))
-        ctk.CTkButton(
+        self.sticker_reprint_btn = ctk.CTkButton(
             sticker_row,
             text="Перепечатать стикер",
             width=180,
             command=self._open_sticker_reprint_dialog
-        ).pack(side="left")
+        )
+        self.sticker_reprint_btn.pack(side="left")
 
         # кнопки действий
         btns = ctk.CTkFrame(self)
         btns.pack(fill="x", padx=8, pady=(4, 8))
-        ctk.CTkButton(btns, text="Предосмотр печати", command=self._preview, height=36).pack(side="left", padx=6, pady=8)
+        self.preview_btn = ctk.CTkButton(
+            btns, text="Предосмотр печати", command=self._preview, height=36
+        )
+        self.preview_btn.pack(side="left", padx=6, pady=8)
         self.print_btn = ctk.CTkButton(
             btns, text="Печать", command=self._print_range_one_job_via_csv, height=36,
             fg_color="#198754", hover_color="#157347"
@@ -939,6 +945,9 @@ class App(ctk.CTk):
             fg_color="#dc3545", hover_color="#b02a37"
         )
         self.cancel_btn.pack(side="left", padx=6, pady=8)
+
+        self.bt_status_label = ctk.CTkLabel(btns, text="BarTender: проверка…")
+        self.bt_status_label.pack(side="right", padx=12, pady=8)
 
         # панель пакетной печати
         batch_panel = ctk.CTkFrame(self, corner_radius=8)
@@ -1379,8 +1388,8 @@ class App(ctk.CTk):
         return required
 
     def _validate_template_file(self, template_path: str, part_mode: str = "blank"):
-        if not self.bt:
-            raise RuntimeError("BarTender COM не инициализирован.")
+        if not self._bartender_available():
+            raise RuntimeError("BarTender недоступен: невозможно проверить BTW-шаблон.")
         if not template_path or not os.path.isfile(template_path):
             raise FileNotFoundError(template_path or "Файл шаблона не найден")
 
@@ -1666,7 +1675,14 @@ class App(ctk.CTk):
 
             btns = ctk.CTkFrame(dlg)
             btns.pack(pady=(0, 12))
-            ctk.CTkButton(btns, text="Проверить поля", command=on_validate, width=130).pack(side="left", padx=6)
+            validate_btn = ctk.CTkButton(
+                btns,
+                text="Проверить поля",
+                command=on_validate,
+                width=130,
+                state="normal" if self._bartender_available() else "disabled",
+            )
+            validate_btn.pack(side="left", padx=6)
             ctk.CTkButton(btns, text="Сохранить", command=on_save, width=120).pack(side="left", padx=6)
             ctk.CTkButton(btns, text="Отмена", command=dlg.destroy, width=90, fg_color="#444").pack(side="left", padx=6)
 
@@ -1856,12 +1872,67 @@ class App(ctk.CTk):
         self.logbox.bind("<Button-3>", lambda e: (m.tk_popup(e.x_root, e.y_root), m.grab_release()))
 
     def _start_bt(self):
+        bt = BT(self.logger)
         try:
-            self.bt = BT(self.logger)
-            self.bt.start()
+            bt.start()
         except Exception as e:
+            try:
+                bt.stop()
+            finally:
+                self.bt = None
             self.logger.err(f"COM не стартовал: {e}")
-            mb.showerror("BarTender COM", f"Не удалось запустить COM:\n{e}")
+            self._set_bartender_status(False)
+            return False
+        self.bt = bt
+        self._set_bartender_status(True)
+        return True
+
+    def _bartender_available(self):
+        bt = getattr(self, "bt", None)
+        return bt is not None and getattr(bt, "app", None) is not None
+
+    def _set_bartender_status(self, available: bool):
+        try:
+            self.bt_status_label.configure(
+                text="BarTender: доступен" if available else "BarTender: недоступен"
+            )
+        except Exception:
+            pass
+        if available:
+            return
+        for name in ("preview_btn", "print_btn", "sticker_reprint_btn"):
+            try:
+                button = getattr(self, name, None)
+                if button:
+                    button.configure(state="disabled")
+            except Exception:
+                pass
+
+    def _require_bartender(self, action: str):
+        if self._bartender_available():
+            return True
+        message = (
+            f"{action} недоступен: BarTender не установлен или COM-сервер не отвечает. "
+            "Установите или восстановите BarTender и перезапустите AutoPrint."
+        )
+        try:
+            self.logger.err(message)
+        except Exception:
+            pass
+        mb.showwarning("BarTender недоступен", message)
+        return False
+
+    def _shutdown_app(self):
+        if getattr(self, "_shutdown_started", False):
+            return
+        self._shutdown_started = True
+        bt = getattr(self, "bt", None)
+        self.bt = None
+        try:
+            if bt is not None:
+                bt.stop()
+        finally:
+            super().destroy()
 
     def _normalize_template_id(self, value: str) -> str:
         return re.sub(r"\s+", " ", str(value or "").strip())
@@ -6473,10 +6544,13 @@ class App(ctk.CTk):
         for i, (start, end) in enumerate(batches, start=1):
             label = f"Пакет {i} ({idx0 + start + 1}-{idx0 + end})"
             btn = ctk.CTkButton(self.batch_btns_frame, text=label, height=32,
-                                 command=lambda b=i: self._reprint_batch(b))
+                                 command=lambda b=i: self._reprint_batch(b),
+                                 state="normal" if self._bartender_available() else "disabled")
             btn.pack(side="left", padx=6, pady=4)
 
     def _reprint_batch(self, batch_idx):
+        if not self._require_bartender("Повторная печать пакета"):
+            return
         try:
             batches = self.last_batches or []
         except Exception:
@@ -6553,6 +6627,8 @@ class App(ctk.CTk):
         self.last_sticker_jobs.append(job)
 
     def _open_sticker_reprint_dialog(self):
+        if not self._require_bartender("Повторная печать стикера"):
+            return
         jobs = list(self.last_sticker_jobs or [])
         if not jobs:
             mb.showerror("Стикер", "Нет данных для повторной печати стикера. Сначала напечатайте коды.")
@@ -6614,6 +6690,8 @@ class App(ctk.CTk):
 
     def _print_sticker_placeholder(self, bidx, start, end, total, sample_row=None, km_count=None, total_rolls=None):
         """Печать стикера через BarTender, если есть шаблон sticker60x40.btw (или cfg['sticker_btw'])."""
+        if not self._require_bartender("Печать стикера"):
+            return
         prn = self._get_sticker_printer()
         if not prn:
             self.logger.err("Стикер: принтер не найден.")
@@ -7488,6 +7566,8 @@ class App(ctk.CTk):
     # ---------- actions ----------
     
     def _preview(self):
+        if not self._require_bartender("Предпросмотр печати"):
+            return
         if not self.csv_path:
             mb.showerror("CSV", "Выбери CSV")
             return
@@ -7628,10 +7708,10 @@ class App(ctk.CTk):
         Подготовка BTW:
         
         
-        - гарантируем BarTender COM (self.app)
+        - используем уже проверенный BarTender capability-state
         
         
-        - если на входе строка пути -> открываем через self.app.Formats.Open(...)
+        - если на входе строка пути -> открываем через BarTender Formats.Open(...)
         
         
         - назначаем принтер (оба свойства, для совместимости)
@@ -7644,39 +7724,15 @@ class App(ctk.CTk):
         
         
         """
-        
-        
+
+        if not self._require_bartender("Подготовка шаблона"):
+            return None
+
+
         try:
         
         
-            # 0) Инициализация BarTender COM, если не создан
-        
-        
-            bt = getattr(self, "app", None)
-        
-        
-            if bt is None:
-        
-        
-                from win32com.client import Dispatch
-        
-        
-                self.app = Dispatch("BarTender.Application")
-        
-        
-                try:
-        
-        
-                    self.app.Visible = True
-        
-        
-                except Exception:
-        
-        
-                    pass
-        
-        
-                bt = self.app
+            bt = self.bt.app
         
         
         
@@ -7723,7 +7779,7 @@ class App(ctk.CTk):
                 try:
         
         
-                    fmt = self.app.Formats.Open(path, False, "")
+                    fmt = bt.Formats.Open(path, False, "")
         
         
                 except Exception as e:
@@ -7896,13 +7952,12 @@ class App(ctk.CTk):
     def _print_range_one_job_via_csv(self, target_batches=None):
         import os, time, traceback
 
+        if not self._require_bartender("Печать"):
+            return
+
         LOG_EVERY = 100
         PROGRESS_EVERY = 50
         self.cancel_requested = False
-
-        if not self.bt:
-            self.logger.err("BarTender COM не инициализирован (bt is None).")
-            return
 
         if not getattr(self, "csv_path", None):
             mb.showerror("CSV", "Выбери CSV")

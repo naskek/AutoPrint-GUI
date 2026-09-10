@@ -23,7 +23,7 @@ class BT:
         if self.app:
             try:
                 self.logger.log("Завершение BarTender COM...")
-                self.app.Quit(1)  # 1 = Save changes on quit
+                self.app.Quit(1)  # 1 = btDoNotSaveChanges
             except Exception as e:
                 self.logger.err(f"Не удалось корректно закрыть BarTender: {e}")
             finally:

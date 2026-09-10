@@ -162,9 +162,9 @@ class AutoPrintApp(bartender_gui.App):
         # Inno Setup waits/retries while the current executable is still in use.
         # Exit immediately after launching Setup, as recommended by Inno Setup.
         try:
-            self.after(50, self.destroy)
+            self.after(50, self._shutdown_app)
         except Exception:
-            self.destroy()
+            self._shutdown_app()
 
 
 def main() -> int:
