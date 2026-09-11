@@ -22,6 +22,8 @@ dist/
 *.swp
 *.tmp
 .env
+config/config.json
+config/stats.json
 config/license.json
 *.pem
 *.key

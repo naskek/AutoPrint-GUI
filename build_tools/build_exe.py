@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -48,18 +47,6 @@ def main() -> int:
     from app_version import APP_VERSION
 
     target = root / "autoprint_main.py"
-    templates_dir = root / "templates"
-
-    static_files = [
-        (Path("product_catalog.xlsx"), "."),
-        (Path("preview.png"), "."),
-        (Path("tmp_batch.csv"), "."),
-        (Path("config") / "stats.json", "config"),
-        (Path("config") / "config.json", "config"),
-    ]
-
-    template_files = [(p.relative_to(root), "templates") for p in templates_dir.glob("*.btw")] if templates_dir.exists() else []
-    data_files = static_files + template_files
     version_file = _write_windows_version_file(root, APP_VERSION)
 
     args = [
@@ -83,13 +70,6 @@ def main() -> int:
         "--hidden-import",
         "psycopg_binary",
     ]
-
-    for rel_path, dest in data_files:
-        src = root / rel_path
-        if not src.exists():
-            print(f"[WARN] Skip missing data file: {src}", file=sys.stderr)
-            continue
-        args += ["--add-data", f"{src}{os.pathsep}{dest}"]
 
     args.append(str(target))
 

@@ -33,13 +33,6 @@ VersionInfoProductTextVersion={#MyAppVersion}
 ; Application binaries are replaced on every update.
 Source: "..\dist\BarTenderGUI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Operational/user data must survive updates and uninstall. These files are optional in CI.
-Source: "..\product_catalog.xlsx"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist skipifsourcedoesntexist uninsneveruninstall
-Source: "..\tmp_batch.csv"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist skipifsourcedoesntexist uninsneveruninstall
-Source: "..\config\stats.json"; DestDir: "{app}\config"; Flags: ignoreversion onlyifdoesntexist skipifsourcedoesntexist uninsneveruninstall
-Source: "..\config\config.json"; DestDir: "{app}\config"; Flags: ignoreversion onlyifdoesntexist skipifsourcedoesntexist uninsneveruninstall
-Source: "..\templates\*.btw"; DestDir: "{app}\templates"; Flags: ignoreversion onlyifdoesntexist skipifsourcedoesntexist recursesubdirs createallsubdirs uninsneveruninstall
-
 [Icons]
 Name: "{group}\BarTender GUI"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\Удалить {#MyAppName}"; Filename: "{uninstallexe}"
