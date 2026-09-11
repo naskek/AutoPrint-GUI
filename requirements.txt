@@ -4,5 +4,4 @@ openpyxl
 pywin32
 PyInstaller
 tkcalendar
-psycopg[binary]
 cryptography>=46.0.0

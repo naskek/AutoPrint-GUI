@@ -21,10 +21,8 @@ if templates_dir.exists():
         datas.append((str(template_path), 'templates'))
 
 binaries = []
-hiddenimports = ['darkdetect', 'tkcalendar', 'psycopg_binary']
+hiddenimports = ['darkdetect', 'tkcalendar']
 tmp_ret = collect_all('customtkinter')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('psycopg')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 

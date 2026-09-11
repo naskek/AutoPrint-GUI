@@ -61,14 +61,10 @@ def main() -> int:
         str(version_file),
         "--collect-all",
         "customtkinter",
-        "--collect-all",
-        "psycopg",
         "--hidden-import",
         "darkdetect",
         "--hidden-import",
         "tkcalendar",
-        "--hidden-import",
-        "psycopg_binary",
     ]
 
     args.append(str(target))
