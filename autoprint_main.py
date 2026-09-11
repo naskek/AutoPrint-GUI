@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 from tkinter import messagebox as mb
 
@@ -17,6 +18,14 @@ from updater import UpdateError, check_for_update, download_release, launch_inst
 bartender_gui.APP_VERSION = APP_VERSION
 bartender_gui.APP_TITLE = f"BarTender GUI V{APP_VERSION}"
 
+STARTUP_UPDATE_DELAY_MS = 1500
+
+
+def startup_update_check_enabled(frozen=None) -> bool:
+    if frozen is None:
+        frozen = getattr(sys, "frozen", False)
+    return bool(frozen)
+
 
 class AutoPrintApp(bartender_gui.App):
     def __init__(self):
@@ -25,8 +34,24 @@ class AutoPrintApp(bartender_gui.App):
         self._version_update_btn = None
         self._update_button_text = "Обновить"
         self._update_button_enabled = True
+        self._update_check_in_progress = False
+        self._startup_update_check_started = False
+        self._startup_update_prompted = False
         super().__init__()
         self.after(100, self._drain_update_ui_queue)
+        self._schedule_startup_update_check()
+
+    def _schedule_startup_update_check(self) -> bool:
+        if not startup_update_check_enabled():
+            return False
+        self.after(STARTUP_UPDATE_DELAY_MS, self._run_startup_update_check)
+        return True
+
+    def _run_startup_update_check(self) -> bool:
+        if self.__dict__.get("_startup_update_check_started", False):
+            return False
+        self._startup_update_check_started = True
+        return self._start_update_check(interactive=False)
 
     def _open_version_dialog(self) -> None:
         dialog = getattr(self, "_version_dialog", None)
@@ -74,15 +99,22 @@ class AutoPrintApp(bartender_gui.App):
             pass
 
     def _post_update_ui(self, callback) -> None:
+        if self.__dict__.get("_shutdown_started", False):
+            self._update_check_in_progress = False
+            return
         try:
             self._update_ui_queue.put_nowait(callback)
         except Exception:
-            pass
+            self._update_check_in_progress = False
 
     def _drain_update_ui_queue(self) -> None:
+        if self.__dict__.get("_shutdown_started", False):
+            return
         try:
             while True:
                 callback = self._update_ui_queue.get_nowait()
+                if self.__dict__.get("_shutdown_started", False):
+                    return
                 try:
                     callback()
                 except Exception as exc:
@@ -102,7 +134,7 @@ class AutoPrintApp(bartender_gui.App):
     def _set_update_button(self, text: str, enabled: bool = True) -> None:
         self._update_button_text = text
         self._update_button_enabled = bool(enabled)
-        button = getattr(self, "_version_update_btn", None)
+        button = self.__dict__.get("_version_update_btn")
         if button is None:
             return
         try:
@@ -113,35 +145,66 @@ class AutoPrintApp(bartender_gui.App):
             pass
 
     def _check_updates_clicked(self) -> None:
+        self._start_update_check(interactive=True)
+
+    def _start_update_check(self, *, interactive: bool) -> bool:
+        if self.__dict__.get("_update_check_in_progress", False):
+            return False
+        self._update_check_in_progress = True
         self._set_update_button("Проверка…", enabled=False)
 
         def worker() -> None:
             try:
                 release = check_for_update(APP_VERSION)
             except Exception as exc:
-                self._post_update_ui(lambda e=exc: self._update_check_failed(e))
+                self._post_update_ui(
+                    lambda e=exc: self._update_check_failed(e, interactive=interactive)
+                )
                 return
-            self._post_update_ui(lambda r=release: self._update_check_finished(r))
+            self._post_update_ui(
+                lambda r=release: self._update_check_finished(
+                    r, interactive=interactive
+                )
+            )
 
-        threading.Thread(target=worker, name="autoprint-update-check", daemon=True).start()
+        try:
+            threading.Thread(
+                target=worker, name="autoprint-update-check", daemon=True
+            ).start()
+        except Exception as exc:
+            self._update_check_failed(exc, interactive=interactive)
+            return False
+        return True
 
-    def _update_check_failed(self, exc: Exception) -> None:
+    def _update_check_failed(self, exc: Exception, *, interactive: bool = True) -> None:
+        self._update_check_in_progress = False
         self._set_update_button("Обновить", enabled=True)
         message = str(exc) if isinstance(exc, UpdateError) else f"Ошибка проверки обновлений: {exc}"
         try:
-            self.logger.err(message)
+            if interactive:
+                self.logger.err(message)
+            else:
+                self.logger.log(f"[WARN] Фоновая проверка обновлений: {message}")
         except Exception:
             pass
-        mb.showerror("Обновление AutoPrint", message)
+        if interactive:
+            mb.showerror("Обновление AutoPrint", message)
 
-    def _update_check_finished(self, release) -> None:
+    def _update_check_finished(self, release, *, interactive: bool = True) -> None:
+        self._update_check_in_progress = False
         self._set_update_button("Обновить", enabled=True)
         if release is None:
-            mb.showinfo(
-                "Обновление AutoPrint",
-                f"Установлена актуальная версия {APP_VERSION}.",
-            )
+            if interactive:
+                mb.showinfo(
+                    "Обновление AutoPrint",
+                    f"Установлена актуальная версия {APP_VERSION}.",
+                )
             return
+
+        if not interactive:
+            if self.__dict__.get("_startup_update_prompted", False):
+                return
+            self._startup_update_prompted = True
 
         notes = (release.notes or "").strip()
         if len(notes) > 900:
