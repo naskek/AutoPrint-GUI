@@ -32,7 +32,6 @@ def build_product_map(
             "TEMPLATE_ID": template_id,
             "FORMAT": template_id,
             "SHELF": _parse_shelf_life(_value(record, "shelf_life")),
-            "PART_TEMPLATE": _value(record, "batch_template"),
             "SHORTNAME": _value(record, "short_name"),
             "BRAND": _value(record, "brand"),
             "CLIENT": _value(record, "client"),

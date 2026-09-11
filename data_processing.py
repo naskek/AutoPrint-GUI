@@ -73,7 +73,7 @@ def _legacy_template_from_pack(pack_text: str) -> str:
 
 
 def read_product_map(xlsx_path: str):
-    """Читает: GTIN, Упаковка, Шаблон печати, Срок годности, Шаблон партии, ShortName."""
+    """Читает поля каталога, используемые для выбора шаблона и печати."""
     mapping = {}
     if not xlsx_path or not os.path.isfile(xlsx_path) or not load_workbook:
         return mapping
@@ -86,7 +86,6 @@ def read_product_map(xlsx_path: str):
         idx_gtin = col.get("GTIN") or col.get("ГТИН") or col.get("gtin")
         idx_pack = col.get("Упаковка") or col.get("УПАКОВКА")
         idx_shelf = col.get("Срок годности") or col.get("СРОК ГОДНОСТИ")
-        idx_part = col.get("Шаблон партии") or col.get("ШАБЛОН ПАРТИИ") or col.get("Партия") or col.get("ПАРТИЯ")
         idx_template = (
             col.get("Шаблон печати") or col.get("ШАБЛОН ПЕЧАТИ")
             or col.get("Шаблон") or col.get("ШАБЛОН")
@@ -137,13 +136,11 @@ def read_product_map(xlsx_path: str):
             if not template_id:
                 template_id = _legacy_template_from_pack(pack_raw)
             shelf_parsed = _parse_shelf_life(shelf)
-            part_tpl = cell(row, idx_part)
             short_from_xlsx = cell(row, idx_short)
             mapping[g] = {
                 "TEMPLATE_ID": template_id,
                 "FORMAT": template_id,  # backward compatibility with older code paths
                 "SHELF": shelf_parsed,
-                "PART_TEMPLATE": part_tpl,
                 "SHORTNAME": short_from_xlsx,
                 "BRAND": cell(row, idx_brand),
                 "CLIENT": cell(row, idx_client),
@@ -167,13 +164,6 @@ def choose_format_for(gtin, product_map, manual_choice):
     return fmt or "16x16"
 
 
-def make_part_num(prod_date, part_template: str | None):
-    yymmdd = prod_date.strftime("%y%m%d") if prod_date else ""
-    if part_template:
-        return part_template.replace("{DATE}", yymmdd)
-    return yymmdd
-
-
 def enrich_row(base_row, idx1, prod_date, exp_days_override, product_map, mode_choice):
     dm, gtin, name = base_row.get("DM", ""), base_row.get("GTIN", ""), base_row.get("NAME", "")
     fmt = choose_format_for(gtin, product_map, mode_choice)
@@ -191,7 +181,6 @@ def enrich_row(base_row, idx1, prod_date, exp_days_override, product_map, mode_c
     if (exp_date is None) and (exp_days_override is not None):
         exp_date = add_days(pd, int(exp_days_override)); log_shelf = f"override_days={exp_days_override}"
 
-    part_num = make_part_num(pd, info.get("PART_TEMPLATE") or "")
     short_excel = (info.get("SHORTNAME") or "").strip()
 
     return {
@@ -205,7 +194,7 @@ def enrich_row(base_row, idx1, prod_date, exp_days_override, product_map, mode_c
         "PROD_DATE": pd.strftime("%d.%m.%Y") if pd else "",
         "NUM": str(idx1),
         "EXP_DATE": exp_date.strftime("%d.%m.%Y") if exp_date else "",
-        "PART_NUM": part_num,
+        "PART_NUM": "",
         "_FORMAT": fmt,
         "_SHELF_LOG": log_shelf,
         "_SHORT_SRC": "Excel" if short_excel else "NAME"

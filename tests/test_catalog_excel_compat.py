@@ -123,7 +123,6 @@ class CatalogExcelAndCompatibilityTests(unittest.TestCase):
             "tnved": "0123456789",
             "short_name": "Short",
             "print_template": "16x16",
-            "batch_template": "{DATE}",
             "client": "Client",
             "display_packaging": "Jar",
         }
@@ -137,6 +136,7 @@ class CatalogExcelAndCompatibilityTests(unittest.TestCase):
         self.assertEqual(prepared.present_fields, frozenset(values))
         self.assertEqual(dict(prepared.records[0]), values)
         self.assertEqual(CATALOG_HEADERS[0], "GTIN")
+        self.assertNotIn("Шаблон партии", CATALOG_HEADERS)
 
     def test_catalog_headers_match_existing_editor_contract(self):
         from bartender_gui import CATALOG_HEADERS as EXISTING_CATALOG_HEADERS
@@ -200,12 +200,31 @@ class CatalogExcelAndCompatibilityTests(unittest.TestCase):
         legacy_mapping = read_product_map(str(path))
 
         self.assertEqual(new_mapping, legacy_mapping)
+        self.assertNotIn("PART_TEMPLATE", new_mapping["0460123"])
+        self.assertIn("Партия", prepared.unknown_headers)
         base_row = {"DM": "code", "GTIN": "0460123", "NAME": "CSV name"}
         arguments = (base_row, 1, dt.date(2026, 9, 11), None)
         self.assertEqual(
             enrich_row(*arguments, legacy_mapping, "Auto"),
             enrich_row(*arguments, new_mapping, "Auto"),
         )
+
+    def test_enrichment_ignores_legacy_batch_template(self):
+        enriched = enrich_row(
+            {"DM": "code", "GTIN": "123", "NAME": "Product"},
+            1,
+            dt.date(2026, 9, 11),
+            None,
+            {
+                "123": {
+                    "TEMPLATE_ID": "16x16",
+                    "PART_TEMPLATE": "LOT-{DATE}",
+                }
+            },
+            "Auto",
+        )
+
+        self.assertEqual(enriched["PART_NUM"], "")
 
 
 if __name__ == "__main__":

@@ -120,6 +120,40 @@ class CatalogStoreTests(unittest.TestCase):
         self.assertEqual((again.added, again.updated, again.unchanged), (0, 0, 1))
         self.assertEqual(self.store.read_snapshot().revision, snapshot.revision)
 
+    def test_import_preview_counts_changes_without_writing(self):
+        self.store.create_product({"gtin": "111", "name": "Existing", "brand": "Keep"})
+        revision = self.store.read_snapshot().revision
+
+        preview = self.store.preview_import(
+            [
+                {"gtin": "111", "name": "Changed"},
+                {"gtin": "222", "name": "Added"},
+            ],
+            present_fields={"gtin", "name"},
+            expected_revision=revision,
+        )
+
+        self.assertEqual((preview.added, preview.updated, preview.unchanged), (1, 1, 0))
+        snapshot = self.store.read_snapshot()
+        self.assertEqual(snapshot.revision, revision)
+        self.assertEqual(snapshot.products[0].name, "Existing")
+
+    def test_import_absent_fields_are_preserved_and_present_empty_is_cleared(self):
+        product = self.store.create_product(
+            {"gtin": "111", "name": "Old", "brand": "Keep", "client": "Clear"}
+        )
+        result = self.store.apply_import(
+            [{"gtin": "111", "name": "New", "client": ""}],
+            present_fields={"gtin", "name", "client"},
+            expected_revision=1,
+        )
+
+        updated = self.store.get_product(product.id)
+        self.assertEqual(result.updated, 1)
+        self.assertEqual(updated.name, "New")
+        self.assertEqual(updated.brand, "Keep")
+        self.assertEqual(updated.client, "")
+
     def test_invalid_import_is_rejected_before_any_write(self):
         with self.assertRaises(CatalogValidationError):
             self.store.apply_import(

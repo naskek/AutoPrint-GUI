@@ -25,8 +25,21 @@ from utils import (
     get_base_dir, load_config, save_config, enum_printers,
     parse_date_ru, only_digits
 )
-from data_processing import (
-    load_kontur_raw, read_product_map, enrich_row
+from data_processing import load_kontur_raw, enrich_row
+from catalog_compat import build_product_map
+from catalog_excel import (
+    CATALOG_HEADERS as SQLITE_CATALOG_HEADERS,
+    FIELD_TO_HEADER,
+    apply_prepared_import,
+    export_catalog_xlsx,
+    prepare_excel_import,
+)
+from catalog_runtime import initialize_catalog_runtime, install_prepared_catalog
+from catalog_store import (
+    CATALOG_FIELDS,
+    CatalogConflictError,
+    CatalogError,
+    get_catalog_db_path,
 )
 from bartender_com import BT
 from crpt_client import (
@@ -41,36 +54,17 @@ from licensing import ensure_license_or_exit
 BASE_DIR = get_base_dir()
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
-PRODUCT_MAP_FILENAME = "product_catalog.xlsx"
-PRODUCT_MAP_OLDNAME = "Список товаров.xlsx"
-PRODUCT_MAP_DEFAULT = os.path.join(BASE_DIR, PRODUCT_MAP_FILENAME)
-PRODUCT_MAP_OLD = os.path.join(BASE_DIR, PRODUCT_MAP_OLDNAME)
 
 APP_TITLE    = "BarTender GUI V3.0"
 APP_VERSION = "3.0"
+DEFAULT_APPEARANCE_MODE = "dark"
 PREVIEW_NAME = "preview.png"
 STICKER_BTW_NAME = "sticker60x40.btw"
 STATS_PATH = os.path.join(CONFIG_DIR, "stats.json")
 DEFAULT_REQ_COLS = ["ShortName", "ShortGTIN", "EXP_DATE", "PROD_DATE", "PART_NUM", "DM", "NUM"]
-CATALOG_HEADERS = [
-    "GTIN",
-    "Наименование",
-    "Бренд",
-    "Вес",
-    "Срок годности",
-    "Разрешительная документация",
-    "от",
-    "до",
-    "Упаковка",
-    "Материал",
-    "Нанесение кодов",
-    "ТН ВЭД",
-    "ShortName",
-    "Шаблон печати",
-    "Шаблон партии",
-    "Клиент",
-    "Упаковка отображаемая",
-]
+PART_MODE_OPTIONS = ("Не использовать", "Ввод вручную")
+CATALOG_HEADERS = list(SQLITE_CATALOG_HEADERS)
+HEADER_TO_FIELD = {header: field for field, header in FIELD_TO_HEADER.items()}
 REPORT_TURNOVER_HEADERS = [
     "Код маркировки",
     "GTIN",
@@ -82,6 +76,109 @@ REPORT_TURNOVER_HEADERS = [
 ]
 REPORT_TURNOVER_DOC_TYPE = "Декларация"
 XLSX_ILLEGAL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+MAIN_LAYOUT_SECTION_NAMES = (
+    "csv_files_section",
+    "params_section",
+    "print_section",
+    "preview_section",
+    "source_section",
+    "csv_status_section",
+    "log_section",
+    "status_bar_frame",
+)
+MAIN_LAYOUT_BLOCK_ORDER = (
+    ("left", "csv_files_section"),
+    ("left", "params_section"),
+    ("left", "print_section"),
+    ("center", "preview_section"),
+    ("right", "source_section"),
+    ("right", "csv_status_section"),
+)
+MAIN_LAYOUT_SECTION_NUMBERS = {
+    "csv_files_section": "1",
+    "params_section": "2",
+    "print_section": "3",
+    "preview_section": "4",
+    "source_section": "5",
+    "csv_status_section": "6",
+}
+PRINT_BATCH_CONTAINER_SCROLLABLE = False
+CSV_FILE_LIST_SCROLL_POLICY = "vertical-auto"
+TOP_LEVEL_MENU_ORDER = ("Каталог", "Шаблоны", "Работа с кодами")
+CODES_MENU_ORDER = ("Проверка кодов", "Отчёт о вводе в оборот")
+PRINT_SELECTION_MODE_RANGE = "Диапазон"
+PRINT_SELECTION_MODE_COUNT = "Количество"
+DEFAULT_PRINT_SELECTION_MODE = PRINT_SELECTION_MODE_RANGE
+
+
+def version_identity_text(version=None):
+    return f"AutoPrint {version or APP_VERSION}"
+
+
+def count_from_range(start, end):
+    start = int(start)
+    end = int(end)
+    if start < 1:
+        raise ValueError("Начальная строка должна быть не меньше 1.")
+    if end < start:
+        raise ValueError("Конечная строка не может быть меньше начальной.")
+    return end - start + 1
+
+
+def end_from_count(start, count):
+    start = int(start)
+    count = int(count)
+    if start < 1:
+        raise ValueError("Начальная строка должна быть не меньше 1.")
+    if count <= 0:
+        raise ValueError("Количество строк должно быть больше 0.")
+    return start + count - 1
+
+
+def resolve_print_selection(mode, start, second_value, total_rows=None):
+    try:
+        start = int(str(start).strip())
+        second_value = int(str(second_value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Заполните параметры строк целыми числами.") from exc
+    if mode == PRINT_SELECTION_MODE_RANGE:
+        end = second_value
+        count = count_from_range(start, end)
+    elif mode == PRINT_SELECTION_MODE_COUNT:
+        count = second_value
+        end = end_from_count(start, count)
+    else:
+        raise ValueError(f"Неизвестный режим печати: {mode}")
+    if total_rows is not None and end > int(total_rows):
+        raise ValueError(
+            f"Конечная строка {end} превышает количество строк CSV: {total_rows}."
+        )
+    return start, end, count
+
+
+def convert_print_selection_value(start, value, from_mode, to_mode):
+    start, end, count = resolve_print_selection(from_mode, start, value)
+    if to_mode == PRINT_SELECTION_MODE_COUNT:
+        return count
+    if to_mode == PRINT_SELECTION_MODE_RANGE:
+        return end
+    raise ValueError(f"Неизвестный режим печати: {to_mode}")
+
+
+def format_production_date(value):
+    return value.strftime("%d.%m.%Y")
+
+
+def production_date_from_text(value, today=None):
+    today = today or dt.date.today()
+    try:
+        return dt.datetime.strptime(str(value or "").strip(), "%d.%m.%Y").date()
+    except (TypeError, ValueError):
+        return today
+
+
+def quick_production_date(day_offset, today=None):
+    return (today or dt.date.today()) + dt.timedelta(days=int(day_offset))
 
 
 def default_template_path(name: str) -> str:
@@ -636,7 +733,7 @@ class App(ctk.CTk):
         super().__init__()
         self.REQ_COLS = list(DEFAULT_REQ_COLS)
         self.title(APP_TITLE)
-        ctk.set_appearance_mode("dark")
+        ctk.set_appearance_mode(DEFAULT_APPEARANCE_MODE)
         ctk.set_default_color_theme("blue")
         self.scale_var = tk.StringVar(master=self, value="auto")
         self.show_preview_var = tk.BooleanVar(master=self, value=True)
@@ -663,6 +760,11 @@ class App(ctk.CTk):
         atexit.register(lambda: save_config(self.cfg))
 
         self.bt = None
+        self.catalog_store = None
+        self.catalog_state = "error"
+        self.catalog_error = "Каталог ещё не инициализирован."
+        self.catalog_revision = None
+        self._catalog_print_active = 0
         self.is_paused = False
         self.csv_path = ""
         self.csv_rows = []
@@ -670,12 +772,13 @@ class App(ctk.CTk):
         self.product_map = {}
 
         self._build_ui()
+        self._install_global_text_editing()
         self._build_menu()
+        self._initialize_catalog_runtime()
         self._start_bt()
         self.protocol("WM_DELETE_WINDOW", self._shutdown_app)
         self._refresh_printers()
         self._load_presets()
-        self._auto_load_product_map()
         # инициализируем список клиентов в выпадающем списке (по умолчанию "-")
         try:
             self._part_missing_logged = False
@@ -722,7 +825,7 @@ class App(ctk.CTk):
         # Прогресс-бар убран — оставляем заглушку
         return
 
-    def _build_ui(self):
+    def _build_legacy_ui(self):
         # верхняя панель: выбор формата/шаблонов/CSV
         top = ctk.CTkFrame(self, corner_radius=12)
         top.pack(fill="x", padx=12, pady=(12, 6))
@@ -811,14 +914,6 @@ class App(ctk.CTk):
         self.csv_list_frame = ctk.CTkScrollableFrame(csv_block, height=200)
         self.csv_list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
-        # справочник
-        prod = ctk.CTkFrame(self, corner_radius=12)
-#         prod.pack(fill="x", padx=12, pady=6)
-        ctk.CTkLabel(prod, text=f"{PRODUCT_MAP_FILENAME} (автозагрузка из C:\\auto_print):").pack(side="left", padx=(8, 6), pady=10)
-        self.prodmap_entry = ctk.CTkEntry(prod, placeholder_text=PRODUCT_MAP_DEFAULT)
-        self.prodmap_entry.pack(side="left", fill="x", expand=True, padx=(4, 4), pady=10)
-        self.prodmap_entry.configure(state="disabled")
-
         # блок обогащения: даты + партия
         enr = ctk.CTkFrame(self, corner_radius=12)
         enr.pack(fill="x", padx=12, pady=6)
@@ -904,6 +999,8 @@ class App(ctk.CTk):
 
         self.bt_status_label = ctk.CTkLabel(btns, text="BarTender: проверка…")
         self.bt_status_label.pack(side="right", padx=12, pady=8)
+        self.catalog_status_label = ctk.CTkLabel(btns, text="Каталог: проверка…")
+        self.catalog_status_label.pack(side="right", padx=12, pady=8)
 
         # панель пакетной печати
         batch_panel = ctk.CTkFrame(self, corner_radius=8)
@@ -958,81 +1055,582 @@ class App(ctk.CTk):
             pass
         self._refresh_bottom_layout()
 
-    def _build_menu(self):
-        """Рисуем кастомную (тёмную) псевдо-меню полосу вместо штатного светлого Menu."""
+    def _build_ui(self):
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=0)
+
+        self.menu_bar_frame = ctk.CTkFrame(
+            self, height=36, corner_radius=0, fg_color=("#f4f6f8", "#1f1f1f")
+        )
+        self.menu_bar_frame.grid(row=0, column=0, sticky="ew")
+        self.menu_bar_frame.grid_propagate(False)
+        self.theme_switch = ctk.CTkSwitch(
+            self.menu_bar_frame, text="Тёмная тема", command=self._toggle_theme
+        )
+        if DEFAULT_APPEARANCE_MODE == "dark":
+            self.theme_switch.select()
+
+        self.main_layout_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.main_layout_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=8)
+        self.main_layout_frame.grid_columnconfigure(0, weight=0, minsize=350)
+        self.main_layout_frame.grid_columnconfigure(1, weight=1, minsize=420)
+        self.main_layout_frame.grid_columnconfigure(2, weight=0, minsize=350)
+        self.main_layout_frame.grid_rowconfigure(0, weight=1)
+
+        self.left_column_frame = ctk.CTkFrame(self.main_layout_frame, fg_color="transparent")
+        self.left_column_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.left_column_frame.grid_columnconfigure(0, weight=1)
+        self.left_column_frame.grid_rowconfigure(0, weight=1)
+
+        self.csv_files_section = self._make_main_section(
+            self.left_column_frame,
+            MAIN_LAYOUT_SECTION_NUMBERS["csv_files_section"],
+            "CSV-файлы",
+        )
+        self.csv_files_section.grid(row=0, column=0, sticky="nsew", pady=(0, 7))
+        csv_files_body = self.csv_files_section.body
+        ctk.CTkLabel(csv_files_body, text="Текущая папка:", anchor="w").pack(
+            fill="x", padx=10, pady=(5, 0)
+        )
+        self.csv_dir_label = ctk.CTkLabel(
+            csv_files_body, text=self._shorten_path(self.csv_dir), anchor="w", width=1
+        )
+        self.csv_dir_label.pack(fill="x", padx=10, pady=(0, 5))
+        self.csv_dir_tooltip = SimpleTooltip(self.csv_dir_label, self.csv_dir)
+        csv_files_body.bind("<Configure>", self._schedule_path_label_refresh, add="+")
+        csv_file_buttons = ctk.CTkFrame(csv_files_body, fg_color="transparent")
+        csv_file_buttons.pack(fill="x", padx=8, pady=(0, 6))
+        ctk.CTkButton(
+            csv_file_buttons, text="Сменить папку", width=110,
+            command=self._choose_csv_dir,
+        ).pack(side="left", padx=2)
+        ctk.CTkButton(
+            csv_file_buttons, text="Вверх", width=70, command=self._go_up_dir
+        ).pack(side="left", padx=2)
+        ctk.CTkButton(
+            csv_file_buttons, text="Обновить", width=80,
+            command=self._render_csv_list,
+        ).pack(side="left", padx=2)
+        self.csv_list_frame = ctk.CTkScrollableFrame(csv_files_body)
+        self.csv_list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         try:
-            # popup-меню
-            view_menu = Menu(self, tearoff=0)
-            view_menu.add_checkbutton(
-                label="Показывать предпросмотр",
-                variable=self.show_preview_var,
-                command=self._toggle_preview_block,
-                onvalue=True,
-                offvalue=False
+            self.csv_list_frame._parent_canvas.bind(
+                "<Configure>", self._schedule_csv_scrollbar_refresh, add="+"
             )
-            view_menu.add_checkbutton(
-                label="Показывать лог",
-                variable=self.show_log_var,
-                command=self._toggle_log_block,
-                onvalue=True,
-                offvalue=False
+        except Exception:
+            pass
+
+        self.params_section = self._make_main_section(
+            self.left_column_frame,
+            MAIN_LAYOUT_SECTION_NUMBERS["params_section"],
+            "Параметры партии",
+        )
+        self.params_section.grid(row=1, column=0, sticky="ew", pady=7)
+        params = self.params_section.body
+        params.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(params, text="Дата производства:", anchor="w").grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        date_row = ctk.CTkFrame(params, fg_color="transparent")
+        date_row.grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+        self.prod_date_entry = ctk.CTkEntry(date_row, width=150)
+        self.prod_date_entry.insert(0, dt.date.today().strftime("%d.%m.%Y"))
+        self.prod_date_entry.pack(side="left", fill="x", expand=True)
+        self.prod_date_button = ctk.CTkButton(
+            date_row, text="📅", width=36, command=self._open_date_picker
+        )
+        self.prod_date_button.pack(side="left", padx=(5, 0))
+        try:
+            self.prod_date_border_default = self.prod_date_entry.cget("border_color")
+        except Exception:
+            self.prod_date_border_default = None
+        vcmd = (self.register(lambda s: re.fullmatch(r"[0-9.]*", s or "") is not None), "%P")
+        self.prod_date_entry.configure(validate="key", validatecommand=vcmd)
+        self.prod_date_entry.bind("<KeyRelease>", self._format_prod_date)
+        ctk.CTkLabel(params, text="Номер партии:", anchor="w").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        self.part_entry = ctk.CTkEntry(params, placeholder_text="Номер партии вручную")
+        self.part_entry.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
+        vcmd_part = (self.register(lambda s: re.fullmatch(r"[0-9]*", s or "") is not None), "%P")
+        self.part_entry.configure(validate="key", validatecommand=vcmd_part)
+        self.part_entry.bind("<KeyRelease>", lambda _e: self._mark_part_entry(False))
+        try:
+            self.part_entry_border_default = self.part_entry.cget("border_color")
+        except Exception:
+            self.part_entry_border_default = None
+        ctk.CTkLabel(params, text="Клиент (стикер):", anchor="w").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        client_box = ctk.CTkFrame(params, fg_color="transparent")
+        client_box.grid(row=2, column=1, sticky="ew", padx=10, pady=5)
+        self.client_entry = ctk.CTkEntry(client_box, placeholder_text="Название клиента")
+        self.client_entry.pack(fill="x", expand=True)
+        self.client_combo = ctk.CTkComboBox(
+            client_box, values=[], state="readonly", command=lambda value: self._on_client_select(value)
+        )
+        self.client_combo.pack(fill="x", expand=True, pady=(5, 0))
+        client_actions = ctk.CTkFrame(params, fg_color="transparent")
+        client_actions.grid(row=3, column=1, sticky="w", padx=8, pady=(0, 5))
+        ctk.CTkButton(client_actions, text="Добавить", width=75, command=self._client_add).pack(side="left", padx=2)
+        ctk.CTkButton(client_actions, text="Очистить", width=75, command=self._client_clear).pack(side="left", padx=2)
+        ctk.CTkButton(client_actions, text="Удалить", width=75, command=self._client_delete).pack(side="left", padx=2)
+        self.show_dialog_var = ctk.BooleanVar(value=self.default_show_dialog)
+        self.show_dialog_chk = ctk.CTkCheckBox(params, text="Показывать диалог печати BarTender", variable=self.show_dialog_var)
+        self.show_dialog_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=4)
+        self.calib_var = ctk.BooleanVar(value=False)
+        self.calib_chk = ctk.CTkCheckBox(params, text="Калибровка TSC: 6 этикеток 'X'", variable=self.calib_var)
+        self.calib_chk.grid(row=5, column=0, columnspan=2, sticky="w", padx=10, pady=4)
+        self.skip_sticker_var = ctk.BooleanVar(value=False)
+        self.skip_sticker_chk = ctk.CTkCheckBox(params, text="Не печатать маркировочный стикер", variable=self.skip_sticker_var)
+        self.skip_sticker_chk.grid(row=6, column=0, columnspan=2, sticky="w", padx=10, pady=(4, 10))
+        self.exp_days_entry = ctk.CTkEntry(params)
+
+        self.print_section = self._make_main_section(
+            self.left_column_frame,
+            MAIN_LAYOUT_SECTION_NUMBERS["print_section"],
+            "Печать",
+        )
+        self.print_section.grid(row=2, column=0, sticky="nsew", pady=(7, 0))
+        print_body = self.print_section.body
+        batch_head = ctk.CTkFrame(print_body, fg_color="transparent")
+        batch_head.pack(fill="x", padx=8, pady=6)
+        ctk.CTkLabel(batch_head, text="Пакет по (шт.):").pack(side="left", padx=(2, 6))
+        self.batch_entry = ctk.CTkEntry(batch_head, width=90)
+        self.batch_entry.insert(0, "0")
+        self.batch_entry.pack(side="left")
+        self.sticker_reprint_btn = ctk.CTkButton(
+            batch_head, text="Перепечатать стикер", width=145, command=self._open_sticker_reprint_dialog
+        )
+        self.sticker_reprint_btn.pack(side="right")
+        actions = ctk.CTkFrame(print_body, fg_color="transparent")
+        actions.pack(fill="x", padx=8, pady=(0, 6))
+        self.print_btn = ctk.CTkButton(
+            actions, text="Печать", command=self._print_range_one_job_via_csv,
+            height=38, fg_color="#198754", hover_color="#157347"
+        )
+        self.print_btn.pack(side="left", fill="x", expand=True, padx=2)
+        self.preview_btn = ctk.CTkButton(actions, text="Предпросмотр", command=self._preview, height=38)
+        self.preview_btn.pack(side="left", fill="x", expand=True, padx=2)
+        self.cancel_btn = ctk.CTkButton(
+            actions, text="Отмена печати", command=self._cancel_print, height=38,
+            fg_color="#dc3545", hover_color="#b02a37"
+        )
+        self.cancel_btn.pack(side="left", fill="x", expand=True, padx=2)
+        self.batch_btns_frame = ctk.CTkFrame(print_body, height=54)
+        self.batch_btns_frame.pack(fill="x", padx=8, pady=(0, 8))
+
+        self.preview_section = self._make_main_section(
+            self.main_layout_frame,
+            MAIN_LAYOUT_SECTION_NUMBERS["preview_section"],
+            "Предпросмотр этикетки",
+        )
+        self.preview_section.grid(row=0, column=1, sticky="nsew", padx=6)
+        preview_body = self.preview_section.body
+        preview_body.grid_columnconfigure(0, weight=1)
+        preview_body.grid_rowconfigure(0, weight=1)
+        self.preview_label = ctk.CTkLabel(
+            preview_body, text="Предпросмотр будет здесь", corner_radius=8,
+            fg_color=("#eef1f4", "#17191c")
+        )
+        self.preview_label.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.preview_current_path = None
+        self._preview_resize_busy = False
+        self.preview_label.bind("<Configure>", self._on_preview_resize)
+        preview_nav = ctk.CTkFrame(preview_body, fg_color="transparent")
+        preview_nav.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+        mode_row = ctk.CTkFrame(preview_nav, fg_color="transparent")
+        mode_row.pack(fill="x", pady=(0, 5))
+        ctk.CTkLabel(mode_row, text="Режим печати:").pack(side="left")
+        self.print_selection_mode_var = tk.StringVar(
+            master=self, value=DEFAULT_PRINT_SELECTION_MODE
+        )
+        self._print_selection_mode = DEFAULT_PRINT_SELECTION_MODE
+        self.print_selection_mode_control = ctk.CTkSegmentedButton(
+            mode_row,
+            values=[PRINT_SELECTION_MODE_RANGE, PRINT_SELECTION_MODE_COUNT],
+            variable=self.print_selection_mode_var,
+            command=self._on_print_selection_mode_change,
+        )
+        self.print_selection_mode_control.pack(side="left", padx=(6, 0))
+        fields_row = ctk.CTkFrame(preview_nav, fg_color="transparent")
+        fields_row.pack(fill="x")
+        ctk.CTkLabel(fields_row, text="С строки:").pack(side="left")
+        self.index_entry = ctk.CTkEntry(fields_row, width=70)
+        self.index_entry.insert(0, "1")
+        self.index_entry.pack(side="left", padx=(5, 12))
+        self.print_selection_second_label = ctk.CTkLabel(fields_row, text="По строку:")
+        self.print_selection_second_label.pack(side="left")
+        self.limit_entry = ctk.CTkEntry(fields_row, width=70)
+        self.limit_entry.pack(side="left", padx=(5, 12))
+        ctk.CTkLabel(fields_row, text="Масштаб: по размеру").pack(side="left", padx=6)
+        ctk.CTkButton(fields_row, text="Вписать", width=75, command=self._fit_current_preview).pack(side="right")
+        self.print_selection_summary_label = ctk.CTkLabel(
+            preview_nav, text="—", anchor="w", text_color=("#65717c", "#aeb6bf")
+        )
+        self.print_selection_summary_label.pack(fill="x", pady=(4, 0))
+        self.index_entry.bind("<KeyRelease>", self._update_print_selection_summary)
+        self.limit_entry.bind("<KeyRelease>", self._update_print_selection_summary)
+        try:
+            self._selection_entry_border_defaults = (
+                self.index_entry.cget("border_color"),
+                self.limit_entry.cget("border_color"),
+            )
+        except Exception:
+            self._selection_entry_border_defaults = (None, None)
+        self.preview_strip_frame = ctk.CTkFrame(preview_body, height=66)
+        self.preview_strip_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        self.preview_strip_frame.grid_propagate(False)
+        ctk.CTkLabel(self.preview_strip_frame, text="Текущая этикетка", anchor="w").pack(side="left", padx=12, pady=10)
+
+        self.right_column_frame = ctk.CTkFrame(self.main_layout_frame, fg_color="transparent")
+        self.right_column_frame.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
+        self.right_column_frame.grid_columnconfigure(0, weight=1)
+        self.right_column_frame.grid_rowconfigure(1, weight=1)
+
+        self.source_section = self._make_main_section(
+            self.right_column_frame,
+            MAIN_LAYOUT_SECTION_NUMBERS["source_section"],
+            "Источник / шаблон / принтер",
+        )
+        self.source_section.grid(row=0, column=0, sticky="ew", pady=(0, 7))
+        source_body = self.source_section.body
+        source_body.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(source_body, text="Выбранный CSV:", anchor="w").grid(
+            row=0, column=0, sticky="w", padx=10, pady=5
+        )
+        self.csv_label = ctk.CTkLabel(source_body, text="Файл не выбран", anchor="w")
+        self.csv_label.grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+        ctk.CTkLabel(source_body, text="Папка:", anchor="w").grid(
+            row=1, column=0, sticky="w", padx=10, pady=5
+        )
+        self.source_dir_value_label = ctk.CTkLabel(
+            source_body, text=self._shorten_path(self.csv_dir), anchor="w", width=1
+        )
+        self.source_dir_value_label.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
+        self.source_dir_tooltip = SimpleTooltip(self.source_dir_value_label, self.csv_dir)
+        source_body.bind("<Configure>", self._schedule_path_label_refresh, add="+")
+        ctk.CTkButton(
+            source_body, text="Выбрать файл", width=110, command=self._choose_csv
+        ).grid(row=2, column=1, sticky="w", padx=10, pady=(2, 7))
+        ctk.CTkLabel(source_body, text="Шаблон:", anchor="w").grid(
+            row=3, column=0, sticky="w", padx=10, pady=5
+        )
+        self.format_combo = ctk.CTkComboBox(
+            source_body,
+            values=["Auto"] + self._manual_template_choices(),
+            state="readonly",
+        )
+        self.format_combo.set("Auto")
+        self.format_combo.grid(row=3, column=1, sticky="ew", padx=10, pady=5)
+        self.format_combo.configure(command=self._on_format_change)
+        ctk.CTkLabel(source_body, text="Принтер:", anchor="w").grid(
+            row=4, column=0, sticky="w", padx=10, pady=(5, 10)
+        )
+        self.prn_combo = ctk.CTkComboBox(
+            source_body,
+            values=["(нет принтеров)"],
+            state="readonly",
+            command=lambda _value: self._refresh_runtime_status(),
+        )
+        self.prn_combo.grid(row=4, column=1, sticky="ew", padx=10, pady=(5, 10))
+        self.btw16_entry = ctk.CTkEntry(source_body)
+        self.btw30_entry = ctk.CTkEntry(source_body)
+
+        self.csv_status_section = self._make_main_section(
+            self.right_column_frame,
+            MAIN_LAYOUT_SECTION_NUMBERS["csv_status_section"],
+            "Проверка данных CSV",
+        )
+        self.csv_status_section.grid(row=1, column=0, sticky="nsew", pady=(7, 0))
+        csv_body = self.csv_status_section.body
+        summary = ctk.CTkFrame(csv_body, fg_color="transparent")
+        summary.pack(fill="x", padx=10, pady=(6, 2))
+        self.csv_summary_label = ctk.CTkLabel(summary, text="CSV не выбран", anchor="w", font=("Arial", 13, "bold"))
+        self.csv_summary_label.pack(fill="x")
+        self.csv_rows_count_label = ctk.CTkLabel(summary, text="Найдено строк: 0", anchor="w")
+        self.csv_rows_count_label.pack(fill="x", pady=(4, 0))
+        self.csv_available_label = ctk.CTkLabel(summary, text="Доступно к печати: 0", anchor="w")
+        self.csv_available_label.pack(fill="x")
+        self.csv_skipped_label = ctk.CTkLabel(summary, text="Пропущено / ошибки: —", anchor="w")
+        self.csv_skipped_label.pack(fill="x")
+        brand_row = ctk.CTkFrame(csv_body, fg_color="transparent")
+        brand_row.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(brand_row, text="Бренд по GTIN:", font=("Arial", 12, "bold")).pack(side="left")
+        self.brand_value_label = ctk.CTkLabel(brand_row, text="-", anchor="w", font=("Arial", 12, "bold"))
+        self.brand_value_label.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        ctk.CTkLabel(
+            csv_body,
+            text="Подробности загрузки и ошибок отображаются в логе.",
+            anchor="w",
+            justify="left",
+            wraplength=300,
+        ).pack(fill="x", padx=10, pady=(4, 10))
+
+        self.log_section = ctk.CTkFrame(self, corner_radius=10)
+        self.log_section.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
+        log_header = ctk.CTkFrame(self.log_section, fg_color="transparent")
+        log_header.pack(fill="x", padx=10, pady=(6, 2))
+        ctk.CTkLabel(log_header, text="Лог выполнения", font=("Arial", 14, "bold")).pack(side="left")
+        ctk.CTkButton(log_header, text="Очистить", width=80, command=self._clear_log).pack(side="right")
+        self.log_frame = ctk.CTkFrame(self.log_section, fg_color="transparent")
+        self.log_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.logbox = ctk.CTkTextbox(self.log_frame, height=125)
+        self.logbox.pack(fill="both", expand=True)
+        self.log_follow = True
+        self._bind_log_scroll_events()
+        self.logger = Logger(self.logbox, self)
+        self._enable_log_copy()
+        try:
+            self._apply_log_selection_theme()
+        except Exception:
+            pass
+
+        self.status_bar_frame = ctk.CTkFrame(self, height=30, corner_radius=0)
+        self.status_bar_frame.grid(row=3, column=0, sticky="ew")
+        self.status_ready_label = ctk.CTkLabel(self.status_bar_frame, text="Готовность: запуск…")
+        self.status_ready_label.pack(side="left", padx=(12, 8))
+        self.status_csv_label = ctk.CTkLabel(self.status_bar_frame, text="CSV: —")
+        self.status_csv_label.pack(side="left", padx=8)
+        self.status_rows_label = ctk.CTkLabel(self.status_bar_frame, text="Строк: 0")
+        self.status_rows_label.pack(side="left", padx=8)
+        self.status_template_label = ctk.CTkLabel(self.status_bar_frame, text="Шаблон: Auto")
+        self.status_template_label.pack(side="left", padx=8)
+        self.status_printer_label = ctk.CTkLabel(self.status_bar_frame, text="Принтер: —")
+        self.status_printer_label.pack(side="left", padx=8)
+        self.bt_status_label = ctk.CTkLabel(self.status_bar_frame, text="BarTender: проверка…")
+        self.bt_status_label.pack(side="right", padx=12)
+        self.catalog_status_label = ctk.CTkLabel(self.status_bar_frame, text="Каталог: проверка…")
+        self.catalog_status_label.pack(side="right", padx=8)
+        self.main_layout_sections = {
+            name: getattr(self, name) for name in MAIN_LAYOUT_SECTION_NAMES
+        }
+        self.main_layout_block_order = MAIN_LAYOUT_BLOCK_ORDER
+
+        try:
+            self._render_csv_list()
+            self._apply_format_ui(self.format_combo.get())
+        except Exception:
+            pass
+        self._refresh_runtime_status()
+
+    def _make_main_section(self, parent, number, title):
+        section = ctk.CTkFrame(parent, corner_radius=10)
+        header = ctk.CTkFrame(section, fg_color="transparent")
+        header.pack(fill="x", padx=10, pady=(8, 3))
+        ctk.CTkLabel(
+            header, text=number, width=26, height=26, corner_radius=13,
+            fg_color="#2f80ed", text_color="#ffffff", font=("Arial", 12, "bold")
+        ).pack(side="left")
+        ctk.CTkLabel(header, text=title, font=("Arial", 14, "bold")).pack(side="left", padx=8)
+        body = ctk.CTkFrame(section, fg_color="transparent")
+        body.pack(fill="both", expand=True)
+        section.body = body
+        return section
+
+    def _fit_current_preview(self):
+        path = getattr(self, "preview_current_path", None)
+        if path:
+            self._show_preview_path(path)
+
+    def _on_print_selection_mode_change(self, mode):
+        previous = getattr(self, "_print_selection_mode", DEFAULT_PRINT_SELECTION_MODE)
+        if mode not in (PRINT_SELECTION_MODE_RANGE, PRINT_SELECTION_MODE_COUNT):
+            return
+        if mode != previous:
+            start = (self.index_entry.get() or "").strip()
+            value = (self.limit_entry.get() or "").strip()
+            if start and value:
+                try:
+                    converted = convert_print_selection_value(
+                        start, value, previous, mode
+                    )
+                    self.limit_entry.delete(0, "end")
+                    self.limit_entry.insert(0, str(converted))
+                except (TypeError, ValueError):
+                    pass
+        self._print_selection_mode = mode
+        self.print_selection_second_label.configure(
+            text="По строку:" if mode == PRINT_SELECTION_MODE_RANGE else "Количество:"
+        )
+        self._update_print_selection_summary()
+
+    def _update_print_selection_summary(self, event=None):
+        state = self.__dict__
+        mode_var = state.get("print_selection_mode_var")
+        index_entry = state.get("index_entry")
+        limit_entry = state.get("limit_entry")
+        summary_label = state.get("print_selection_summary_label")
+        if any(
+            widget is None
+            for widget in (mode_var, index_entry, limit_entry, summary_label)
+        ):
+            return
+        try:
+            mode = mode_var.get() or DEFAULT_PRINT_SELECTION_MODE
+            start, end, count = resolve_print_selection(
+                mode, index_entry.get(), limit_entry.get()
+            )
+            total_rows = len(state.get("csv_rows") or [])
+            text = f"Строки {start}–{end} · {count} шт."
+            if total_rows:
+                text += f" · из {total_rows}"
+        except (TypeError, ValueError):
+            text = "—"
+        try:
+            summary_label.configure(text=text)
+        except Exception:
+            pass
+
+    def _mark_print_selection_valid(self, valid):
+        defaults = getattr(self, "_selection_entry_border_defaults", (None, None))
+        for entry, default in zip((self.index_entry, self.limit_entry), defaults):
+            try:
+                entry.configure(border_color=default if valid and default else "#dc3545")
+            except Exception:
+                pass
+
+    def _resolve_print_selection_for_action(self):
+        try:
+            selection = resolve_print_selection(
+                self.print_selection_mode_var.get(),
+                self.index_entry.get(),
+                self.limit_entry.get(),
+                total_rows=len(self.csv_rows),
+            )
+        except (TypeError, ValueError) as exc:
+            self._mark_print_selection_valid(False)
+            mb.showerror("Диапазон печати", str(exc))
+            return None
+        self._mark_print_selection_valid(True)
+        return selection
+
+    def _resolve_preview_index(self):
+        raw = (self.index_entry.get() or "").strip()
+        try:
+            index = int(raw)
+        except (TypeError, ValueError):
+            mb.showerror("Предпросмотр", "Начальная строка должна быть целым числом.")
+            return None
+        if index < 1 or index > len(self.csv_rows):
+            mb.showerror(
+                "Предпросмотр",
+                f"Начальная строка должна быть от 1 до {len(self.csv_rows)}.",
+            )
+            return None
+        return index
+
+    def _clear_log(self):
+        try:
+            state = self.logbox.cget("state")
+            self.logbox.configure(state="normal")
+            self.logbox.delete("1.0", "end")
+            self.logbox.configure(state=state)
+        except Exception:
+            pass
+
+    def _refresh_runtime_status(self):
+        csv_path = getattr(self, "csv_path", "") or ""
+        rows = len(getattr(self, "csv_rows", []) or [])
+        try:
+            template = self.format_combo.get() or "Auto"
+        except Exception:
+            template = "Auto"
+        try:
+            printer = self.prn_combo.get() or "—"
+        except Exception:
+            printer = "—"
+        try:
+            self.status_ready_label.configure(text="Готовность: готово")
+            self.status_csv_label.configure(text=f"CSV: {os.path.basename(csv_path) if csv_path else '—'}")
+            self.status_rows_label.configure(text=f"Строк: {rows}")
+            self.status_template_label.configure(text=f"Шаблон: {template}")
+            self.status_printer_label.configure(text=f"Принтер: {printer}")
+            self.csv_summary_label.configure(text="CSV загружен" if csv_path else "CSV не выбран")
+            self.csv_rows_count_label.configure(text=f"Найдено строк: {rows}")
+            self.csv_available_label.configure(text=f"Доступно к печати: {rows}")
+            self._schedule_path_label_refresh()
+        except Exception:
+            pass
+        self._update_print_selection_summary()
+
+    def _build_menu(self):
+        """Build the compact task-oriented navigation bar."""
+        try:
+            catalog_menu = Menu(self, tearoff=0)
+            catalog_menu.add_command(
+                label="Редактор каталога товаров",
+                command=self._open_product_catalog,
             )
 
-            scale_menu = Menu(self, tearoff=0)
-            scale_menu.add_radiobutton(
-                label="Авто (по экрану)",
-                value="auto",
-                variable=self.scale_var,
-                command=self._on_scale_change
+            templates_menu = Menu(self, tearoff=0)
+            templates_menu.add_command(
+                label="Редактор шаблонов", command=self._open_template_editor
             )
-            for lbl, val in (("80 %", "0.8"), ("90 %", "0.9"), ("100 %", "1.0"), ("110 %", "1.1")):
-                scale_menu.add_radiobutton(
-                    label=lbl,
-                    value=val,
-                    variable=self.scale_var,
-                    command=self._on_scale_change
-                )
-            view_menu.add_separator()
-            view_menu.add_cascade(label="Масштаб", menu=scale_menu)
+            templates_menu.add_command(
+                label="Принтеры по шаблонам",
+                command=self._open_template_printer_settings,
+            )
+            templates_menu.add_separator()
+            templates_menu.add_command(
+                label="Открыть папку шаблонов", command=self._open_templates_dir
+            )
 
-            service_menu = Menu(self, tearoff=0)
-            service_menu.add_command(label="Редактор шаблонов", command=self._open_template_editor)
-            service_menu.add_command(label="Редактор каталога товаров", command=self._open_product_catalog)
-            service_menu.add_command(label="Открыть папку шаблонов", command=self._open_templates_dir)
-            service_menu.add_command(label="Принтеры по шаблонам", command=self._open_template_printer_settings)
             codes_menu = Menu(self, tearoff=0)
-            codes_menu.add_command(label="Отчет о вводе в оборот", command=self._open_turnover_report_dialog)
-            codes_menu.add_command(label="Проверка кодов", command=self._open_crpt_checker_window)
+            codes_menu.add_command(
+                label=CODES_MENU_ORDER[0], command=self._open_crpt_checker_window
+            )
+            codes_menu.add_command(
+                label=CODES_MENU_ORDER[1],
+                command=self._open_turnover_report_dialog,
+            )
 
-            # Кастомная панель вместо menu-bar
-            # создаём бар до остального контента (если уже есть виджеты - вставляем перед первым)
-            initial_children = list(self.winfo_children())
-            bar = ctk.CTkFrame(self, height=30, corner_radius=0, fg_color="#1f1f1f")
-            if initial_children:
-                bar.pack(fill="x", side="top", before=initial_children[0])
-            else:
-                bar.pack(fill="x", side="top")
-            btn_style = dict(width=90, height=28, corner_radius=0, fg_color="transparent", hover_color="#2a2a2a")
+            bar = self.menu_bar_frame
+            button_style = dict(
+                width=90,
+                height=28,
+                corner_radius=0,
+                fg_color="transparent",
+                hover_color="#2a2a2a",
+            )
 
-            def make_btn(text, menu_obj, width=None):
-                style = dict(btn_style)
-                if width:
+            def make_button(text, menu, width=None):
+                style = dict(button_style)
+                if width is not None:
                     style["width"] = width
-                b = ctk.CTkButton(bar, text=text, **style,
-                                   command=lambda m=menu_obj, w=None: self._popup_menu(m, b))
-                b.pack(side="left", padx=(0, 2), pady=0)
-                return b
+                button = ctk.CTkButton(bar, text=text, **style)
+                button.configure(
+                    command=lambda popup=menu, anchor=button: self._popup_menu(
+                        popup, anchor
+                    )
+                )
+                button.pack(side="left", padx=(0, 2), pady=0)
+                return button
 
-            btn_view = make_btn("Вид", view_menu)
-            btn_service = make_btn("Сервис", service_menu)
-            btn_codes = make_btn("Работа с кодами", codes_menu, width=150)
+            catalog_button = make_button(TOP_LEVEL_MENU_ORDER[0], catalog_menu)
+            templates_button = make_button(TOP_LEVEL_MENU_ORDER[1], templates_menu)
+            codes_button = make_button(TOP_LEVEL_MENU_ORDER[2], codes_menu, width=150)
 
-            self.menu_bar_frame = bar
-            self._menus_popup = [view_menu, codes_menu, service_menu]
-            self._menu_buttons = [btn_view, btn_service, btn_codes]
+            self.version_identity_btn = ctk.CTkButton(
+                bar,
+                text=version_identity_text(),
+                width=112,
+                height=28,
+                corner_radius=0,
+                fg_color="transparent",
+                hover_color=("#dde2e7", "#2a2a2a"),
+                text_color=("#5f6b76", "#aeb6bf"),
+                font=("Arial", 11),
+                command=self._open_version_identity,
+            )
+            self.version_identity_btn.pack(side="right", padx=(4, 12), pady=0)
+            self.theme_switch.pack(side="right", padx=(8, 4), pady=4)
+
+            self._menus_popup = [catalog_menu, templates_menu, codes_menu]
+            self._menu_buttons = [catalog_button, templates_button, codes_button]
             self._update_menu_colors()
         except Exception:
             pass
+
+    def _open_version_identity(self):
+        callback = getattr(self, "_open_version_dialog", None)
+        if callable(callback):
+            callback()
 
     def _popup_menu(self, menu_obj, widget):
         """Показывает всплывающее меню c tk_popup (с нашими цветами)."""
@@ -1064,6 +1662,141 @@ class App(ctk.CTk):
             except Exception:
                 pass
 
+    def _install_global_text_editing(self):
+        self._text_context_target = None
+        menu = Menu(self, tearoff=0)
+        menu.add_command(
+            label="Вырезать",
+            command=lambda: self._text_edit_action(self._text_context_target, "cut"),
+        )
+        menu.add_command(
+            label="Копировать",
+            command=lambda: self._text_edit_action(self._text_context_target, "copy"),
+        )
+        menu.add_command(
+            label="Вставить",
+            command=lambda: self._text_edit_action(self._text_context_target, "paste"),
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="Выделить всё",
+            command=lambda: self._text_edit_action(self._text_context_target, "select_all"),
+        )
+        self._text_context_menu = menu
+        self.bind_all("<KeyPress>", self._on_global_text_hotkey, add="+")
+        self.bind_all("<Button-3>", self._show_text_context_menu, add="+")
+
+    def _is_text_widget(self, widget):
+        return isinstance(
+            widget,
+            (tk.Entry, tk.Text, tk.Spinbox, ttk.Entry, ttk.Combobox, ttk.Spinbox),
+        )
+
+    def _is_editable_text_widget(self, widget):
+        if not self._is_text_widget(widget):
+            return False
+        try:
+            return str(widget.cget("state")) not in ("disabled", "readonly")
+        except Exception:
+            return True
+
+    def _is_log_text_widget(self, widget):
+        logbox = getattr(self, "logbox", None)
+        return widget is logbox or widget is getattr(logbox, "_textbox", None)
+
+    def _selected_text(self, widget):
+        try:
+            if isinstance(widget, tk.Text):
+                return widget.get("sel.first", "sel.last")
+            if widget.selection_present():
+                return widget.get()[widget.index("sel.first"):widget.index("sel.last")]
+        except Exception:
+            pass
+        return ""
+
+    def _delete_text_selection(self, widget):
+        try:
+            if isinstance(widget, tk.Text):
+                widget.delete("sel.first", "sel.last")
+            elif widget.selection_present():
+                widget.delete("sel.first", "sel.last")
+        except Exception:
+            pass
+
+    def _text_edit_action(self, widget, action):
+        if not self._is_text_widget(widget):
+            return None
+        editable = self._is_editable_text_widget(widget)
+        if action in ("cut", "paste") and not editable:
+            return "break"
+        if action == "select_all":
+            try:
+                if isinstance(widget, tk.Text):
+                    widget.tag_add("sel", "1.0", "end-1c")
+                    widget.mark_set("insert", "1.0")
+                else:
+                    widget.selection_range(0, "end")
+                    widget.icursor("end")
+            except Exception:
+                pass
+            return "break"
+        if action in ("copy", "cut"):
+            text = self._selected_text(widget)
+            if text:
+                try:
+                    self.clipboard_clear()
+                    self.clipboard_append(text)
+                except Exception:
+                    pass
+                if action == "cut" and editable:
+                    self._delete_text_selection(widget)
+            return "break"
+        if action == "paste":
+            try:
+                text = self.clipboard_get()
+            except Exception:
+                text = ""
+            if text:
+                self._delete_text_selection(widget)
+                try:
+                    widget.insert("insert", text)
+                except Exception:
+                    pass
+            return "break"
+        return None
+
+    def _on_global_text_hotkey(self, event):
+        if not (int(getattr(event, "state", 0)) & 0x4):
+            return None
+        actions = {65: ("a", "select_all"), 67: ("c", "copy"),
+                   86: ("v", "paste"), 88: ("x", "cut")}
+        binding = actions.get(int(getattr(event, "keycode", -1)))
+        if binding is None:
+            return None
+        latin_key, action = binding
+        if str(getattr(event, "keysym", "")).lower() == latin_key:
+            return None
+        return self._text_edit_action(getattr(event, "widget", None), action)
+
+    def _show_text_context_menu(self, event):
+        widget = getattr(event, "widget", None)
+        if self._is_log_text_widget(widget) or not self._is_editable_text_widget(widget):
+            return None
+        self._text_context_target = widget
+        try:
+            widget.focus_set()
+            if isinstance(widget, tk.Text):
+                widget.mark_set("insert", f"@{event.x},{event.y}")
+            else:
+                widget.icursor(f"@{event.x}")
+            self._text_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            try:
+                self._text_context_menu.grab_release()
+            except Exception:
+                pass
+        return "break"
+
     def _toggle_theme(self):
         if self.theme_switch.get() == 1:
             ctk.set_appearance_mode("dark")
@@ -1091,6 +1824,8 @@ class App(ctk.CTk):
 
     def _refresh_bottom_layout(self):
         """Подгоняет нижнюю панель, когда скрываем/показываем лог или превью."""
+        if hasattr(self, "main_layout_frame"):
+            return
         try:
             preview_widget = getattr(self, "preview_label", None)
             log_widget = getattr(self, "log_frame", None)
@@ -1116,6 +1851,19 @@ class App(ctk.CTk):
             pass
 
     def _toggle_preview_block(self):
+        section = getattr(self, "preview_section", None)
+        if section is not None:
+            try:
+                show = bool(self.show_preview_var.get())
+                if show:
+                    self.main_layout_frame.grid_columnconfigure(1, weight=1, minsize=420)
+                    section.grid()
+                else:
+                    section.grid_remove()
+                    self.main_layout_frame.grid_columnconfigure(1, weight=0, minsize=0)
+            except Exception:
+                pass
+            return
         widget = getattr(self, "preview_label", None)
         if not widget:
             return
@@ -1135,6 +1883,13 @@ class App(ctk.CTk):
         self._refresh_bottom_layout()
 
     def _toggle_log_block(self):
+        section = getattr(self, "log_section", None)
+        if section is not None:
+            try:
+                section.grid() if bool(self.show_log_var.get()) else section.grid_remove()
+            except Exception:
+                pass
+            return
         frame = getattr(self, "log_frame", None)
         if not frame:
             return
@@ -1320,23 +2075,21 @@ class App(ctk.CTk):
 
     def _part_mode_label(self, mode: str) -> str:
         mapping = {
-            "blank": "Пусто",
-            "manual": "Вручную",
-            "catalog": "Из шаблона партии",
+            "blank": "Не использовать",
+            "manual": "Ввод вручную",
         }
-        return mapping.get(self._normalize_part_mode(mode), "Пусто")
+        return mapping.get(self._normalize_part_mode(mode), "Не использовать")
 
     def _part_mode_from_label(self, label: str) -> str:
         reverse = {
-            "Пусто": "blank",
-            "Вручную": "manual",
-            "Из шаблона партии": "catalog",
+            "Не использовать": "blank",
+            "Ввод вручную": "manual",
         }
         return reverse.get(str(label or "").strip(), "blank")
 
     def _template_required_fields(self, part_mode: str):
         required = ["ShortName", "ShortGTIN", "EXP_DATE", "PROD_DATE", "DM", "NUM"]
-        if self._normalize_part_mode(part_mode) in ("manual", "catalog"):
+        if self._normalize_part_mode(part_mode) == "manual":
             required.append("PART_NUM")
         return required
 
@@ -1482,7 +2235,7 @@ class App(ctk.CTk):
 
             row += 1
             ctk.CTkLabel(body, text="Режим партии:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=6)
-            part_options = ["Пусто", "Вручную", "Из шаблона партии"]
+            part_options = list(PART_MODE_OPTIONS)
             part_var = tk.StringVar(value=self._part_mode_label(existing.get("part_mode")))
             ctk.CTkOptionMenu(body, variable=part_var, values=part_options).grid(row=row, column=1, sticky="w", pady=6)
 
@@ -1656,18 +2409,14 @@ class App(ctk.CTk):
             if template_id in ("16x16", "30x20"):
                 mb.showerror("Шаблон", "Базовые шаблоны 16x16 и 30x20 удалять нельзя.")
                 return
-            usage_count = 0
-            path = str(self.cfg.get("product_map_path") or "").strip()
+            if not self._require_catalog_ready("Проверка использования шаблона"):
+                return
             try:
-                if path and os.path.isfile(path):
-                    rows = self._load_catalog_rows(path)
-                    usage_count = sum(
-                        1
-                        for row in rows
-                        if self._normalize_template_id(row.get("Шаблон печати", "")) == template_id
-                    )
-            except Exception:
-                usage_count = 0
+                usage_count = self.catalog_store.count_template_usage(template_id)
+            except Exception as exc:
+                self._set_catalog_status("error", f"Ошибка чтения каталога: {exc}")
+                mb.showerror("Шаблон", f"Не удалось проверить использование шаблона:\n{exc}")
+                return
             prompt = f"Удалить шаблон '{template_id}'?"
             if usage_count:
                 prompt += f"\nОн назначен товарам: {usage_count}."
@@ -1851,15 +2600,7 @@ class App(ctk.CTk):
             )
         except Exception:
             pass
-        if available:
-            return
-        for name in ("preview_btn", "print_btn", "sticker_reprint_btn"):
-            try:
-                button = getattr(self, name, None)
-                if button:
-                    button.configure(state="disabled")
-            except Exception:
-                pass
+        self._update_action_capabilities()
 
     def _require_bartender(self, action: str):
         if self._bartender_available():
@@ -1874,6 +2615,9 @@ class App(ctk.CTk):
             pass
         mb.showwarning("BarTender недоступен", message)
         return False
+
+    def _require_print_capabilities(self, action: str):
+        return self._require_catalog_ready(action) and self._require_bartender(action)
 
     def _shutdown_app(self):
         if getattr(self, "_shutdown_started", False):
@@ -1908,9 +2652,10 @@ class App(ctk.CTk):
             "blank": "blank",
             "empty": "blank",
             "пусто": "blank",
-            "catalog": "catalog",
-            "auto": "catalog",
-            "из шаблона партии": "catalog",
+            "не использовать": "blank",
+            "catalog": "blank",
+            "auto": "blank",
+            "из шаблона партии": "blank",
         }
         return aliases.get(mode, "blank")
 
@@ -2164,6 +2909,7 @@ class App(ctk.CTk):
 
     def _on_format_change(self, value):
         self._apply_format_ui(value)
+        self._refresh_runtime_status()
 
     def _load_presets(self):
         p16 = self._resolve_template_btw_path("16x16")
@@ -2173,250 +2919,103 @@ class App(ctk.CTk):
         if p30 and os.path.isfile(p30):
             self.btw30_entry.insert(0, p30)
 
-    def _catalog_has_data(self, path):
-        """Проверяет, есть ли данные (не только заголовки) в каталоге."""
-        if not os.path.isfile(path):
-            return False
+    def _set_catalog_status(self, state, error=""):
+        self.catalog_state = state
+        self.catalog_error = str(error or "")
+        text = "Каталог: доступен" if state == "ready" else "Каталог: недоступен"
         try:
-            from openpyxl import load_workbook
-            wb = load_workbook(path, data_only=True, read_only=True)
-            ws = wb.active
-            if ws.max_row <= 1:
-                return False
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                if any(cell not in (None, "") for cell in row):
-                    return True
-            return False
-        except Exception:
-            return False
-
-    def _log_catalog_info(self, path, prefix="Каталог"):
-        """Логирует базовую информацию о файле каталога (заголовки, строки, непустые поля)."""
-        try:
-            from openpyxl import load_workbook
-        except Exception as e:
-            try:
-                if getattr(self, "logger", None):
-                    self.logger.err(f"[{prefix}] openpyxl недоступен: {e}")
-            except Exception:
-                pass
-            return
-        if not os.path.isfile(path):
-            try:
-                if getattr(self, "logger", None):
-                    self.logger.err(f"[{prefix}] файл не найден: {path}")
-            except Exception:
-                pass
-            return
-        try:
-            wb = load_workbook(path, data_only=True, read_only=True)
-            ws = wb.active
-            headers = [str(c.value or "").replace("\n", " ").replace("\r", " ").strip() for c in (ws[1] if ws.max_row else [])]
-            rows = list(ws.iter_rows(min_row=2, values_only=True))
-            total_rows = len(rows)
-            nonempty = {}
-            if headers:
-                for i, h in enumerate(headers):
-                    cnt = 0
-                    for r in rows:
-                        if i < len(r) and r[i] not in (None, ""):
-                            cnt += 1
-                    nonempty[h] = cnt
-            msg = (f"[{prefix}] {path}: заголовков={len(headers)}, строк={total_rows}, "
-                   f"непустые по колонкам={nonempty}")
-            if getattr(self, "logger", None):
-                self.logger.log(msg)
-        except Exception as e:
-            try:
-                if getattr(self, "logger", None):
-                    self.logger.err(f"[{prefix}] Не удалось прочитать {path}: {e}")
-            except Exception:
-                pass
-
-    def _migrate_product_catalog(self):
-        """Если новый каталог пуст/отсутствует, а старый есть — копируем старый как источник данных."""
-        new_path = PRODUCT_MAP_DEFAULT
-        old_path = PRODUCT_MAP_OLD
-        if os.path.isfile(old_path):
-            needs_copy = (not os.path.isfile(new_path)) or (not self._catalog_has_data(new_path))
-            if needs_copy:
-                try:
-                    import shutil as _shutil
-                    _shutil.copy2(old_path, new_path)
-                    try:
-                        if getattr(self, "logger", None):
-                            self.logger.log(f"[INFO] Справочник скопирован: {PRODUCT_MAP_OLDNAME} -> {PRODUCT_MAP_FILENAME}")
-                            self._log_catalog_info(old_path, prefix="Каталог (старый)")
-                            self._log_catalog_info(new_path, prefix="Каталог (новый)")
-                    except Exception:
-                        pass
-                except Exception as e:
-                    try:
-                        self.logger.err(f"Не удалось скопировать старый справочник: {e}")
-                    except Exception:
-                        pass
-
-    def _auto_load_product_map(self):
-
-        path = PRODUCT_MAP_DEFAULT
-        # миграция старого файла, если он есть
-        self._migrate_product_catalog()
-        # если нет файла - попросим указать и скопируем под новым именем
-        if not os.path.isfile(path):
-            try:
-                self.logger.err(f"Справочник не найден: {path}. Укажи '{PRODUCT_MAP_FILENAME}' (будет скопирован в папку программы).")
-            except Exception:
-                pass
-            p = fd.askopenfilename(title=f"Укажи {PRODUCT_MAP_FILENAME}", filetypes=[("Excel", "*.xlsx")])
-            if p and os.path.isfile(p):
-                try:
-                    os.makedirs(BASE_DIR, exist_ok=True)
-                except Exception:
-                    pass
-                try:
-                    import shutil as _shutil
-                    _shutil.copy2(p, path)
-                except Exception:
-                    path = p  # если копия не удалась - используем выбранный путь напрямую
-
-        try:
-            self.prodmap_entry.configure(state="normal")
-            self.prodmap_entry.delete(0, "end")
-            self.prodmap_entry.insert(0, path)
-            self.prodmap_entry.configure(state="disabled")
+            self.catalog_status_label.configure(text=text)
         except Exception:
             pass
+        self._update_action_capabilities()
 
-        self._reload_product_map_from_path(path)
+    def _update_action_capabilities(self):
+        available = self._bartender_available() and self.catalog_state == "ready"
+        for name in ("preview_btn", "print_btn", "sticker_reprint_btn"):
+            try:
+                button = getattr(self, name, None)
+                if button:
+                    button.configure(state="normal" if available else "disabled")
+            except Exception:
+                pass
 
-    def _reload_product_map_from_path(self, path):
-        if os.path.isfile(path):
-            try:
-                self._log_catalog_info(path, prefix="Каталог (загрузка)")
-            except Exception:
-                pass
-            try:
-                self.product_map = read_product_map(path) or {}
-            except Exception as e:
-                self.product_map = {}
-                self.logger.err(f"Ошибка чтения справочника: {e}")
-            self.cfg["product_map_path"] = path
-            save_config(self.cfg)
-            cnt = len([k for k in self.product_map.keys() if k != "_HAS_SHORT_COL"])
-            has_short = bool(self.product_map.get("_HAS_SHORT_COL"))
-            try:
-                self.logger.log(f"Справочник загружен: {path} (записей={cnt}); ShortName-столбец: {has_short}")
-            except Exception:
-                pass
-            try:
-                self._update_brand_hint()
-            except Exception:
-                pass
+    def _initialize_catalog_runtime(self):
+        result = initialize_catalog_runtime(BASE_DIR)
+        self.catalog_store = result.store
+        self.catalog_revision = (
+            result.snapshot.revision if result.snapshot is not None else None
+        )
+        self.product_map = result.product_map if result.ready else {}
+        self._set_catalog_status(result.state, result.error)
+        if result.ready:
+            count = len(result.snapshot.products) if result.snapshot else 0
+            message = f"Каталог SQLite загружен: {get_catalog_db_path(BASE_DIR)} (товаров={count})"
+            if result.migration_source:
+                message += f"; миграция из {result.migration_source}"
+            if result.duplicate_count:
+                message += f"; дубли GTIN: {result.duplicate_count} (последняя строка использована)"
+            self.logger.log(message)
+            self._update_brand_hint()
         else:
-            try:
-                self.logger.err(f"Справочник не найден: {path} или не установлен openpyxl (pip install openpyxl)")
-            except Exception:
-                pass
+            self.logger.err(result.error)
 
-    def _ensure_product_catalog_file(self, path=None):
-        """Создаёт product_catalog.xlsx с нужными заголовками, если нет."""
+    def _refresh_catalog_snapshot(self):
+        if self._catalog_print_active:
+            raise CatalogError("Каталог нельзя обновлять во время печати.")
+        if self.catalog_store is None:
+            raise CatalogError(self.catalog_error or "Каталог недоступен.")
         try:
-            from openpyxl import Workbook
-        except ImportError:
-            mb.showerror("Каталог товаров", "Не установлена библиотека openpyxl (нужна для редактирования каталога).")
-            return None
-        path = path or PRODUCT_MAP_DEFAULT
+            snapshot = self.catalog_store.read_snapshot()
+            product_map = build_product_map(
+                snapshot.products, has_short_col=snapshot.has_short_col
+            )
+        except Exception as exc:
+            self._set_catalog_status("error", f"Ошибка обновления каталога: {exc}")
+            raise
+        self.catalog_revision = snapshot.revision
+        self.product_map = product_map
+        self._set_catalog_status("ready")
+        self._update_brand_hint()
+        return snapshot
+
+    def _require_catalog_ready(self, action):
+        if self.catalog_state == "ready" and self.catalog_store is not None:
+            return True
+        message = f"{action} недоступен: {self.catalog_error or 'каталог товаров не открыт.'}"
         try:
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            self.logger.err(message)
         except Exception:
             pass
-        if not os.path.isfile(path):
-            try:
-                wb = Workbook()
-                ws = wb.active
-                ws.append(CATALOG_HEADERS)
-                wb.save(path)
-                if getattr(self, "logger", None):
-                    self.logger.log(f"[INFO] Создан новый каталог товаров: {path}")
-            except Exception as e:
-                mb.showerror("Каталог товаров", f"Не удалось создать файл каталога:\n{e}")
-                return None
-        return path
+        mb.showwarning("Каталог недоступен", message)
+        return False
 
-    def _load_catalog_rows(self, path):
-        """Читает каталог товаров в виде списка dict по CATALOG_HEADERS."""
-        try:
-            from openpyxl import load_workbook
-        except ImportError:
-            mb.showerror("Каталог товаров", "Не установлена библиотека openpyxl.")
-            return []
-        try:
-            wb = load_workbook(path, data_only=True)
-            ws = wb.active
-            if ws.max_row < 1:
-                return []
-            def _norm_header(h):
-                if h is None:
-                    return ""
-                h = str(h).replace("\n", " ").replace("\r", " ")
-                h = re.sub(r"\s+", " ", h).strip()
-                hlow = h.lower()
-                aliases = {
-                    '"разрешительная документация"': "Разрешительная документация",
-                    "разрешительная документация": "Разрешительная документация",
-                    "разрешительная док": "Разрешительная документация",
-                    "объем": "Вес",
-                    "объем, мл": "Вес",
-                    "объем мл": "Вес",
-                    "объем (мл)": "Вес",
-                }
-                return aliases.get(hlow, h)
+    @staticmethod
+    def _catalog_product_to_row(product):
+        row = {
+            FIELD_TO_HEADER[field]: str(getattr(product, field, "") or "")
+            for field in CATALOG_FIELDS
+        }
+        row["_id"] = product.id
+        return row
 
-            headers_raw = [c.value for c in ws[1]]
-            headers = [_norm_header(v) for v in headers_raw]
-            idx = {h.lower(): i for i, h in enumerate(headers)}
-            rows = []
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                item = {}
-                for h in CATALOG_HEADERS:
-                    col = idx.get(h.lower())
-                    v = row[col] if (col is not None and col < len(row)) else ""
-                    item[h] = "" if v is None else str(v)
-                rows.append(item)
-            return rows
-        except Exception as e:
-            mb.showerror("Каталог товаров", f"Не удалось прочитать файл:\n{e}")
-            return []
-
-    def _write_catalog_rows(self, path, rows):
-        """Перезаписывает каталог товаров стандартными заголовками."""
-        try:
-            from openpyxl import Workbook
-        except ImportError:
-            mb.showerror("Каталог товаров", "Не установлена библиотека openpyxl.")
-            return False
-        try:
-            wb = Workbook()
-            ws = wb.active
-            ws.append(CATALOG_HEADERS)
-            for item in rows:
-                ws.append([item.get(h, "") for h in CATALOG_HEADERS])
-            wb.save(path)
-            return True
-        except Exception as e:
-            mb.showerror("Каталог товаров", f"Не удалось сохранить файл:\n{e}")
-            return False
+    @staticmethod
+    def _catalog_row_to_values(row):
+        return {
+            HEADER_TO_FIELD[header]: str(row.get(header, "") or "").strip()
+            for header in CATALOG_HEADERS
+        }
 
     def _open_product_catalog(self):
         """Простой редактор каталога товаров (add/edit/delete)."""
-        try:
-            current_path = (self.prodmap_entry.get() or "").strip()
-        except Exception:
-            current_path = ""
-        path = self._ensure_product_catalog_file(current_path or PRODUCT_MAP_DEFAULT)
-        if not path:
-            return
-        rows = self._load_catalog_rows(path)
+        rows = []
+        editor_revision = None
+        if self.catalog_store is not None and self.catalog_state == "ready":
+            try:
+                snapshot = self.catalog_store.read_snapshot()
+                rows = [self._catalog_product_to_row(item) for item in snapshot.products]
+                editor_revision = snapshot.revision
+            except Exception as exc:
+                self._set_catalog_status("error", f"Ошибка чтения каталога: {exc}")
 
         win = ctk.CTkToplevel(self)
         win.title("Каталог товаров")
@@ -2517,9 +3116,68 @@ class App(ctk.CTk):
             update_headings()
             apply_filters()
 
+        def reload_from_store():
+            nonlocal editor_revision
+            if self.catalog_store is None:
+                rows[:] = []
+                editor_revision = None
+            else:
+                snapshot = self.catalog_store.read_snapshot()
+                rows[:] = [self._catalog_product_to_row(item) for item in snapshot.products]
+                editor_revision = snapshot.revision
+            refresh_tree()
+
+        def handle_catalog_error(exc):
+            if isinstance(exc, CatalogConflictError):
+                mb.showwarning(
+                    "Каталог товаров",
+                    "Каталог был изменён. Данные обновлены; повторите действие.",
+                )
+                try:
+                    reload_from_store()
+                except Exception as refresh_exc:
+                    self._set_catalog_status("error", str(refresh_exc))
+                return
+            mb.showerror("Каталог товаров", f"Операция не выполнена:\n{exc}")
+
         def edit_item(existing=None, idx=None):
             dlg = ctk.CTkToplevel(win)
             dlg.title("Добавить товар" if existing is None else "Редактировать товар")
+            dlg.transient(win)
+            dialog_closed = False
+
+            def close_dialog():
+                nonlocal dialog_closed
+                if dialog_closed:
+                    return
+                dialog_closed = True
+                try:
+                    dlg.grab_release()
+                except Exception:
+                    pass
+                try:
+                    dlg.destroy()
+                finally:
+                    try:
+                        if win.winfo_exists():
+                            win.grab_set()
+                            win.lift()
+                            win.focus_force()
+                    except Exception:
+                        pass
+
+            def activate_dialog():
+                if dialog_closed:
+                    return
+                try:
+                    dlg.grab_set()
+                    dlg.lift()
+                    dlg.focus_force()
+                except Exception:
+                    pass
+
+            dlg.protocol("WM_DELETE_WINDOW", close_dialog)
+            dlg.after(20, activate_dialog)
             screen_h = 760
             try:
                 screen_h = max(520, int(dlg.winfo_screenheight() or 760) - 120)
@@ -2588,28 +3246,34 @@ class App(ctk.CTk):
                     return
                 item = {h: entries[h].get().strip() for h in CATALOG_HEADERS}
                 item["Шаблон печати"] = template_id
-                if existing is None:
-                    rows.append(item)
-                else:
-                    rows[idx] = item
-                if self._write_catalog_rows(path, rows):
-                    rows[:] = self._load_catalog_rows(path)
-                    refresh_tree()
-                    self._reload_product_map_from_path(path)
-                    apply_filters()
-                    try:
-                        if getattr(self, "logger", None):
-                            self.logger.log(f"[INFO] Каталог обновлён: {path} (товаров={len(rows)})")
-                    except Exception:
-                        pass
-                    dlg.destroy()
-                else:
-                    mb.showerror("Каталог товаров", "Не удалось сохранить каталог. Проверьте, не открыт ли файл в Excel.")
+                if self._catalog_print_active:
+                    mb.showwarning("Каталог товаров", "Дождитесь завершения печати.")
+                    return
+                try:
+                    if self.catalog_store is None:
+                        raise CatalogError(self.catalog_error or "Каталог недоступен.")
+                    values = self._catalog_row_to_values(item)
+                    if existing is None:
+                        self.catalog_store.create_product(
+                            values, expected_revision=editor_revision
+                        )
+                    else:
+                        self.catalog_store.update_product(
+                            existing["_id"],
+                            values,
+                            expected_revision=editor_revision,
+                        )
+                    self._refresh_catalog_snapshot()
+                    reload_from_store()
+                    self.logger.log(f"[INFO] Каталог SQLite обновлён (товаров={len(rows)})")
+                    close_dialog()
+                except Exception as exc:
+                    handle_catalog_error(exc)
 
             btn_frame = ctk.CTkFrame(dlg)
             btn_frame.pack(fill="x", padx=10, pady=(0, 10))
             ctk.CTkButton(btn_frame, text="Сохранить", command=on_save).pack(side="left", padx=6)
-            ctk.CTkButton(btn_frame, text="Отмена", command=dlg.destroy).pack(side="left", padx=6)
+            ctk.CTkButton(btn_frame, text="Отмена", command=close_dialog).pack(side="left", padx=6)
 
         def on_add():
             edit_item()
@@ -2628,61 +3292,156 @@ class App(ctk.CTk):
             idx = int(sel[0])
             if not mb.askyesno("Каталог товаров", "Удалить выбранный товар?"):
                 return
-            rows.pop(idx)
-            if self._write_catalog_rows(path, rows):
-                rows[:] = self._load_catalog_rows(path)
-                refresh_tree()
-                self._reload_product_map_from_path(path)
-                try:
-                    if getattr(self, "logger", None):
-                        self.logger.log(f"[INFO] Товар удалён. Всего товаров: {len(rows)}")
-                except Exception:
-                    pass
+            if self._catalog_print_active:
+                mb.showwarning("Каталог товаров", "Дождитесь завершения печати.")
+                return
+            try:
+                if self.catalog_store is None:
+                    raise CatalogError(self.catalog_error or "Каталог недоступен.")
+                self.catalog_store.delete_product(
+                    rows[idx]["_id"], expected_revision=editor_revision
+                )
+                self._refresh_catalog_snapshot()
+                reload_from_store()
+                self.logger.log(f"[INFO] Товар удалён. Всего товаров: {len(rows)}")
+            except Exception as exc:
+                handle_catalog_error(exc)
+
+        def on_import():
+            nonlocal editor_revision
+            if self._catalog_print_active:
+                mb.showwarning("Каталог товаров", "Дождитесь завершения печати.")
+                return
+            source = fd.askopenfilename(
+                title="Импорт каталога из Excel",
+                filetypes=[("Excel", "*.xlsx")],
+            )
+            if not source:
+                return
+            try:
+                prepared = prepare_excel_import(source)
+            except Exception as exc:
+                mb.showerror("Импорт каталога", f"Не удалось прочитать файл:\n{exc}")
+                return
+            warnings = []
+            if prepared.duplicates:
+                warnings.append(
+                    f"Дубли GTIN: {len(prepared.duplicates)} (используется последняя строка)"
+                )
+            if prepared.unknown_headers:
+                warnings.append(
+                    "Неизвестные колонки: " + ", ".join(prepared.unknown_headers)
+                )
+            if prepared.errors:
+                details = "\n".join(issue.message for issue in prepared.errors[:10])
+                mb.showerror(
+                    "Импорт каталога",
+                    f"Файл не прошёл проверку. Изменений нет.\n\n{details}",
+                )
+                return
+            try:
+                if self.catalog_store is None:
+                    db_path = get_catalog_db_path(BASE_DIR)
+                    if db_path.exists():
+                        raise CatalogError(
+                            "Существующий catalog.sqlite3 недоступен. "
+                            "Импорт не будет заменять его автоматически."
+                        )
+                    preview = None
+                else:
+                    preview = self.catalog_store.preview_import(
+                        prepared.records,
+                        present_fields=prepared.present_fields,
+                        has_short_col=prepared.has_short_col,
+                        expected_revision=editor_revision,
+                    )
+            except Exception as exc:
+                handle_catalog_error(exc)
+                return
+            lines = [
+                f"Файл: {prepared.source_path.name}",
+                f"Валидных товаров: {len(prepared.records)}",
+            ]
+            if preview is not None:
+                lines.extend(
+                    (
+                        f"Будет добавлено: {preview.added}",
+                        f"Будет обновлено: {preview.updated}",
+                        f"Без изменений: {preview.unchanged}",
+                    )
+                )
             else:
-                mb.showerror("Каталог товаров", "Не удалось удалить запись (проверьте, не открыт ли файл).")
+                lines.append(f"Будет добавлено: {len(prepared.records)}")
+            lines.extend(warnings)
+            lines.append("\nПрименить импорт?")
+            if not mb.askyesno("Импорт каталога", "\n".join(lines)):
+                return
+            try:
+                if self.catalog_store is None:
+                    result = install_prepared_catalog(prepared, get_catalog_db_path(BASE_DIR))
+                    if not result.ready:
+                        raise CatalogError(result.error)
+                    self.catalog_store = result.store
+                    self.product_map = result.product_map
+                    self.catalog_revision = result.snapshot.revision
+                    self._set_catalog_status("ready")
+                else:
+                    apply_prepared_import(
+                        self.catalog_store,
+                        prepared,
+                        expected_revision=editor_revision,
+                    )
+                    self._refresh_catalog_snapshot()
+                reload_from_store()
+                mb.showinfo("Импорт каталога", "Импорт успешно завершён.")
+            except Exception as exc:
+                handle_catalog_error(exc)
+
+        def on_export():
+            if self.catalog_store is None or self.catalog_state != "ready":
+                mb.showwarning(
+                    "Экспорт каталога", self.catalog_error or "Каталог недоступен."
+                )
+                return
+            path = fd.asksaveasfilename(
+                title="Экспорт каталога в Excel",
+                defaultextension=".xlsx",
+                filetypes=[("Excel", "*.xlsx")],
+                initialfile="product_catalog_export.xlsx",
+            )
+            if not path:
+                return
+            try:
+                snapshot = self.catalog_store.read_snapshot()
+                export_catalog_xlsx(snapshot.products, path)
+                mb.showinfo("Экспорт каталога", f"Каталог экспортирован:\n{path}")
+            except Exception as exc:
+                mb.showerror("Экспорт каталога", f"Экспорт не выполнен:\n{exc}")
 
         btns = ctk.CTkFrame(win)
         btns.pack(fill="x", padx=12, pady=(0, 10))
         ctk.CTkButton(btns, text="Добавить", command=on_add).pack(side="left", padx=4)
         ctk.CTkButton(btns, text="Редактировать", command=on_edit).pack(side="left", padx=4)
         ctk.CTkButton(btns, text="Удалить", command=on_delete).pack(side="left", padx=4)
+        ctk.CTkButton(btns, text="Импорт Excel", command=on_import).pack(side="left", padx=4)
+        ctk.CTkButton(btns, text="Экспорт Excel", command=on_export).pack(side="left", padx=4)
         ctk.CTkButton(btns, text="Закрыть", command=win.destroy).pack(side="right", padx=4)
 
         refresh_tree()
 
-    def _get_product_catalog_path(self):
+    def _build_report_catalog_map(self):
+        if not self._require_catalog_ready("Формирование отчёта"):
+            return None
         try:
-            path = (self.prodmap_entry.get() or "").strip()
-        except Exception:
-            path = ""
-        if not path:
-            try:
-                path = (self.cfg.get("product_map_path") or "").strip()
-            except Exception:
-                path = ""
-        return path or PRODUCT_MAP_DEFAULT
-
-    def _build_report_catalog_map(self, path):
-        rows = []
-        try:
-            rows = self._load_catalog_rows(path)
-        except Exception:
-            rows = []
-        mapping = {}
-        dupes = 0
-        for item in rows or []:
-            g = only_digits(item.get("GTIN", ""))
-            if not g:
-                continue
-            if g in mapping:
-                dupes += 1
-            mapping[g] = item
-        if dupes:
-            try:
-                self.logger.log(f"[INFO] Каталог: дубли GTIN: {dupes}")
-            except Exception:
-                pass
-        return mapping
+            snapshot = self.catalog_store.read_snapshot()
+            return {
+                product.gtin: self._catalog_product_to_row(product)
+                for product in snapshot.products
+            }
+        except Exception as exc:
+            self._set_catalog_status("error", f"Ошибка чтения каталога: {exc}")
+            mb.showerror("Отчет", self.catalog_error)
+            return None
 
     def _open_turnover_report_dialog(self):
         dlg = ctk.CTkToplevel(self)
@@ -2838,11 +3597,9 @@ class App(ctk.CTk):
         paths = [p for p in (input_paths or []) if p]
         if not paths:
             return
-        catalog_path = self._get_product_catalog_path()
-        if not os.path.isfile(catalog_path):
-            mb.showerror("Отчет", f"Файл каталога товаров не найден:\n{catalog_path}")
+        catalog_map = self._build_report_catalog_map()
+        if catalog_map is None:
             return
-        catalog_map = self._build_report_catalog_map(catalog_path)
         if not catalog_map:
             try:
                 mb.showwarning("Отчет", "Каталог товаров пуст. Поля ТН ВЭД и документа будут пустыми.")
@@ -4126,6 +4883,66 @@ class App(ctk.CTk):
         half = max(4, max_len // 2 - 2)
         return s[:half] + "..." + s[-half:]
 
+    def _responsive_path_text(self, path, pixel_width):
+        max_len = max(18, int(max(1, pixel_width) / 7))
+        return self._shorten_path(path, max_len=max_len)
+
+    def _schedule_path_label_refresh(self, event=None):
+        if getattr(self, "_path_refresh_after_id", None) is not None:
+            return
+
+        def refresh():
+            self._path_refresh_after_id = None
+            path = getattr(self, "csv_dir", "") or ""
+            for label_name, tooltip_name in (
+                ("csv_dir_label", "csv_dir_tooltip"),
+                ("source_dir_value_label", "source_dir_tooltip"),
+            ):
+                label = getattr(self, label_name, None)
+                if label is None:
+                    continue
+                try:
+                    width = max(1, int(label.winfo_width()))
+                    label.configure(text=self._responsive_path_text(path, width))
+                except Exception:
+                    pass
+                tooltip = getattr(self, tooltip_name, None)
+                if tooltip is not None:
+                    tooltip.text = path
+
+        try:
+            self._path_refresh_after_id = self.after_idle(refresh)
+        except Exception:
+            refresh()
+
+    def _schedule_csv_scrollbar_refresh(self, event=None):
+        if getattr(self, "_csv_scroll_refresh_after_id", None) is not None:
+            return
+
+        def refresh():
+            self._csv_scroll_refresh_after_id = None
+            frame = getattr(self, "csv_list_frame", None)
+            canvas = getattr(frame, "_parent_canvas", None)
+            scrollbar = getattr(frame, "_scrollbar", None)
+            if canvas is None or scrollbar is None:
+                return
+            try:
+                self.update_idletasks()
+                bounds = canvas.bbox("all")
+                content_height = 0 if not bounds else max(0, bounds[3] - bounds[1])
+                needs_scrollbar = content_height > max(1, canvas.winfo_height())
+                if needs_scrollbar:
+                    scrollbar.grid()
+                else:
+                    scrollbar.grid_remove()
+            except Exception:
+                pass
+
+        try:
+            self._csv_scroll_refresh_after_id = self.after_idle(refresh)
+        except Exception:
+            refresh()
+
     def _norm_csv_path(self, p):
         try:
             return os.path.normcase(os.path.abspath(p or ""))
@@ -4633,9 +5450,14 @@ class App(ctk.CTk):
     def _update_csv_dir_label(self):
         try:
             if hasattr(self, "csv_dir_label"):
-                self.csv_dir_label.configure(text=self._shorten_path(self.csv_dir))
+                self.csv_dir_label.configure(
+                    text=self._responsive_path_text(
+                        self.csv_dir, self.csv_dir_label.winfo_width()
+                    )
+                )
         except Exception:
             pass
+        self._schedule_path_label_refresh()
 
     def _update_brand_hint(self, gtin=None):
         """Показывает бренд из справочника для текущего GTIN CSV."""
@@ -4765,6 +5587,8 @@ class App(ctk.CTk):
             return []
 
     def _render_csv_list(self):
+        self._schedule_path_label_refresh()
+        self._schedule_csv_scrollbar_refresh()
         frame = getattr(self, "csv_list_frame", None)
         if not frame:
             return
@@ -4936,6 +5760,7 @@ class App(ctk.CTk):
             self._render_csv_list()
         except Exception:
             pass
+        self._refresh_runtime_status()
 
     def _mark_csv_printed(self, path, sent_total=0, printer=None, fmt=None, calib_total=0):
         key = self._norm_csv_path(path)
@@ -5031,11 +5856,14 @@ class App(ctk.CTk):
             label = f"Пакет {i} ({idx0 + start + 1}-{idx0 + end})"
             btn = ctk.CTkButton(self.batch_btns_frame, text=label, height=32,
                                  command=lambda b=i: self._reprint_batch(b),
-                                 state="normal" if self._bartender_available() else "disabled")
+                                 state="normal" if (
+                                     self._bartender_available()
+                                     and self.catalog_state == "ready"
+                                 ) else "disabled")
             btn.pack(side="left", padx=6, pady=4)
 
     def _reprint_batch(self, batch_idx):
-        if not self._require_bartender("Повторная печать пакета"):
+        if not self._require_print_capabilities("Повторная печать пакета"):
             return
         try:
             batches = self.last_batches or []
@@ -5113,7 +5941,7 @@ class App(ctk.CTk):
         self.last_sticker_jobs.append(job)
 
     def _open_sticker_reprint_dialog(self):
-        if not self._require_bartender("Повторная печать стикера"):
+        if not self._require_print_capabilities("Повторная печать стикера"):
             return
         jobs = list(self.last_sticker_jobs or [])
         if not jobs:
@@ -5176,7 +6004,7 @@ class App(ctk.CTk):
 
     def _print_sticker_placeholder(self, bidx, start, end, total, sample_row=None, km_count=None, total_rolls=None):
         """Печать стикера через BarTender, если есть шаблон sticker60x40.btw (или cfg['sticker_btw'])."""
-        if not self._require_bartender("Печать стикера"):
+        if not self._require_print_capabilities("Печать стикера"):
             return
         prn = self._get_sticker_printer()
         if not prn:
@@ -5684,12 +6512,12 @@ class App(ctk.CTk):
         if part_mode == "manual":
             if not manual and not allow_empty_part:
                 self._mark_part_entry(True)
-                if not getattr(self, "_part_missing_logged", False):
+                if not self.__dict__.get("_part_missing_logged", False):
                     self._part_missing_logged = True
                     self.logger.err(f"Не заполнен номер партии для шаблона {template_id}.")
                 return None
             enr["PART_NUM"] = manual
-        elif part_mode == "blank":
+        else:
             enr["PART_NUM"] = ""
         if manual or allow_empty_part or part_mode != "manual":
             self._mark_part_entry(False)
@@ -5701,7 +6529,6 @@ class App(ctk.CTk):
         self.logger.log(
             f"GTIN lookup: TEMPLATE='{info.get('TEMPLATE_ID') or info.get('FORMAT','-') or '-'}', "
             f"SHELF='{shelf_desc}', SHELF_PARSED={enr.get('_SHELF_LOG','')}, "
-            f"PART_TPL={'-' if not info.get('PART_TEMPLATE') else info.get('PART_TEMPLATE')}, "
             f"ShortNameExcel='{(info.get('SHORTNAME') or '').strip()}', GTIN={gtin_key}"
         )
 
@@ -5925,7 +6752,7 @@ class App(ctk.CTk):
     
     
     # ---------- date picker ----------
-    def _open_date_picker(self):
+    def _open_date_picker_legacy(self):
         """
         Открывает выбор даты. Если установлен пакет tkcalendar - используем его.
         Иначе показываем встроенный календарь без внешних зависимостей.
@@ -6049,10 +6876,155 @@ class App(ctk.CTk):
         update_info()
         top.grab_set()
     
+    def _close_date_popover(self):
+        popover = getattr(self, "_date_popover", None)
+        self._date_popover = None
+        if popover is None:
+            return
+        try:
+            popover.grab_release()
+        except Exception:
+            pass
+        try:
+            popover.destroy()
+        except Exception:
+            pass
+
+    def _set_production_date_from_picker(self, value):
+        self.prod_date_entry.delete(0, "end")
+        self.prod_date_entry.insert(0, format_production_date(value))
+        self._mark_prod_date_entry(False)
+        self._close_date_popover()
+
+    def _open_date_picker(self):
+        existing = getattr(self, "_date_popover", None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                self._close_date_popover()
+                return
+        except Exception:
+            self._close_date_popover()
+
+        import calendar as _calendar
+
+        selected = production_date_from_text(self.prod_date_entry.get())
+        today = dt.date.today()
+        state = {"year": selected.year, "month": selected.month}
+        month_names = (
+            "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+            "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+        )
+
+        popover = ctk.CTkToplevel(self)
+        self._date_popover = popover
+        popover.overrideredirect(True)
+        popover.transient(self)
+        panel = ctk.CTkFrame(popover, corner_radius=8, border_width=1)
+        panel.pack(fill="both", expand=True)
+        header = ctk.CTkFrame(panel, fg_color="transparent")
+        header.pack(fill="x", padx=8, pady=(8, 4))
+        month_label = ctk.CTkLabel(header, text="", font=("Arial", 12, "bold"))
+        days_frame = ctk.CTkFrame(panel, fg_color="transparent")
+
+        def select_day(day):
+            self._set_production_date_from_picker(
+                dt.date(state["year"], state["month"], day)
+            )
+
+        def render_month():
+            month_label.configure(
+                text=f"{month_names[state['month'] - 1]} {state['year']}"
+            )
+            for child in days_frame.winfo_children():
+                child.destroy()
+            for column, name in enumerate(("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")):
+                ctk.CTkLabel(days_frame, text=name, width=30).grid(
+                    row=0, column=column, padx=1, pady=1
+                )
+            weeks = _calendar.Calendar(firstweekday=0).monthdayscalendar(
+                state["year"], state["month"]
+            )
+            for row_index, week in enumerate(weeks, start=1):
+                for column, day in enumerate(week):
+                    if not day:
+                        ctk.CTkLabel(days_frame, text="", width=30).grid(
+                            row=row_index, column=column, padx=1, pady=1
+                        )
+                        continue
+                    value = dt.date(state["year"], state["month"], day)
+                    style = {"fg_color": "transparent", "text_color": ("#20252a", "#e6e9ec")}
+                    if value == today:
+                        style = {"fg_color": ("#dce8f8", "#29466c")}
+                    if value == selected:
+                        style = {"fg_color": "#2f80ed", "text_color": "#ffffff"}
+                    ctk.CTkButton(
+                        days_frame,
+                        text=str(day),
+                        width=30,
+                        height=26,
+                        corner_radius=5,
+                        command=lambda chosen=day: select_day(chosen),
+                        **style,
+                    ).grid(row=row_index, column=column, padx=1, pady=1)
+
+        def shift_month(delta):
+            month = state["month"] + delta
+            if month < 1:
+                state["year"] -= 1
+                month = 12
+            elif month > 12:
+                state["year"] += 1
+                month = 1
+            state["month"] = month
+            render_month()
+
+        ctk.CTkButton(
+            header, text="◀", width=28, height=26,
+            command=lambda: shift_month(-1),
+        ).pack(side="left")
+        month_label.pack(side="left", fill="x", expand=True, padx=6)
+        ctk.CTkButton(
+            header, text="▶", width=28, height=26,
+            command=lambda: shift_month(1),
+        ).pack(side="right")
+        days_frame.pack(padx=8, pady=2)
+        quick_actions = ctk.CTkFrame(panel, fg_color="transparent")
+        quick_actions.pack(fill="x", padx=8, pady=(4, 8))
+        ctk.CTkButton(
+            quick_actions,
+            text="Сегодня",
+            height=28,
+            command=lambda: self._set_production_date_from_picker(
+                quick_production_date(0)
+            ),
+        ).pack(side="left", fill="x", expand=True, padx=(0, 3))
+        ctk.CTkButton(
+            quick_actions,
+            text="Вчера",
+            height=28,
+            command=lambda: self._set_production_date_from_picker(
+                quick_production_date(-1)
+            ),
+        ).pack(side="left", fill="x", expand=True, padx=(3, 0))
+
+        render_month()
+        popover.update_idletasks()
+        anchor = getattr(self, "prod_date_button", self.prod_date_entry)
+        x = anchor.winfo_rootx()
+        y = anchor.winfo_rooty() + anchor.winfo_height() + 4
+        popover.geometry(f"+{x}+{y}")
+        popover.bind("<Escape>", lambda _event: self._close_date_popover())
+        try:
+            popover.grab_set()
+            popover.lift()
+            popover.focus_force()
+        except Exception:
+            pass
+
     # ---------- actions ----------
     
     def _preview(self):
-        if not self._require_bartender("Предпросмотр печати"):
+        if not self._require_print_capabilities("Предпросмотр печати"):
             return
         if not self.csv_path:
             mb.showerror("CSV", "Выбери CSV")
@@ -6067,7 +7039,9 @@ class App(ctk.CTk):
             mb.showerror("CSV", "Нет данных")
             return
     
-        idx1 = min(self._get_index(), len(self.csv_rows))
+        idx1 = self._resolve_preview_index()
+        if idx1 is None:
+            return
         base = self.csv_rows[idx1 - 1]
         enr = self._enrich(base, idx1, allow_empty_part=True)
         if not enr:
@@ -6437,7 +7411,7 @@ class App(ctk.CTk):
     def _print_range_one_job_via_csv(self, target_batches=None):
         import os, time, traceback
 
-        if not self._require_bartender("Печать"):
+        if not self._require_print_capabilities("Печать"):
             return
 
         LOG_EVERY = 100
@@ -6469,9 +7443,12 @@ class App(ctk.CTk):
             mb.showerror("CSV", "Нет данных")
             return
 
-        idx0 = max(0, self._get_index() - 1)
-        limit = self._get_limit()
-        rows_all = self.csv_rows[idx0:] if not limit else self.csv_rows[idx0:idx0 + limit]
+        selection = self._resolve_print_selection_for_action()
+        if selection is None:
+            return
+        start_row, _end_row, limit = selection
+        idx0 = start_row - 1
+        rows_all = self.csv_rows[idx0:idx0 + limit]
         total = len(rows_all)
         if total == 0:
             self.logger.err("Нет строк для печати в указанном диапазоне.")
@@ -6499,6 +7476,7 @@ class App(ctk.CTk):
         success = False
         tmp_csv_path = os.path.abspath(os.path.join(BASE_DIR, "tmp_batch.csv"))
         total_rolls = len(batches_full) if batches_full else len(batches)
+        self._catalog_print_active += 1
         try:
             self._stickers_preprinted = False
             if target_batches is None and not self._bool_var(getattr(self, "skip_sticker_var", False)):
@@ -6776,6 +7754,7 @@ class App(ctk.CTk):
                 self.logger.log(f"Завершено. Всего отправлено на печать: {sent_total} из {total} строк.")
         finally:
             duration = max(0.0, time.time() - job_started_at)
+            self._catalog_print_active = max(0, self._catalog_print_active - 1)
 def main():
     if ensure_license_or_exit() is None:
         return 1

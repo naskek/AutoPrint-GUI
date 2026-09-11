@@ -33,7 +33,6 @@ MASTER_FIELDS = (
 )
 PRINT_SETTING_FIELDS = (
     "print_template",
-    "batch_template",
     "client",
     "display_packaging",
 )
@@ -74,6 +73,7 @@ class CatalogProduct:
     tnved: str = ""
     short_name: str = ""
     print_template: str = ""
+    # Deprecated schema-compatibility value. Application code must ignore it.
     batch_template: str = ""
     client: str = ""
     display_packaging: str = ""
@@ -402,9 +402,12 @@ class CatalogStore:
         self.backup()
         return today
 
-    def create_product(self, values: Mapping) -> CatalogProduct:
+    def create_product(
+        self, values: Mapping, *, expected_revision: int | None = None
+    ) -> CatalogProduct:
         prepared = self._validated_values(values)
         snapshot = self.read_snapshot()
+        self._check_revision(snapshot.revision, expected_revision)
         if any(product.gtin == prepared["gtin"] for product in snapshot.products):
             raise CatalogValidationError(f"GTIN already exists: {prepared['gtin']}")
         backup_marker = self._daily_backup_marker()
@@ -436,7 +439,10 @@ class CatalogStore:
                 """,
                 (
                     product_id,
-                    *(prepared[field] for field in PRINT_SETTING_FIELDS),
+                    prepared["print_template"],
+                    "",
+                    prepared["client"],
+                    prepared["display_packaging"],
                     timestamp,
                     timestamp,
                 ),
@@ -499,8 +505,8 @@ class CatalogStore:
             connection.execute(
                 """
                 UPDATE product_print_settings SET
-                    print_template = ?, batch_template = ?, client = ?,
-                    display_packaging = ?, updated_at = ?
+                    print_template = ?, client = ?, display_packaging = ?,
+                    updated_at = ?
                 WHERE product_id = ?
                 """,
                 (
@@ -530,14 +536,14 @@ class CatalogStore:
             if backup_marker:
                 self._set_meta(connection, "last_daily_backup_date", backup_marker)
 
-    def apply_import(
+    def _plan_import(
         self,
         records: Iterable[Mapping],
         *,
         present_fields: Iterable[str] | None = None,
         has_short_col: bool | None = None,
         expected_revision: int | None = None,
-    ) -> ImportResult:
+    ):
         raw_records = list(records)
         if present_fields is None:
             present = set().union(*(set(record) for record in raw_records))
@@ -588,17 +594,60 @@ class CatalogStore:
             planned.append((current, values))
 
         target_short = snapshot.has_short_col if has_short_col is None else bool(has_short_col)
-        data_changed = bool(added or updated or target_short != snapshot.has_short_col)
-        if not data_changed:
-            return ImportResult(
+        return (
+            snapshot,
+            planned,
+            target_short,
+            ImportResult(
                 added=added,
                 updated=updated,
                 unchanged=unchanged,
                 duplicate_count=duplicate_count,
                 revision=snapshot.revision,
-            )
+            ),
+        )
 
-        self.backup()
+    def preview_import(
+        self,
+        records: Iterable[Mapping],
+        *,
+        present_fields: Iterable[str] | None = None,
+        has_short_col: bool | None = None,
+        expected_revision: int | None = None,
+    ) -> ImportResult:
+        _, _, _, result = self._plan_import(
+            records,
+            present_fields=present_fields,
+            has_short_col=has_short_col,
+            expected_revision=expected_revision,
+        )
+        return result
+
+    def apply_import(
+        self,
+        records: Iterable[Mapping],
+        *,
+        present_fields: Iterable[str] | None = None,
+        has_short_col: bool | None = None,
+        expected_revision: int | None = None,
+        create_backup: bool = True,
+    ) -> ImportResult:
+        snapshot, planned, target_short, result = self._plan_import(
+            records,
+            present_fields=present_fields,
+            has_short_col=has_short_col,
+            expected_revision=expected_revision,
+        )
+        data_changed = bool(
+            result.added
+            or result.updated
+            or target_short != snapshot.has_short_col
+        )
+        if not data_changed:
+            return result
+
+        if create_backup:
+            self.backup()
         timestamp = _utc_now()
         with self._write_transaction() as connection:
             self._check_revision(self._revision(connection), snapshot.revision)
@@ -630,7 +679,10 @@ class CatalogStore:
                         """,
                         (
                             product_id,
-                            *(values[field] for field in PRINT_SETTING_FIELDS),
+                            values["print_template"],
+                            "",
+                            values["client"],
+                            values["display_packaging"],
                             timestamp,
                             timestamp,
                         ),
@@ -656,8 +708,8 @@ class CatalogStore:
                     connection.execute(
                         """
                         UPDATE product_print_settings SET
-                            print_template = ?, batch_template = ?, client = ?,
-                            display_packaging = ?, updated_at = ?
+                            print_template = ?, client = ?, display_packaging = ?,
+                            updated_at = ?
                         WHERE product_id = ?
                         """,
                         (
@@ -675,10 +727,10 @@ class CatalogStore:
                 timestamp,
             )
         return ImportResult(
-            added=added,
-            updated=updated,
-            unchanged=unchanged,
-            duplicate_count=duplicate_count,
+            added=result.added,
+            updated=result.updated,
+            unchanged=result.unchanged,
+            duplicate_count=result.duplicate_count,
             revision=snapshot.revision + 1,
         )
 

@@ -37,7 +37,6 @@ FIELD_TO_HEADER = {
     "tnved": "ТН ВЭД",
     "short_name": "ShortName",
     "print_template": "Шаблон печати",
-    "batch_template": "Шаблон партии",
     "client": "Клиент",
     "display_packaging": "Упаковка отображаемая",
 }
@@ -115,7 +114,6 @@ _HEADER_ALIASES = {
         "Шаблон",
         "Template",
     ),
-    "batch_template": ("Шаблон партии", "Партия"),
     "client": ("Клиент", "Client"),
     "display_packaging": (
         "Упаковка отображаемая",
@@ -311,6 +309,7 @@ def apply_prepared_import(
     prepared: PreparedExcelImport,
     *,
     expected_revision: int | None = None,
+    create_backup: bool = True,
 ) -> ImportResult:
     records = prepared.require_valid()
     return store.apply_import(
@@ -318,6 +317,7 @@ def apply_prepared_import(
         present_fields=prepared.present_fields,
         has_short_col=prepared.has_short_col,
         expected_revision=expected_revision,
+        create_backup=create_backup,
     )
 
 
