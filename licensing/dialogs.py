@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from tkinter import filedialog, ttk
+from typing import Callable
 
-from .license_manager import LicenseErrorCode, LicenseValidationError
+from .license_manager import LicenseErrorCode, LicensePayload, LicenseValidationError
 
 
 _ERROR_MESSAGES = {
@@ -26,7 +27,8 @@ def show_license_error(
     error: LicenseValidationError,
     machine_hash: str | None,
     license_path: str | Path,
-) -> None:
+    validate_selected: Callable[[str | Path, str], LicensePayload],
+) -> LicensePayload | None:
     root = tk.Tk()
     root.title("AutoPrint — лицензия")
     root.resizable(False, False)
@@ -38,17 +40,20 @@ def show_license_error(
         frame,
         text="Лицензия не найдена или недействительна.",
         font=("Segoe UI", 12, "bold"),
-    ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+    ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+    error_message = tk.StringVar(
+        root, value=_ERROR_MESSAGES.get(error.code, "Не удалось проверить лицензию.")
+    )
     ttk.Label(
         frame,
-        text=_ERROR_MESSAGES.get(error.code, "Не удалось проверить лицензию."),
+        textvariable=error_message,
         wraplength=560,
         justify="left",
-    ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 10))
+    ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 10))
     ttk.Label(frame, text=f"Ожидаемый файл:\n{Path(license_path)}", justify="left").grid(
         row=2,
         column=0,
-        columnspan=2,
+        columnspan=3,
         sticky="w",
         pady=(0, 10),
     )
@@ -57,7 +62,7 @@ def show_license_error(
     ttk.Label(frame, text=f"Код этого ПК:\n{machine_code}", justify="left").grid(
         row=3,
         column=0,
-        columnspan=2,
+        columnspan=3,
         sticky="w",
         pady=(0, 12),
     )
@@ -65,7 +70,7 @@ def show_license_error(
         frame,
         text="Отправьте код поставщику для получения license.json.",
         wraplength=560,
-    ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 14))
+    ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(0, 14))
 
     def copy_machine_code() -> None:
         if machine_hash:
@@ -73,11 +78,43 @@ def show_license_error(
             root.clipboard_append(machine_hash)
             root.update()
 
+    selected_payload: LicensePayload | None = None
+
+    def choose_license() -> None:
+        nonlocal selected_payload
+        if not machine_hash:
+            return
+        selected_path = filedialog.askopenfilename(
+            parent=root,
+            title="Выберите файл лицензии AutoPrint",
+            filetypes=(("Файлы JSON", "*.json"), ("Все файлы", "*.*")),
+        )
+        if not selected_path:
+            return
+        try:
+            selected_payload = validate_selected(selected_path, machine_hash)
+        except LicenseValidationError as selected_error:
+            error_message.set(
+                _ERROR_MESSAGES.get(
+                    selected_error.code, "Не удалось проверить лицензию."
+                )
+            )
+            return
+        root.destroy()
+
     copy_button = ttk.Button(frame, text="Копировать код", command=copy_machine_code)
-    copy_button.grid(row=5, column=0, sticky="w")
+    copy_button.grid(row=5, column=0, sticky="w", padx=(0, 8))
     if not machine_hash:
         copy_button.state(["disabled"])
-    ttk.Button(frame, text="Закрыть", command=root.destroy).grid(row=5, column=1, sticky="e")
+    select_button = ttk.Button(
+        frame, text="Выбрать файл лицензии...", command=choose_license
+    )
+    select_button.grid(row=5, column=1, sticky="w")
+    if not machine_hash:
+        select_button.state(["disabled"])
+    ttk.Button(frame, text="Закрыть", command=root.destroy).grid(
+        row=5, column=2, sticky="e", padx=(18, 0)
+    )
 
     root.protocol("WM_DELETE_WINDOW", root.destroy)
     root.update_idletasks()
@@ -85,3 +122,4 @@ def show_license_error(
     y = max(0, (root.winfo_screenheight() - root.winfo_height()) // 2)
     root.geometry(f"+{x}+{y}")
     root.mainloop()
+    return selected_payload

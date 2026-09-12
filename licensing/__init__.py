@@ -19,13 +19,18 @@ def _get_license_base_dir() -> Path:
 
 def ensure_license_or_exit() -> LicensePayload | None:
     license_path = _get_license_base_dir() / "config" / "license.json"
-    machine_hash: str | None = None
     try:
         machine_hash = get_machine_hash()
+    except LicenseValidationError as error:
+        show_license_error(error, None, license_path, load_and_validate_license)
+        return None
+
+    try:
         return load_and_validate_license(license_path, machine_hash)
     except LicenseValidationError as error:
-        show_license_error(error, machine_hash, license_path)
-        return None
+        return show_license_error(
+            error, machine_hash, license_path, load_and_validate_license
+        )
 
 __all__ = [
     "LicenseErrorCode",
