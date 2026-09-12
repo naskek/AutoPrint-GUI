@@ -3,8 +3,11 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
 
+
 ROOT = Path(__file__).resolve().parent
 datas = []
+icon_file = ROOT / 'assets' / 'icons' / 'autoprint.ico'
+datas.append((str(icon_file), 'assets/icons'))
 
 for src, dest in [
     (ROOT / 'product_catalog.xlsx', '.'),
@@ -57,6 +60,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(icon_file),
 )
 coll = COLLECT(
     exe,

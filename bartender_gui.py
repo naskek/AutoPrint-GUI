@@ -60,6 +60,7 @@ APP_VERSION = "3.0"
 DEFAULT_APPEARANCE_MODE = "dark"
 PREVIEW_NAME = "preview.png"
 STICKER_BTW_NAME = "sticker60x40.btw"
+APP_ICON_RELATIVE_PATH = os.path.join("assets", "icons", "autoprint.ico")
 STATS_PATH = os.path.join(CONFIG_DIR, "stats.json")
 DEFAULT_REQ_COLS = ["ShortName", "ShortGTIN", "EXP_DATE", "PROD_DATE", "PART_NUM", "DM", "NUM"]
 PART_MODE_OPTIONS = ("Не использовать", "Ввод вручную")
@@ -108,6 +109,13 @@ TOP_LEVEL_MENU_ORDER = ("Каталог", "Шаблоны", "Работа с к�
 CODES_MENU_ORDER = ("Проверка кодов", "Отчёт о вводе в оборот")
 PRINT_SELECTION_MODE_RANGE = "Диапазон"
 PRINT_SELECTION_MODE_COUNT = "Количество"
+
+
+def application_icon_path() -> str:
+    bundle_root = getattr(
+        sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))
+    )
+    return os.path.join(bundle_root, APP_ICON_RELATIVE_PATH)
 DEFAULT_PRINT_SELECTION_MODE = PRINT_SELECTION_MODE_RANGE
 
 
@@ -731,6 +739,10 @@ class App(ctk.CTk):
         self.cancel_requested = False
         self.is_paused = False
         super().__init__()
+        try:
+            self.iconbitmap(default=application_icon_path())
+        except (OSError, tk.TclError):
+            pass
         self.REQ_COLS = list(DEFAULT_REQ_COLS)
         self.title(APP_TITLE)
         ctk.set_appearance_mode(DEFAULT_APPEARANCE_MODE)

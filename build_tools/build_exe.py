@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -47,6 +48,9 @@ def main() -> int:
     from app_version import APP_VERSION
 
     target = root / "autoprint_main.py"
+    icon_file = root / "assets" / "icons" / "autoprint.ico"
+    generated_spec_dir = root / "build" / "pyinstaller-spec"
+    generated_spec_dir.mkdir(parents=True, exist_ok=True)
     version_file = _write_windows_version_file(root, APP_VERSION)
 
     args = [
@@ -57,6 +61,12 @@ def main() -> int:
         "--windowed",
         "--name",
         "AutoPrint",
+        "--specpath",
+        str(generated_spec_dir),
+        "--icon",
+        str(icon_file),
+        "--add-data",
+        f"{icon_file}{os.pathsep}assets/icons",
         "--version-file",
         str(version_file),
         "--collect-all",

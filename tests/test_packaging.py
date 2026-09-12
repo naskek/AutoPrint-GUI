@@ -1,7 +1,10 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from PIL import Image
 
 from build_tools import build_exe
 from utils import load_config, save_config
@@ -16,12 +19,55 @@ class PackagingTests(unittest.TestCase):
         "build_tools.build_exe._write_windows_version_file",
         return_value=Path("version_info.txt"),
     )
-    def test_pyinstaller_command_excludes_operational_data(self, _version_file, call):
+    def test_pyinstaller_command_includes_only_icon_asset_data(self, _version_file, call):
         self.assertEqual(build_exe.main(), 0)
 
         command = call.call_args.args[0]
-        self.assertNotIn("--add-data", command)
         self.assertEqual(command[command.index("--name") + 1], "AutoPrint")
+        icon = ROOT / "assets" / "icons" / "autoprint.ico"
+        self.assertEqual(command[command.index("--icon") + 1], str(icon))
+        self.assertEqual(
+            command[command.index("--add-data") + 1],
+            f"{icon}{os.pathsep}assets/icons",
+        )
+        for operational_name in ("product_catalog.xlsx", "tmp_batch.csv", "config.json"):
+            self.assertFalse(any(operational_name in item for item in command))
+
+    @patch("build_tools.build_exe.subprocess.call", return_value=0)
+    @patch(
+        "build_tools.build_exe._write_windows_version_file",
+        return_value=Path("version_info.txt"),
+    )
+    def test_generated_spec_is_kept_out_of_repository_root(self, _version_file, call):
+        tracked_spec = ROOT / "AutoPrint.spec"
+        original_contents = tracked_spec.read_bytes()
+
+        self.assertEqual(build_exe.main(), 0)
+
+        command = call.call_args.args[0]
+        spec_dir = Path(command[command.index("--specpath") + 1])
+        self.assertEqual(spec_dir, ROOT / "build" / "pyinstaller-spec")
+        self.assertNotEqual(spec_dir, ROOT)
+        self.assertEqual(tracked_spec.read_bytes(), original_contents)
+
+    def test_windows_icon_contains_required_sizes(self):
+        icon_path = ROOT / "assets" / "icons" / "autoprint.ico"
+        source_path = ROOT / "assets" / "icons" / "autoprint.png"
+
+        self.assertTrue(source_path.is_file())
+        with Image.open(icon_path) as icon:
+            self.assertTrue(
+                {(size, size) for size in (16, 20, 24, 32, 40, 48, 64, 128, 256)}
+                .issubset(icon.info["sizes"])
+            )
+
+    def test_spec_uses_autoprint_icon_for_bundle_and_executable(self):
+        spec = (ROOT / "AutoPrint.spec").read_text(encoding="utf-8")
+
+        self.assertIn("ROOT = Path(__file__).resolve().parent", spec)
+        self.assertNotRegex(spec, r"['\"][A-Za-z]:[/\\]")
+        self.assertIn("datas.append((str(icon_file), 'assets/icons'))", spec)
+        self.assertIn("icon=str(icon_file)", spec)
 
     def test_installer_files_section_contains_only_application_bundle(self):
         installer = (ROOT / "build_tools" / "installer.iss").read_text(encoding="utf-8")
@@ -47,6 +93,9 @@ class PackagingTests(unittest.TestCase):
         self.assertIn('#define MyAppName "AutoPrint"', installer)
         self.assertIn('#define MyAppExeName "AutoPrint.exe"', installer)
         self.assertIn("DefaultDirName={localappdata}\\{#MyAppName}", installer)
+        self.assertIn("SetupIconFile=..\\assets\\icons\\autoprint.ico", installer)
+        self.assertIn("UninstallDisplayIcon={app}\\{#MyAppExeName}", installer)
+        self.assertEqual(installer.count('IconFilename: "{app}\\{#MyAppExeName}"'), 2)
         self.assertIn("DeleteFile(ExpandConstant('{app}\\BarTenderGUI.exe'))", installer)
         self.assertIn("DeleteFile(ExpandConstant('{group}\\BarTender GUI.lnk'))", installer)
 

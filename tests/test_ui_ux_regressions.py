@@ -9,6 +9,17 @@ import bartender_gui
 
 
 class VersionMenuTests(unittest.TestCase):
+    def test_runtime_icon_path_uses_pyinstaller_bundle_root(self):
+        with patch.object(
+            bartender_gui.sys, "_MEIPASS", r"C:\AutoPrint\_internal", create=True
+        ):
+            icon_path = bartender_gui.application_icon_path()
+
+        self.assertEqual(
+            icon_path,
+            r"C:\AutoPrint\_internal\assets\icons\autoprint.ico",
+        )
+
     def test_application_window_title_uses_autoprint_identity(self):
         self.assertEqual(
             bartender_gui.APP_TITLE,

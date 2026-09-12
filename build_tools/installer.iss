@@ -28,15 +28,17 @@ RestartApplications=no
 VersionInfoVersion={#MyAppVersionNumbers}
 VersionInfoProductVersion={#MyAppVersionNumbers}
 VersionInfoProductTextVersion={#MyAppVersion}
+SetupIconFile=..\assets\icons\autoprint.ico
+UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]
 ; Application binaries are replaced on every update.
 Source: "..\dist\AutoPrint\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\AutoPrint"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\AutoPrint"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
 Name: "{group}\Удалить {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\AutoPrint"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\AutoPrint"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
 
 [Run]
 ; Normal/manual install: offer to launch from the final wizard page.
