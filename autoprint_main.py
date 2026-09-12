@@ -19,6 +19,18 @@ bartender_gui.APP_VERSION = APP_VERSION
 bartender_gui.APP_TITLE = f"AutoPrint V{APP_VERSION}"
 
 STARTUP_UPDATE_DELAY_MS = 1500
+MEBIBYTE = 1024 * 1024
+
+
+def format_download_progress(
+    downloaded: int, total: int | None
+) -> tuple[float | None, str, str]:
+    downloaded_mb = max(0, downloaded) / MEBIBYTE
+    if total is None or total <= 0:
+        return None, "", f"{downloaded_mb:.1f} МБ"
+    fraction = min(1.0, max(0.0, downloaded / total))
+    total_mb = total / MEBIBYTE
+    return fraction, f"{round(fraction * 100)}%", f"{downloaded_mb:.1f} МБ / {total_mb:.1f} МБ"
 
 
 def startup_update_check_enabled(frozen=None) -> bool:
@@ -37,6 +49,18 @@ class AutoPrintApp(bartender_gui.App):
         self._update_check_in_progress = False
         self._startup_update_check_started = False
         self._startup_update_prompted = False
+        self._update_progress_dialog = None
+        self._update_progress_status_label = None
+        self._update_progress_bar = None
+        self._update_progress_percent_label = None
+        self._update_progress_detail_label = None
+        self._update_progress_action_button = None
+        self._update_progress_close_button = None
+        self._update_progress_indeterminate = False
+        self._update_download_total_known = False
+        self._pending_installer_path = None
+        self._pending_update_release = None
+        self._active_update_release = None
         super().__init__()
         self.after(100, self._drain_update_ui_queue)
         self._schedule_startup_update_check()
@@ -219,28 +243,254 @@ class AutoPrintApp(bartender_gui.App):
         if not install:
             return
 
-        self._set_update_button("Скачивание…", enabled=False)
+        self._open_update_progress_dialog(release)
+        self._start_update_download(release)
 
-        def worker() -> None:
+    def _progress_dialog_alive(self) -> bool:
+        dialog = self.__dict__.get("_update_progress_dialog")
+        if dialog is None:
+            return False
+        try:
+            return bool(dialog.winfo_exists())
+        except Exception:
+            return False
+
+    def _open_update_progress_dialog(self, release) -> None:
+        if self._progress_dialog_alive():
+            self._close_update_progress_dialog()
+
+        dialog = ctk.CTkToplevel(self)
+        self._update_progress_dialog = dialog
+        self._active_update_release = release
+        dialog.title("Обновление AutoPrint")
+        dialog.geometry("460x230")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        try:
+            dialog.grab_set()
+        except Exception:
+            pass
+
+        self._update_progress_status_label = ctk.CTkLabel(
+            dialog,
+            text="Скачивание обновления...",
+            anchor="w",
+            font=ctk.CTkFont(size=15, weight="bold"),
+        )
+        self._update_progress_status_label.pack(fill="x", padx=24, pady=(24, 14))
+        self._update_progress_bar = ctk.CTkProgressBar(
+            dialog, mode="indeterminate"
+        )
+        self._update_progress_bar.pack(fill="x", padx=24)
+        self._update_progress_bar.start()
+        self._update_progress_indeterminate = True
+
+        progress_text = ctk.CTkFrame(dialog, fg_color="transparent")
+        progress_text.pack(fill="x", padx=24, pady=(8, 18))
+        self._update_progress_detail_label = ctk.CTkLabel(
+            progress_text, text="0.0 МБ", anchor="w"
+        )
+        self._update_progress_detail_label.pack(side="left")
+        self._update_progress_percent_label = ctk.CTkLabel(
+            progress_text, text="", anchor="e"
+        )
+        self._update_progress_percent_label.pack(side="right")
+
+        actions = ctk.CTkFrame(dialog, fg_color="transparent")
+        actions.pack(fill="x", padx=24, pady=(0, 20))
+        self._update_progress_action_button = ctk.CTkButton(
+            actions, text="", width=210
+        )
+        self._update_progress_action_button.pack(side="left")
+        self._update_progress_action_button.pack_forget()
+        self._update_progress_close_button = ctk.CTkButton(
+            actions,
+            text="Закрыть",
+            width=100,
+            command=self._close_update_progress_dialog,
+        )
+        self._update_progress_close_button.pack(side="right")
+        dialog.protocol("WM_DELETE_WINDOW", self._close_update_progress_dialog)
+
+    def _close_update_progress_dialog(self) -> None:
+        dialog = self.__dict__.get("_update_progress_dialog")
+        self._update_progress_dialog = None
+        self._update_progress_status_label = None
+        self._update_progress_bar = None
+        self._update_progress_percent_label = None
+        self._update_progress_detail_label = None
+        self._update_progress_action_button = None
+        self._update_progress_close_button = None
+        self._update_progress_indeterminate = False
+        if not self.__dict__.get("_update_check_in_progress", False):
+            self._pending_installer_path = None
+            self._pending_update_release = None
+        if dialog is not None:
             try:
-                installer = download_release(release)
-            except Exception as exc:
-                self._post_update_ui(lambda e=exc: self._update_download_failed(e))
-                return
-            self._post_update_ui(lambda p=installer, r=release: self._install_downloaded_update(p, r))
+                dialog.grab_release()
+            except Exception:
+                pass
+            try:
+                dialog.destroy()
+            except Exception:
+                pass
 
-        threading.Thread(target=worker, name="autoprint-update-download", daemon=True).start()
+    def _start_update_download(self, release) -> None:
+        self._active_update_release = release
+        self._update_check_in_progress = True
+        self._set_update_button("Скачивание…", enabled=False)
+        if self._progress_dialog_alive():
+            self._update_progress_status_label.configure(
+                text="Скачивание обновления...", text_color=("gray10", "gray90")
+            )
+            self._update_progress_detail_label.configure(text="0.0 МБ")
+            self._update_progress_percent_label.configure(text="")
+            self._update_progress_bar.configure(mode="indeterminate")
+            self._update_progress_bar.start()
+            self._update_progress_indeterminate = True
+            self._update_progress_action_button.pack_forget()
+
+        try:
+            threading.Thread(
+                target=lambda r=release: self._download_update_worker(r),
+                name="autoprint-update-download",
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            self._update_download_failed(exc)
+
+    def _download_update_worker(self, release) -> None:
+        def progress(downloaded: int, total: int | None) -> None:
+            self._post_update_ui(
+                lambda d=downloaded, t=total: self._update_download_progress(d, t)
+            )
+
+        try:
+            installer = download_release(release, progress=progress)
+        except Exception as exc:
+            self._post_update_ui(lambda e=exc: self._update_download_failed(e))
+            return
+        self._post_update_ui(
+            lambda p=installer, r=release: self._download_verified(p, r)
+        )
+
+    def _update_download_progress(
+        self, downloaded: int, total: int | None
+    ) -> None:
+        if not self._progress_dialog_alive():
+            return
+        fraction, percentage, detail = format_download_progress(downloaded, total)
+        self._update_progress_detail_label.configure(text=detail)
+        self._update_progress_percent_label.configure(text=percentage)
+        if fraction is None:
+            self._update_download_total_known = False
+            self._update_progress_bar.configure(mode="indeterminate")
+            if not self._update_progress_indeterminate:
+                self._update_progress_bar.start()
+                self._update_progress_indeterminate = True
+            self._update_progress_status_label.configure(
+                text="Скачивание обновления..."
+            )
+            return
+
+        self._update_download_total_known = True
+        if self._update_progress_indeterminate:
+            self._update_progress_bar.stop()
+            self._update_progress_indeterminate = False
+        self._update_progress_bar.configure(mode="determinate")
+        self._update_progress_bar.set(fraction)
+        self._update_progress_status_label.configure(
+            text=(
+                "Проверка целостности обновления..."
+                if fraction >= 1.0
+                else "Скачивание обновления..."
+            )
+        )
+
+    def _download_verified(self, installer_path, release) -> None:
+        if self._progress_dialog_alive():
+            self._update_progress_status_label.configure(
+                text="Проверка целостности обновления..."
+            )
+            if self._update_progress_indeterminate:
+                self._update_progress_bar.stop()
+                self._update_progress_indeterminate = False
+        try:
+            self.after_idle(
+                lambda p=installer_path, r=release: self._update_download_ready(p, r)
+            )
+        except Exception:
+            self._update_download_ready(installer_path, release)
+
+    def _update_download_ready(self, installer_path, release) -> None:
+        self._update_check_in_progress = False
+        self._set_update_button("Обновить", enabled=True)
+        if not self._progress_dialog_alive():
+            self._pending_installer_path = None
+            self._pending_update_release = None
+            return
+
+        self._pending_installer_path = installer_path
+        self._pending_update_release = release
+        self._update_progress_bar.stop()
+        self._update_progress_indeterminate = False
+        if self._update_download_total_known:
+            self._update_progress_bar.configure(mode="determinate")
+            self._update_progress_bar.set(1.0)
+            self._update_progress_percent_label.configure(text="100%")
+        self._update_progress_status_label.configure(
+            text="Обновление готово к установке."
+        )
+        self._update_progress_action_button.configure(
+            text="Перезапустить и обновить",
+            command=self._restart_and_update,
+            state="normal",
+        )
+        self._update_progress_action_button.pack(side="left")
 
     def _update_download_failed(self, exc: Exception) -> None:
+        self._update_check_in_progress = False
         self._set_update_button("Обновить", enabled=True)
         message = str(exc) if isinstance(exc, UpdateError) else f"Ошибка загрузки обновления: {exc}"
         try:
             self.logger.err(message)
         except Exception:
             pass
-        mb.showerror("Обновление AutoPrint", message)
+        self._pending_installer_path = None
+        self._pending_update_release = None
+        if not self._progress_dialog_alive():
+            return
+        try:
+            self._update_progress_bar.stop()
+            self._update_progress_indeterminate = False
+            self._update_progress_status_label.configure(
+                text=message, text_color=("#b42318", "#ff8a80")
+            )
+            self._update_progress_detail_label.configure(
+                text="Загрузка не завершена. Можно повторить попытку."
+            )
+            self._update_progress_percent_label.configure(text="")
+            self._update_progress_action_button.configure(
+                text="Повторить",
+                command=self._retry_update_download,
+                state="normal",
+            )
+            self._update_progress_action_button.pack(side="left")
+        except Exception:
+            pass
 
-    def _install_downloaded_update(self, installer_path, release) -> None:
+    def _retry_update_download(self) -> None:
+        release = self.__dict__.get("_active_update_release")
+        if release is not None:
+            self._start_update_download(release)
+
+    def _restart_and_update(self) -> None:
+        installer_path = self.__dict__.get("_pending_installer_path")
+        release = self.__dict__.get("_pending_update_release")
+        if installer_path is None or release is None:
+            return
+        if self._progress_dialog_alive():
+            self._update_progress_action_button.configure(state="disabled")
         try:
             launch_installer(installer_path)
         except Exception as exc:

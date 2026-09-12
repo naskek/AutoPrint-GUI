@@ -112,9 +112,12 @@ class BarTenderDegradedModeTests(unittest.TestCase):
         app = object.__new__(autoprint_main.AutoPrintApp)
         app.logger = Mock()
         app.after = Mock()
-        release = Mock(version="3.2.1")
+        app._update_progress_dialog = None
+        app._pending_installer_path = "setup.exe"
+        app._pending_update_release = Mock(version="3.2.2")
 
-        app._install_downloaded_update("setup.exe", release)
+        launch_installer.assert_not_called()
+        app._restart_and_update()
 
         launch_installer.assert_called_once_with("setup.exe")
         app.after.assert_called_once_with(50, app._shutdown_app)

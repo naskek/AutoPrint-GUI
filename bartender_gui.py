@@ -1101,17 +1101,20 @@ class App(ctk.CTk):
         csv_files_body.bind("<Configure>", self._schedule_path_label_refresh, add="+")
         csv_file_buttons = ctk.CTkFrame(csv_files_body, fg_color="transparent")
         csv_file_buttons.pack(fill="x", padx=8, pady=(0, 6))
+        csv_file_buttons.grid_columnconfigure(0, weight=1)
+        csv_file_buttons.grid_columnconfigure(1, weight=1)
+        csv_file_buttons.grid_columnconfigure(2, weight=1)
         ctk.CTkButton(
-            csv_file_buttons, text="Сменить папку", width=110,
+            csv_file_buttons, text="Сменить папку",
             command=self._choose_csv_dir,
-        ).pack(side="left", padx=2)
+        ).grid(row=0, column=0, sticky="ew", padx=2)
         ctk.CTkButton(
-            csv_file_buttons, text="Вверх", width=70, command=self._go_up_dir
-        ).pack(side="left", padx=2)
+            csv_file_buttons, text="Вверх", command=self._go_up_dir
+        ).grid(row=0, column=1, sticky="ew", padx=2)
         ctk.CTkButton(
-            csv_file_buttons, text="Обновить", width=80,
+            csv_file_buttons, text="Обновить",
             command=self._render_csv_list,
-        ).pack(side="left", padx=2)
+        ).grid(row=0, column=2, sticky="ew", padx=2)
         self.csv_list_frame = ctk.CTkScrollableFrame(csv_files_body)
         self.csv_list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         try:

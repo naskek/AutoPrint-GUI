@@ -1,4 +1,5 @@
 import datetime as dt
+import inspect
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -170,6 +171,20 @@ class MainLayoutContractTests(unittest.TestCase):
         self.assertEqual(
             bartender_gui.CSV_FILE_LIST_SCROLL_POLICY, "vertical-auto"
         )
+
+    def test_csv_file_actions_use_three_equal_responsive_grid_columns(self):
+        source = inspect.getsource(bartender_gui.App._build_ui)
+        actions = source.split(
+            'csv_file_buttons = ctk.CTkFrame(csv_files_body', 1
+        )[1].split("self.csv_list_frame =", 1)[0]
+
+        for column in range(3):
+            self.assertIn(
+                f"csv_file_buttons.grid_columnconfigure({column}, weight=1)",
+                actions,
+            )
+        self.assertNotIn("width=", actions)
+        self.assertEqual(actions.count('.grid(row=0, column='), 3)
 
 
 class PrintSelectionTests(unittest.TestCase):
