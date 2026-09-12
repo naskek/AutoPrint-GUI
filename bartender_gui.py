@@ -105,6 +105,9 @@ MAIN_LAYOUT_SECTION_NUMBERS = {
 }
 PRINT_BATCH_CONTAINER_SCROLLABLE = False
 CSV_FILE_LIST_SCROLL_POLICY = "vertical-auto"
+PATH_RESIZE_DEBOUNCE_MS = 80
+CSV_SCROLLBAR_RESIZE_DEBOUNCE_MS = 120
+PREVIEW_RESIZE_DEBOUNCE_MS = 160
 TOP_LEVEL_MENU_ORDER = ("Каталог", "Шаблоны", "Работа с кодами")
 CODES_MENU_ORDER = ("Проверка кодов", "Отчёт о вводе в оборот")
 PRINT_SELECTION_MODE_RANGE = "Диапазон"
@@ -739,6 +742,10 @@ class App(ctk.CTk):
         self.cancel_requested = False
         self.is_paused = False
         super().__init__()
+        # CustomTkinter installs a global left-click focus hook for every CTk
+        # window. Native Tk widgets already handle click focus, and retaining
+        # this hook can redirect focus to CTk implementation canvases.
+        self.unbind_all("<Button-1>")
         try:
             self.iconbitmap(default=application_icon_path())
         except (OSError, tk.TclError):
@@ -1102,17 +1109,23 @@ class App(ctk.CTk):
         )
         self.csv_files_section.grid(row=0, column=0, sticky="nsew", pady=(0, 7))
         csv_files_body = self.csv_files_section.body
-        ctk.CTkLabel(csv_files_body, text="Текущая папка:", anchor="w").pack(
-            fill="x", padx=10, pady=(5, 0)
-        )
+        csv_files_body.grid_columnconfigure(0, weight=1)
+        csv_files_body.grid_rowconfigure(2, weight=1)
         self.csv_dir_label = ctk.CTkLabel(
-            csv_files_body, text=self._shorten_path(self.csv_dir), anchor="w", width=1
+            csv_files_body,
+            text=self._responsive_csv_dir_text(self.csv_dir),
+            anchor="w",
+            width=1,
         )
-        self.csv_dir_label.pack(fill="x", padx=10, pady=(0, 5))
+        self.csv_dir_label.grid(
+            row=0, column=0, sticky="ew", padx=10, pady=(5, 5)
+        )
         self.csv_dir_tooltip = SimpleTooltip(self.csv_dir_label, self.csv_dir)
         csv_files_body.bind("<Configure>", self._schedule_path_label_refresh, add="+")
         csv_file_buttons = ctk.CTkFrame(csv_files_body, fg_color="transparent")
-        csv_file_buttons.pack(fill="x", padx=8, pady=(0, 6))
+        csv_file_buttons.grid(
+            row=1, column=0, sticky="ew", padx=8, pady=(0, 6)
+        )
         csv_file_buttons.grid_columnconfigure(0, weight=1)
         csv_file_buttons.grid_columnconfigure(1, weight=1)
         csv_file_buttons.grid_columnconfigure(2, weight=1)
@@ -1128,7 +1141,9 @@ class App(ctk.CTk):
             command=self._render_csv_list,
         ).grid(row=0, column=2, sticky="ew", padx=2)
         self.csv_list_frame = ctk.CTkScrollableFrame(csv_files_body)
-        self.csv_list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.csv_list_frame.grid(
+            row=2, column=0, sticky="nsew", padx=8, pady=(0, 8)
+        )
         try:
             self.csv_list_frame._parent_canvas.bind(
                 "<Configure>", self._schedule_csv_scrollbar_refresh, add="+"
@@ -1647,6 +1662,219 @@ class App(ctk.CTk):
         if callable(callback):
             callback()
 
+    @staticmethod
+    def _widget_is_inside_popover(widget, popover):
+        try:
+            if widget is not None and widget.winfo_toplevel() is popover:
+                return True
+        except Exception:
+            pass
+
+        current = widget
+        seen = set()
+        while current is not None and id(current) not in seen:
+            if current is popover:
+                return True
+            seen.add(id(current))
+            namespace = getattr(current, "__dict__", {})
+            if "master" in namespace:
+                current = namespace["master"]
+            else:
+                try:
+                    current = getattr(current, "master", None)
+                except Exception:
+                    current = None
+        return False
+
+    def _remove_popover_outside_click(self, popover):
+        records = self.__dict__.get("_popover_outside_bindings", {})
+        record = records.pop(id(popover), None)
+        if record is None:
+            return
+
+        after_id = record.get("after_id")
+        if after_id is not None:
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+
+        bind_id = record.get("bind_id")
+        if bind_id is not None:
+            try:
+                self._unbind(("bind", "all", "<Button-1>"), bind_id)
+            except Exception:
+                pass
+
+    def _install_popover_outside_click(self, popover, close_callback):
+        records = self.__dict__.setdefault("_popover_outside_bindings", {})
+        self._remove_popover_outside_click(popover)
+        record = {"popover": popover, "after_id": None, "bind_id": None}
+        records[id(popover)] = record
+
+        def outside_click(event):
+            widget = getattr(event, "widget", None)
+            try:
+                widget = self.winfo_containing(
+                    int(event.x_root), int(event.y_root)
+                ) or widget
+            except Exception:
+                pass
+            if self._widget_is_inside_popover(widget, popover):
+                return None
+            close_callback()
+            return None
+
+        def install_binding():
+            record["after_id"] = None
+            if records.get(id(popover)) is not record:
+                return
+            try:
+                if not popover.winfo_exists():
+                    self._remove_popover_outside_click(popover)
+                    return
+                record["bind_id"] = self.bind_all(
+                    "<Button-1>", outside_click, add="+"
+                )
+            except Exception:
+                self._remove_popover_outside_click(popover)
+
+        try:
+            record["after_id"] = self.after_idle(install_binding)
+        except Exception:
+            self._remove_popover_outside_click(popover)
+
+    def _cleanup_popover_outside_clicks(self):
+        records = list(
+            self.__dict__.get("_popover_outside_bindings", {}).values()
+        )
+        popovers = [record.get("popover") for record in records]
+        for popover in popovers:
+            if popover is not None:
+                self._remove_popover_outside_click(popover)
+
+    def _screen_work_area_at(self, x, y):
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class Point(ctypes.Structure):
+                _fields_ = (("x", wintypes.LONG), ("y", wintypes.LONG))
+
+            class Rect(ctypes.Structure):
+                _fields_ = (
+                    ("left", wintypes.LONG),
+                    ("top", wintypes.LONG),
+                    ("right", wintypes.LONG),
+                    ("bottom", wintypes.LONG),
+                )
+
+            class MonitorInfo(ctypes.Structure):
+                _fields_ = (
+                    ("cbSize", wintypes.DWORD),
+                    ("rcMonitor", Rect),
+                    ("rcWork", Rect),
+                    ("dwFlags", wintypes.DWORD),
+                )
+
+            user32 = ctypes.windll.user32
+            user32.MonitorFromPoint.argtypes = (Point, wintypes.DWORD)
+            user32.MonitorFromPoint.restype = ctypes.c_void_p
+            user32.GetMonitorInfoW.argtypes = (
+                ctypes.c_void_p,
+                ctypes.POINTER(MonitorInfo),
+            )
+            user32.GetMonitorInfoW.restype = wintypes.BOOL
+            monitor = user32.MonitorFromPoint(Point(int(x), int(y)), 2)
+            info = MonitorInfo()
+            info.cbSize = ctypes.sizeof(info)
+            if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                work = info.rcWork
+                return work.left, work.top, work.right, work.bottom
+        except Exception:
+            pass
+
+        try:
+            left = int(self.winfo_vrootx())
+            top = int(self.winfo_vrooty())
+            return (
+                left,
+                top,
+                left + int(self.winfo_vrootwidth()),
+                top + int(self.winfo_vrootheight()),
+            )
+        except Exception:
+            return 0, 0, int(self.winfo_screenwidth()), int(self.winfo_screenheight())
+
+    def _position_popover(self, popover, anchor, *, align_right=False):
+        popover.update_idletasks()
+        width = max(
+            1,
+            int(popover.winfo_reqwidth()),
+            int(popover.winfo_width()),
+        )
+        height = max(
+            1,
+            int(popover.winfo_reqheight()),
+            int(popover.winfo_height()),
+        )
+        anchor_x = int(anchor.winfo_rootx())
+        anchor_y = int(anchor.winfo_rooty())
+        anchor_width = int(anchor.winfo_width())
+        anchor_height = int(anchor.winfo_height())
+        left, top, right, bottom = self._screen_work_area_at(
+            anchor_x + anchor_width // 2,
+            anchor_y + anchor_height // 2,
+        )
+
+        x = anchor_x + anchor_width - width if align_right else anchor_x
+        x = min(max(x, left), max(left, right - width))
+        y = anchor_y + anchor_height + 4
+        if y + height > bottom:
+            y = anchor_y - height - 4
+        y = min(max(y, top), max(top, bottom - height))
+        popover.geometry(f"+{x}+{y}")
+
+    @staticmethod
+    def _match_plain_popover_background(popover, content):
+        color = content.cget("fg_color")
+        if isinstance(color, (tuple, list)):
+            color = color[1] if ctk.get_appearance_mode() == "Dark" else color[0]
+        popover.configure(
+            background=color,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+
+    def _activate_popover(
+        self, popover, anchor, close_callback, *, align_right=False
+    ):
+        self._position_popover(popover, anchor, align_right=align_right)
+        popover.bind("<Escape>", lambda _event: close_callback(), add="+")
+
+        def destroyed(event):
+            if getattr(event, "widget", None) is not popover:
+                return
+            self._remove_popover_outside_click(popover)
+            if self.__dict__.get("_date_popover") is popover:
+                self._date_popover = None
+            if self.__dict__.get("_version_dialog") is popover:
+                self._version_dialog = None
+                self._version_update_btn = None
+
+        popover.bind("<Destroy>", destroyed, add="+")
+        try:
+            popover.protocol("WM_DELETE_WINDOW", close_callback)
+        except Exception:
+            pass
+        self._install_popover_outside_click(popover, close_callback)
+        try:
+            popover.deiconify()
+            popover.lift()
+            popover.focus_force()
+        except Exception:
+            pass
+
     def _popup_menu(self, menu_obj, widget):
         """Показывает всплывающее меню c tk_popup (с нашими цветами)."""
         try:
@@ -1817,11 +2045,12 @@ class App(ctk.CTk):
             ctk.set_appearance_mode("dark")
         else:
             ctk.set_appearance_mode("light")
-        
+
         # Перенастраиваем цвета лога при смене темы
         try:
-            if hasattr(self, 'logger'):
-                self.logger.configure_tags()
+            logger = self.__dict__.get("logger")
+            if logger is not None:
+                logger.configure_tags()
         except Exception:
             pass
         # Цвет выделения лога под тему
@@ -2638,6 +2867,11 @@ class App(ctk.CTk):
         if getattr(self, "_shutdown_started", False):
             return
         self._shutdown_started = True
+        self._close_date_popover()
+        version_closer = getattr(type(self), "_close_version_dialog", None)
+        if callable(version_closer):
+            version_closer(self)
+        self._cleanup_popover_outside_clicks()
         bt = getattr(self, "bt", None)
         self.bt = None
         try:
@@ -4895,16 +5129,54 @@ class App(ctk.CTk):
         s = path or ""
         if len(s) <= max_len:
             return s
-        half = max(4, max_len // 2 - 2)
-        return s[:half] + "..." + s[-half:]
+
+        separator = "\\" if "\\" in s else "/"
+        drive, tail = os.path.splitdrive(s)
+        absolute = tail.startswith(("\\", "/"))
+        parts = [part for part in re.split(r"[\\/]", tail) if part]
+        if not parts:
+            return s[:max_len]
+
+        final_component = parts[-1]
+        prefix = drive + separator if drive or absolute else ""
+        shortened = prefix + "..." + separator + final_component
+
+        for component in parts[:-1]:
+            candidate_prefix = prefix + component + separator
+            candidate = candidate_prefix + "..." + separator + final_component
+            if len(candidate) > max_len:
+                break
+            prefix = candidate_prefix
+            shortened = candidate
+
+        if len(shortened) <= max_len:
+            return shortened
+
+        fixed = prefix + "..." + separator
+        available = max(1, max_len - len(fixed))
+        return fixed + final_component[-available:]
 
     def _responsive_path_text(self, path, pixel_width):
         max_len = max(18, int(max(1, pixel_width) / 7))
         return self._shorten_path(path, max_len=max_len)
 
+    def _responsive_csv_dir_text(self, path, pixel_width=None):
+        prefix = "Текущая папка: "
+        if pixel_width is None:
+            path_text = self._shorten_path(path)
+        else:
+            path_width = max(1, int(pixel_width) - len(prefix) * 7)
+            path_text = self._responsive_path_text(path, path_width)
+        return prefix + path_text
+
     def _schedule_path_label_refresh(self, event=None):
-        if getattr(self, "_path_refresh_after_id", None) is not None:
-            return
+        pending = getattr(self, "_path_refresh_after_id", None)
+        if pending is not None:
+            try:
+                self.after_cancel(pending)
+            except Exception:
+                pass
+        self._path_refresh_after_id = None
 
         def refresh():
             self._path_refresh_after_id = None
@@ -4918,7 +5190,11 @@ class App(ctk.CTk):
                     continue
                 try:
                     width = max(1, int(label.winfo_width()))
-                    label.configure(text=self._responsive_path_text(path, width))
+                    if label_name == "csv_dir_label":
+                        text = self._responsive_csv_dir_text(path, width)
+                    else:
+                        text = self._responsive_path_text(path, width)
+                    label.configure(text=text)
                 except Exception:
                     pass
                 tooltip = getattr(self, tooltip_name, None)
@@ -4926,13 +5202,20 @@ class App(ctk.CTk):
                     tooltip.text = path
 
         try:
-            self._path_refresh_after_id = self.after_idle(refresh)
+            self._path_refresh_after_id = self.after(
+                PATH_RESIZE_DEBOUNCE_MS, refresh
+            )
         except Exception:
-            refresh()
+            self._path_refresh_after_id = None
 
     def _schedule_csv_scrollbar_refresh(self, event=None):
-        if getattr(self, "_csv_scroll_refresh_after_id", None) is not None:
-            return
+        pending = getattr(self, "_csv_scroll_refresh_after_id", None)
+        if pending is not None:
+            try:
+                self.after_cancel(pending)
+            except Exception:
+                pass
+        self._csv_scroll_refresh_after_id = None
 
         def refresh():
             self._csv_scroll_refresh_after_id = None
@@ -4942,7 +5225,6 @@ class App(ctk.CTk):
             if canvas is None or scrollbar is None:
                 return
             try:
-                self.update_idletasks()
                 bounds = canvas.bbox("all")
                 content_height = 0 if not bounds else max(0, bounds[3] - bounds[1])
                 needs_scrollbar = content_height > max(1, canvas.winfo_height())
@@ -4954,9 +5236,11 @@ class App(ctk.CTk):
                 pass
 
         try:
-            self._csv_scroll_refresh_after_id = self.after_idle(refresh)
+            self._csv_scroll_refresh_after_id = self.after(
+                CSV_SCROLLBAR_RESIZE_DEBOUNCE_MS, refresh
+            )
         except Exception:
-            refresh()
+            self._csv_scroll_refresh_after_id = None
 
     def _norm_csv_path(self, p):
         try:
@@ -5466,7 +5750,7 @@ class App(ctk.CTk):
         try:
             if hasattr(self, "csv_dir_label"):
                 self.csv_dir_label.configure(
-                    text=self._responsive_path_text(
+                    text=self._responsive_csv_dir_text(
                         self.csv_dir, self.csv_dir_label.winfo_width()
                     )
                 )
@@ -6621,18 +6905,42 @@ class App(ctk.CTk):
 
     def _on_preview_resize(self, event=None):
         """Пересчитывает превью при изменении размеров контейнера (например, при переносе на другой монитор)."""
-        try:
+        if getattr(self, "_preview_resize_busy", False):
+            return
+
+        pending = getattr(self, "_preview_resize_after_id", None)
+        if pending is not None:
+            try:
+                self.after_cancel(pending)
+            except Exception:
+                pass
+        self._preview_resize_after_id = None
+
+        if not getattr(self, "preview_current_path", None):
+            return
+
+        def refresh():
+            self._preview_resize_after_id = None
             if getattr(self, "_preview_resize_busy", False):
                 return
-            if not self.preview_current_path:
+            path = getattr(self, "preview_current_path", None)
+            if not path:
                 return
             self._preview_resize_busy = True
-            if os.path.isfile(self.preview_current_path):
-                self._show_preview_path(self.preview_current_path)
+            try:
+                if os.path.isfile(path):
+                    self._show_preview_path(path)
+            except Exception:
+                pass
+            finally:
+                self._preview_resize_busy = False
+
+        try:
+            self._preview_resize_after_id = self.after(
+                PREVIEW_RESIZE_DEBOUNCE_MS, refresh
+            )
         except Exception:
-            pass
-        finally:
-            self._preview_resize_busy = False
+            self._preview_resize_after_id = None
     
     def _maybe_calibrate(self, fmt, copies):
         """
@@ -6892,14 +7200,11 @@ class App(ctk.CTk):
         top.grab_set()
     
     def _close_date_popover(self):
-        popover = getattr(self, "_date_popover", None)
+        popover = self.__dict__.get("_date_popover")
         self._date_popover = None
         if popover is None:
             return
-        try:
-            popover.grab_release()
-        except Exception:
-            pass
+        self._remove_popover_outside_click(popover)
         try:
             popover.destroy()
         except Exception:
@@ -6930,12 +7235,14 @@ class App(ctk.CTk):
             "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
         )
 
-        popover = ctk.CTkToplevel(self)
+        popover = tk.Toplevel(self)
         self._date_popover = popover
+        popover.withdraw()
         popover.overrideredirect(True)
         popover.transient(self)
         panel = ctk.CTkFrame(popover, corner_radius=8, border_width=1)
         panel.pack(fill="both", expand=True)
+        self._match_plain_popover_background(popover, panel)
         header = ctk.CTkFrame(panel, fg_color="transparent")
         header.pack(fill="x", padx=8, pady=(8, 4))
         month_label = ctk.CTkLabel(header, text="", font=("Arial", 12, "bold"))
@@ -7023,18 +7330,12 @@ class App(ctk.CTk):
         ).pack(side="left", fill="x", expand=True, padx=(3, 0))
 
         render_month()
-        popover.update_idletasks()
         anchor = getattr(self, "prod_date_button", self.prod_date_entry)
-        x = anchor.winfo_rootx()
-        y = anchor.winfo_rooty() + anchor.winfo_height() + 4
-        popover.geometry(f"+{x}+{y}")
-        popover.bind("<Escape>", lambda _event: self._close_date_popover())
-        try:
-            popover.grab_set()
-            popover.lift()
-            popover.focus_force()
-        except Exception:
-            pass
+        self._activate_popover(
+            popover,
+            anchor,
+            self._close_date_popover,
+        )
 
     # ---------- actions ----------
     

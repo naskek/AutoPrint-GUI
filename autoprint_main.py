@@ -3,6 +3,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import tkinter as tk
 from tkinter import messagebox as mb
 
 import customtkinter as ctk
@@ -34,6 +35,12 @@ def format_download_progress(
 
 
 def startup_update_check_enabled(frozen=None) -> bool:
+    if frozen is None:
+        frozen = getattr(sys, "frozen", False)
+    return bool(frozen)
+
+
+def license_check_required(frozen=None) -> bool:
     if frozen is None:
         frozen = getattr(sys, "frozen", False)
     return bool(frozen)
@@ -78,47 +85,55 @@ class AutoPrintApp(bartender_gui.App):
         return self._start_update_check(interactive=False)
 
     def _open_version_dialog(self) -> None:
-        dialog = getattr(self, "_version_dialog", None)
+        dialog = self.__dict__.get("_version_dialog")
         try:
             if dialog is not None and dialog.winfo_exists():
-                dialog.lift()
-                dialog.focus_force()
+                self._close_version_dialog(dialog)
                 return
         except Exception:
-            pass
+            self._close_version_dialog(dialog)
 
-        dialog = ctk.CTkToplevel(self)
+        dialog = tk.Toplevel(self)
         self._version_dialog = dialog
+        dialog.withdraw()
         dialog.title("AutoPrint")
         dialog.geometry("300x140")
         dialog.resizable(False, False)
+        dialog.overrideredirect(True)
         dialog.transient(self)
-
-        def close_dialog() -> None:
-            if self._version_dialog is not dialog:
-                return
-            self._version_update_btn = None
-            self._version_dialog = None
-            try:
-                dialog.destroy()
-            except Exception:
-                pass
-
-        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
-        ctk.CTkLabel(dialog, text=f"Версия: {APP_VERSION}").pack(
+        content = ctk.CTkFrame(dialog, corner_radius=8, border_width=1)
+        content.pack(fill="both", expand=True)
+        self._match_plain_popover_background(dialog, content)
+        ctk.CTkLabel(content, text=f"Версия: {APP_VERSION}").pack(
             padx=16, pady=(24, 14)
         )
         self._version_update_btn = ctk.CTkButton(
-            dialog,
+            content,
             text=self._update_button_text,
             state="normal" if self._update_button_enabled else "disabled",
             command=self._check_updates_clicked,
             width=150,
         )
         self._version_update_btn.pack(padx=16, pady=(0, 18))
+        self._activate_popover(
+            dialog,
+            self.version_identity_btn,
+            lambda: self._close_version_dialog(dialog),
+            align_right=True,
+        )
+
+    def _close_version_dialog(self, dialog=None) -> None:
+        current = self.__dict__.get("_version_dialog")
+        if dialog is None:
+            dialog = current
+        if dialog is None:
+            return
+        self._remove_popover_outside_click(dialog)
+        if current is dialog:
+            self._version_update_btn = None
+            self._version_dialog = None
         try:
-            dialog.lift()
-            dialog.focus_force()
+            dialog.destroy()
         except Exception:
             pass
 
@@ -513,7 +528,7 @@ class AutoPrintApp(bartender_gui.App):
 
 
 def main() -> int:
-    if ensure_license_or_exit() is None:
+    if license_check_required() and ensure_license_or_exit() is None:
         return 1
     app = AutoPrintApp()
     app.mainloop()

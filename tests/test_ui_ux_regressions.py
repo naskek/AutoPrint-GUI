@@ -75,6 +75,27 @@ class VersionMenuTests(unittest.TestCase):
 
         button.configure.assert_not_called()
 
+    @patch("autoprint_main.ctk.CTkToplevel")
+    def test_version_popup_toggles_closed_on_repeated_button_click(self, toplevel):
+        app = object.__new__(autoprint_main.AutoPrintApp)
+        app._version_dialog = Mock()
+        app._version_dialog.winfo_exists.return_value = True
+        app._close_version_dialog = Mock()
+
+        app._open_version_dialog()
+
+        app._close_version_dialog.assert_called_once_with(app._version_dialog)
+        toplevel.assert_not_called()
+
+    def test_version_popup_uses_version_button_as_right_aligned_anchor(self):
+        source = inspect.getsource(autoprint_main.AutoPrintApp._open_version_dialog)
+
+        self.assertIn("self.version_identity_btn", source)
+        self.assertRegex(
+            source,
+            r"_activate_popover\([\s\S]*self\.version_identity_btn[\s\S]*align_right=True",
+        )
+
 
 class GlobalTextEditingTests(unittest.TestCase):
     def test_english_layout_uses_native_binding_without_duplicate_paste(self):
@@ -100,6 +121,18 @@ class GlobalTextEditingTests(unittest.TestCase):
 
 
 class MainLayoutContractTests(unittest.TestCase):
+    def test_startup_removes_customtkinter_global_left_click_focus_hook(self):
+        source = inspect.getsource(bartender_gui.App.__init__)
+
+        self.assertLess(
+            source.index("super().__init__()"),
+            source.index('self.unbind_all("<Button-1>")'),
+        )
+        self.assertLess(
+            source.index('self.unbind_all("<Button-1>")'),
+            source.index("self._build_ui()"),
+        )
+
     def test_main_layout_declares_all_approved_sections(self):
         self.assertEqual(
             bartender_gui.MAIN_LAYOUT_SECTION_NAMES,
@@ -177,6 +210,11 @@ class MainLayoutContractTests(unittest.TestCase):
         self.assertTrue(narrow.endswith("September"))
         self.assertEqual(wide, path)
 
+        compact_row = app._responsive_csv_dir_text(path, 240)
+        self.assertTrue(compact_row.startswith("Текущая папка: C:\\"))
+        self.assertIn("...", compact_row)
+        self.assertTrue(compact_row.endswith("September"))
+
     def test_print_and_csv_scroll_policies_are_explicit(self):
         self.assertFalse(bartender_gui.PRINT_BATCH_CONTAINER_SCROLLABLE)
         self.assertEqual(
@@ -196,6 +234,139 @@ class MainLayoutContractTests(unittest.TestCase):
             )
         self.assertNotIn("width=", actions)
         self.assertEqual(actions.count('.grid(row=0, column='), 3)
+
+    def test_csv_file_section_keeps_controls_above_only_flexible_list(self):
+        source = inspect.getsource(bartender_gui.App._build_ui)
+        section = source.split(
+            "csv_files_body = self.csv_files_section.body", 1
+        )[1].split("self.params_section =", 1)[0]
+
+        self.assertNotIn('text="Текущая папка:"', section)
+        self.assertIn("text=self._responsive_csv_dir_text(self.csv_dir", section)
+        self.assertIn("csv_files_body.grid_rowconfigure(2, weight=1)", section)
+        self.assertRegex(section, r"csv_file_buttons\.grid\(\s*row=1")
+        self.assertRegex(section, r"self\.csv_list_frame\.grid\(\s*row=2")
+        self.assertLess(
+            section.index("csv_file_buttons.grid("),
+            section.index("self.csv_list_frame.grid("),
+        )
+        actions = section.split(
+            'csv_file_buttons = ctk.CTkFrame(csv_files_body', 1
+        )[1].split("self.csv_list_frame =", 1)[0]
+        self.assertNotIn("height=", actions)
+
+
+class ResizeDebounceTests(unittest.TestCase):
+    @staticmethod
+    def _scheduled_app():
+        app = object.__new__(bartender_gui.App)
+        callbacks = []
+
+        def schedule(delay, callback):
+            callbacks.append((delay, callback))
+            return f"after-{len(callbacks)}"
+
+        app.after = Mock(side_effect=schedule)
+        app.after_idle = Mock(return_value="idle")
+        app.after_cancel = Mock()
+        return app, callbacks
+
+    def test_repeated_path_resize_events_coalesce_and_final_refresh_runs(self):
+        app, callbacks = self._scheduled_app()
+        app._path_refresh_after_id = None
+        app.csv_dir = r"C:\Users\operator\Orders\September"
+        app.csv_dir_label = Mock()
+        app.csv_dir_label.winfo_width.return_value = 240
+        app.csv_dir_tooltip = SimpleNamespace(text="")
+        app.source_dir_value_label = None
+
+        app._schedule_path_label_refresh()
+        app._schedule_path_label_refresh()
+
+        self.assertEqual(app.after.call_count, 2)
+        app.after_cancel.assert_called_once_with("after-1")
+        app.csv_dir_label.configure.assert_not_called()
+
+        callbacks[-1][1]()
+
+        app.csv_dir_label.configure.assert_called_once()
+        self.assertEqual(app.csv_dir_tooltip.text, app.csv_dir)
+        self.assertIsNone(app._path_refresh_after_id)
+
+    def test_repeated_scrollbar_resize_events_coalesce_without_geometry_flush(self):
+        app, callbacks = self._scheduled_app()
+        app._csv_scroll_refresh_after_id = None
+        app.update_idletasks = Mock()
+        canvas = Mock()
+        canvas.bbox.return_value = (0, 0, 100, 300)
+        canvas.winfo_height.return_value = 100
+        scrollbar = Mock()
+        app.csv_list_frame = SimpleNamespace(
+            _parent_canvas=canvas,
+            _scrollbar=scrollbar,
+        )
+
+        app._schedule_csv_scrollbar_refresh()
+        app._schedule_csv_scrollbar_refresh()
+
+        self.assertEqual(app.after.call_count, 2)
+        app.after_cancel.assert_called_once_with("after-1")
+
+        callbacks[-1][1]()
+
+        app.update_idletasks.assert_not_called()
+        scrollbar.grid.assert_called_once_with()
+        self.assertIsNone(app._csv_scroll_refresh_after_id)
+
+    def test_repeated_preview_resize_events_coalesce_before_redraw(self):
+        app, callbacks = self._scheduled_app()
+        app._preview_resize_after_id = None
+        app._preview_resize_busy = False
+        app.preview_current_path = bartender_gui.__file__
+        app._show_preview_path = Mock()
+
+        app._on_preview_resize()
+        app._on_preview_resize()
+
+        self.assertEqual(app.after.call_count, 2)
+        app.after_cancel.assert_called_once_with("after-1")
+        app._show_preview_path.assert_not_called()
+
+        callbacks[-1][1]()
+
+        app._show_preview_path.assert_called_once_with(app.preview_current_path)
+        self.assertIsNone(app._preview_resize_after_id)
+
+    def test_pending_resize_callbacks_are_safe_after_widgets_are_destroyed(self):
+        app, callbacks = self._scheduled_app()
+        app._path_refresh_after_id = None
+        app._csv_scroll_refresh_after_id = None
+        app._preview_resize_after_id = None
+        app._preview_resize_busy = False
+        app.csv_dir = r"C:\Orders"
+        app.csv_dir_label = Mock()
+        app.csv_dir_label.winfo_width.side_effect = RuntimeError("destroyed")
+        app.csv_dir_tooltip = SimpleNamespace(text="")
+        app.source_dir_value_label = None
+        canvas = Mock()
+        canvas.bbox.side_effect = RuntimeError("destroyed")
+        app.csv_list_frame = SimpleNamespace(
+            _parent_canvas=canvas,
+            _scrollbar=Mock(),
+        )
+        app.preview_current_path = bartender_gui.__file__
+        app._show_preview_path = Mock(side_effect=RuntimeError("destroyed"))
+
+        app._schedule_path_label_refresh()
+        path_callback = callbacks[-1][1]
+        app._schedule_csv_scrollbar_refresh()
+        scrollbar_callback = callbacks[-1][1]
+        app._on_preview_resize()
+        preview_callback = callbacks[-1][1]
+
+        path_callback()
+        scrollbar_callback()
+        preview_callback()
 
 
 class PrintSelectionTests(unittest.TestCase):
@@ -265,10 +436,267 @@ class CalendarPopoverContractTests(unittest.TestCase):
             bartender_gui.quick_production_date(-1, today), dt.date(2026, 9, 10)
         )
 
+    def test_calendar_uses_shared_non_modal_popover_activation(self):
+        source = inspect.getsource(bartender_gui.App._open_date_picker)
+
+        self.assertIn("popover = tk.Toplevel(self)", source)
+        self.assertNotIn("popover = ctk.CTkToplevel(self)", source)
+        self.assertIn("popover.withdraw()", source)
+        self.assertIn("self._match_plain_popover_background(popover, panel)", source)
+        self.assertIn('anchor = getattr(self, "prod_date_button"', source)
+        self.assertIn("self._activate_popover(", source)
+        self.assertIn("self._close_date_popover", source)
+        self.assertNotIn("grab_set", source)
+
+    def test_calendar_day_selection_writes_date_then_closes(self):
+        app = object.__new__(bartender_gui.App)
+        app.prod_date_entry = Mock()
+        app._mark_prod_date_entry = Mock()
+        app._close_date_popover = Mock()
+
+        app._set_production_date_from_picker(dt.date(2026, 9, 12))
+
+        app.prod_date_entry.delete.assert_called_once_with(0, "end")
+        app.prod_date_entry.insert.assert_called_once_with(0, "12.09.2026")
+        app._mark_prod_date_entry.assert_called_once_with(False)
+        app._close_date_popover.assert_called_once_with()
+
+
+class PopoverInteractionTests(unittest.TestCase):
+    def test_version_popover_does_not_add_customtkinter_global_focus_hook(self):
+        source = inspect.getsource(autoprint_main.AutoPrintApp._open_version_dialog)
+
+        self.assertIn("dialog = tk.Toplevel(self)", source)
+        self.assertNotIn("dialog = ctk.CTkToplevel(self)", source)
+        self.assertIn("dialog.withdraw()", source)
+        self.assertIn("content = ctk.CTkFrame(dialog", source)
+        self.assertIn('content.pack(fill="both", expand=True)', source)
+        self.assertIn("self._match_plain_popover_background(dialog, content)", source)
+
+    @staticmethod
+    def _outside_click_app():
+        app = object.__new__(bartender_gui.App)
+        idle_callbacks = []
+        app.after_idle = Mock(
+            side_effect=lambda callback: idle_callbacks.append(callback) or "install-1"
+        )
+        app.after_cancel = Mock()
+        app.bind_all = Mock(return_value="outside-binding")
+        app._unbind = Mock()
+        return app, idle_callbacks
+
+    def test_calendar_outside_click_closes_without_changing_date(self):
+        app, idle_callbacks = self._outside_click_app()
+        popover = Mock()
+        popover.winfo_exists.return_value = True
+        app._date_popover = popover
+        app.prod_date_entry = Mock()
+
+        app._install_popover_outside_click(popover, app._close_date_popover)
+        idle_callbacks[0]()
+        outside_handler = app.bind_all.call_args.args[1]
+        event = SimpleNamespace(widget=Mock(master=app), x_root=50, y_root=60)
+        app.winfo_containing = Mock(return_value=event.widget)
+        result = outside_handler(event)
+
+        self.assertIsNone(result)
+        app.prod_date_entry.delete.assert_not_called()
+        app.prod_date_entry.insert.assert_not_called()
+        popover.destroy.assert_called_once_with()
+        self.assertIsNone(app._date_popover)
+        app._unbind.assert_called_once()
+
+    def test_inside_click_does_not_close_popover(self):
+        app, idle_callbacks = self._outside_click_app()
+        popover = Mock()
+        popover.winfo_exists.return_value = True
+        close = Mock()
+        child = Mock(master=popover)
+
+        app._install_popover_outside_click(popover, close)
+        idle_callbacks[0]()
+        outside_handler = app.bind_all.call_args.args[1]
+        app.winfo_containing = Mock(return_value=child)
+        result = outside_handler(
+            SimpleNamespace(widget=Mock(master=app), x_root=100, y_root=120)
+        )
+
+        self.assertIsNone(result)
+        close.assert_not_called()
+
+    def test_outside_click_closes_without_consuming_main_window_click(self):
+        app, idle_callbacks = self._outside_click_app()
+        popover = Mock()
+        popover.winfo_exists.return_value = True
+        close = Mock()
+        main_button = Mock(master=app)
+        app.winfo_containing = Mock(return_value=main_button)
+
+        app._install_popover_outside_click(popover, close)
+        idle_callbacks[0]()
+        outside_handler = app.bind_all.call_args.args[1]
+        result = outside_handler(
+            SimpleNamespace(widget=main_button, x_root=400, y_root=300)
+        )
+
+        close.assert_called_once_with()
+        self.assertIsNone(result)
+
+    def test_escape_closes_popover_and_removes_outside_binding(self):
+        app, idle_callbacks = self._outside_click_app()
+        app._position_popover = Mock()
+        popover = Mock()
+        popover.winfo_exists.return_value = True
+        anchor = Mock()
+        close = Mock(side_effect=lambda: app._remove_popover_outside_click(popover))
+
+        app._activate_popover(popover, anchor, close)
+        idle_callbacks[0]()
+        escape_handler = next(
+            call.args[1] for call in popover.bind.call_args_list
+            if call.args[0] == "<Escape>"
+        )
+        escape_handler(SimpleNamespace())
+
+        close.assert_called_once_with()
+        app._unbind.assert_called_once_with(
+            ("bind", "all", "<Button-1>"), "outside-binding"
+        )
+
+    def test_right_aligned_position_is_derived_from_anchor_and_clamped(self):
+        app = object.__new__(bartender_gui.App)
+        app._screen_work_area_at = Mock(return_value=(0, 0, 1000, 700))
+        anchor = Mock()
+        anchor.winfo_rootx.return_value = 500
+        anchor.winfo_rooty.return_value = 200
+        anchor.winfo_width.return_value = 100
+        anchor.winfo_height.return_value = 28
+        popover = Mock()
+        popover.winfo_reqwidth.return_value = 300
+        popover.winfo_reqheight.return_value = 140
+        popover.winfo_width.return_value = 300
+        popover.winfo_height.return_value = 140
+
+        app._position_popover(popover, anchor, align_right=True)
+
+        app._screen_work_area_at.assert_called_once_with(550, 214)
+        popover.geometry.assert_called_once_with("+300+232")
+
+    @patch("bartender_gui.ctk.get_appearance_mode", return_value="Dark")
+    def test_plain_popover_native_background_matches_ctk_content(self, _mode):
+        popover = Mock()
+        content = Mock()
+        content.cget.return_value = ("#f0f0f0", "#202020")
+
+        bartender_gui.App._match_plain_popover_background(popover, content)
+
+        popover.configure.assert_called_once_with(
+            background="#202020",
+            borderwidth=0,
+            highlightthickness=0,
+        )
+
+    def test_popover_moves_above_anchor_at_monitor_bottom_edge(self):
+        app = object.__new__(bartender_gui.App)
+        app._screen_work_area_at = Mock(return_value=(0, 0, 1000, 700))
+        anchor = Mock()
+        anchor.winfo_rootx.return_value = 950
+        anchor.winfo_rooty.return_value = 680
+        anchor.winfo_width.return_value = 40
+        anchor.winfo_height.return_value = 20
+        popover = Mock()
+        popover.winfo_reqwidth.return_value = 300
+        popover.winfo_reqheight.return_value = 140
+        popover.winfo_width.return_value = 300
+        popover.winfo_height.return_value = 140
+
+        app._position_popover(popover, anchor, align_right=True)
+
+        popover.geometry.assert_called_once_with("+690+536")
+
+    def test_version_outside_click_closes_and_clears_reference(self):
+        app = object.__new__(autoprint_main.AutoPrintApp)
+        idle_callbacks = []
+        app.after_idle = Mock(
+            side_effect=lambda callback: idle_callbacks.append(callback) or "install-1"
+        )
+        app.after_cancel = Mock()
+        app.bind_all = Mock(return_value="outside-binding")
+        app._unbind = Mock()
+        popover = Mock()
+        popover.winfo_exists.return_value = True
+        app._version_dialog = popover
+        app._version_update_btn = Mock()
+
+        app._install_popover_outside_click(
+            popover, lambda: app._close_version_dialog(popover)
+        )
+        idle_callbacks[0]()
+        outside_handler = app.bind_all.call_args.args[1]
+        outside_handler(SimpleNamespace(widget=Mock(master=app)))
+
+        self.assertIsNone(app._version_dialog)
+        self.assertIsNone(app._version_update_btn)
+        popover.destroy.assert_called_once_with()
+        app._unbind.assert_called_once()
+
+    def test_destroyed_popover_cleanup_is_safe(self):
+        app, idle_callbacks = self._outside_click_app()
+        popover = Mock()
+        popover.winfo_exists.side_effect = RuntimeError("destroyed")
+        close = Mock()
+
+        app._install_popover_outside_click(popover, close)
+        idle_callbacks[0]()
+        app._remove_popover_outside_click(popover)
+
+        close.assert_not_called()
+
+    def test_closed_popover_cannot_install_deferred_stale_binding(self):
+        app, idle_callbacks = self._outside_click_app()
+        popover = Mock()
+        close = Mock()
+
+        app._install_popover_outside_click(popover, close)
+        app._remove_popover_outside_click(popover)
+        idle_callbacks[0]()
+
+        app.after_cancel.assert_called_once_with("install-1")
+        app.bind_all.assert_not_called()
+        self.assertEqual(app.__dict__.get("_popover_outside_bindings"), {})
+
+    def test_no_global_click_binding_exists_without_open_popover(self):
+        app, _idle_callbacks = self._outside_click_app()
+
+        app._cleanup_popover_outside_clicks()
+
+        app.bind_all.assert_not_called()
+        app._unbind.assert_not_called()
+
 
 class ThemeStartupTests(unittest.TestCase):
     def test_dark_theme_is_the_application_default(self):
         self.assertEqual(bartender_gui.DEFAULT_APPEARANCE_MODE, "dark")
+
+    @patch("bartender_gui.ctk.set_appearance_mode")
+    def test_theme_switch_is_direct_and_preserves_post_theme_refreshes(self, set_mode):
+        app = object.__new__(bartender_gui.App)
+        app.theme_switch = Mock()
+        app.theme_switch.get.return_value = 1
+        app.logger = Mock()
+        app._apply_log_selection_theme = Mock()
+        app._render_csv_list = Mock()
+        app._update_menu_colors = Mock()
+        app._refresh_bottom_layout = Mock()
+
+        app._toggle_theme()
+
+        set_mode.assert_called_once_with("dark")
+        app.logger.configure_tags.assert_called_once_with()
+        app._apply_log_selection_theme.assert_called_once_with()
+        app._render_csv_list.assert_called_once_with()
+        app._update_menu_colors.assert_called_once_with()
+        app._refresh_bottom_layout.assert_called_once_with()
 
 
 class PartModeContractTests(unittest.TestCase):
