@@ -26,10 +26,10 @@ def _write_windows_version_file(root: Path, version: str) -> Path:
         "  kids=[\n"
         "    StringFileInfo([StringTable('040904B0', [\n"
         "      StringStruct('CompanyName', 'AutoPrint'),\n"
-        "      StringStruct('FileDescription', 'AutoPrint BarTender GUI'),\n"
+        "      StringStruct('FileDescription', 'AutoPrint'),\n"
         f"      StringStruct('FileVersion', '{version}'),\n"
-        "      StringStruct('InternalName', 'BarTenderGUI'),\n"
-        "      StringStruct('OriginalFilename', 'BarTenderGUI.exe'),\n"
+        "      StringStruct('InternalName', 'AutoPrint'),\n"
+        "      StringStruct('OriginalFilename', 'AutoPrint.exe'),\n"
         "      StringStruct('ProductName', 'AutoPrint'),\n"
         f"      StringStruct('ProductVersion', '{version}'),\n"
         "    ])]),\n"
@@ -56,7 +56,7 @@ def main() -> int:
         "--clean",
         "--windowed",
         "--name",
-        "BarTenderGUI",
+        "AutoPrint",
         "--version-file",
         str(version_file),
         "--collect-all",

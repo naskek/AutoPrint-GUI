@@ -8,6 +8,12 @@ import bartender_gui
 
 
 class VersionMenuTests(unittest.TestCase):
+    def test_application_window_title_uses_autoprint_identity(self):
+        self.assertEqual(
+            bartender_gui.APP_TITLE,
+            f"AutoPrint V{autoprint_main.APP_VERSION}",
+        )
+
     def test_visible_top_level_menu_contract_is_task_oriented(self):
         self.assertEqual(
             bartender_gui.TOP_LEVEL_MENU_ORDER,

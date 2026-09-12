@@ -60,7 +60,7 @@ jobs:
         shell: pwsh
         run: |
           $version = python -c "from app_version import APP_VERSION; print(APP_VERSION)"
-          $installer = "dist\installer\BarTenderGUI_Setup_${version}.exe"
+          $installer = "dist\installer\AutoPrint_Setup_${version}.exe"
           if (-not (Test-Path $installer)) { throw "Installer not found: $installer" }
           Get-Item $installer | Select-Object Name, Length, LastWriteTime
           Get-FileHash $installer -Algorithm SHA256
@@ -69,6 +69,6 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: AutoPrint-Windows-Installer
-          path: dist/installer/BarTenderGUI_Setup_*.exe
+          path: dist/installer/AutoPrint_Setup_*.exe
           if-no-files-found: error
           retention-days: 14

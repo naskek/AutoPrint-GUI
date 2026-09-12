@@ -8,7 +8,12 @@ from unittest.mock import Mock, patch
 
 import autoprint_main
 from build_tools.build_exe import _write_windows_version_file
-from updater import UpdateError, is_newer_version, parse_version
+from updater import (
+    UpdateError,
+    _select_installer_asset,
+    is_newer_version,
+    parse_version,
+)
 
 
 class VersionTests(unittest.TestCase):
@@ -34,6 +39,24 @@ class VersionTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertIn("filevers=(3, 2, 0, 0)", text)
             self.assertIn("ProductVersion', '3.2.0'", text)
+
+
+class InstallerAssetSelectionTests(unittest.TestCase):
+    def test_autoprint_installer_is_selected(self):
+        asset = {"name": "AutoPrint_Setup_3.2.2.exe"}
+
+        self.assertIs(_select_installer_asset([asset]), asset)
+
+    def test_legacy_bartendergui_installer_is_still_accepted(self):
+        asset = {"name": "BarTenderGUI_Setup_3.2.2.exe"}
+
+        self.assertIs(_select_installer_asset([asset]), asset)
+
+    def test_autoprint_installer_wins_when_both_are_present(self):
+        legacy = {"name": "BarTenderGUI_Setup_3.2.2.exe"}
+        current = {"name": "AutoPrint_Setup_3.2.2.exe"}
+
+        self.assertIs(_select_installer_asset([legacy, current]), current)
 
 
 class ImmediateThread:

@@ -16,7 +16,7 @@ from updater import UpdateError, check_for_update, download_release, launch_inst
 # Keep the legacy module untouched while making the new launcher the single
 # place that owns the displayed/runtime version.
 bartender_gui.APP_VERSION = APP_VERSION
-bartender_gui.APP_TITLE = f"BarTender GUI V{APP_VERSION}"
+bartender_gui.APP_TITLE = f"AutoPrint V{APP_VERSION}"
 
 STARTUP_UPDATE_DELAY_MS = 1500
 

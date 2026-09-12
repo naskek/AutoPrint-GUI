@@ -27,7 +27,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    [str(ROOT / 'bartender_gui.py')],
+    [str(ROOT / 'autoprint_main.py')],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -46,7 +46,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='BarTenderGUI',
+    name='AutoPrint',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -65,5 +65,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='BarTenderGUI',
+    name='AutoPrint',
 )

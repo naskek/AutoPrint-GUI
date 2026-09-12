@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-BarTender GUI V3.1 
+AutoPrint
 """
 
 import os
@@ -55,7 +55,7 @@ BASE_DIR = get_base_dir()
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
-APP_TITLE    = "BarTender GUI V3.0"
+APP_TITLE    = "AutoPrint V3.0"
 APP_VERSION = "3.0"
 DEFAULT_APPEARANCE_MODE = "dark"
 PREVIEW_NAME = "preview.png"

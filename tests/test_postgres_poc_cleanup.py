@@ -55,7 +55,7 @@ class PostgreSqlPocCleanupTests(unittest.TestCase):
         for relative_path in (
             "requirements.txt",
             "build_tools/requirements.txt",
-            "BarTenderGUI.spec",
+            "AutoPrint.spec",
         ):
             content = (ROOT / relative_path).read_text(encoding="utf-8")
             with self.subTest(path=relative_path):

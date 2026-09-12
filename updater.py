@@ -16,7 +16,12 @@ from app_version import UPDATE_API_URL
 
 
 _VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
-_INSTALLER_RE = re.compile(r"^BarTenderGUI_Setup(?:[_-].*)?\.exe$", re.IGNORECASE)
+_AUTOPRINT_INSTALLER_RE = re.compile(
+    r"^AutoPrint_Setup(?:[_-].*)?\.exe$", re.IGNORECASE
+)
+_LEGACY_INSTALLER_RE = re.compile(
+    r"^BarTenderGUI_Setup(?:[_-].*)?\.exe$", re.IGNORECASE
+)
 
 
 class UpdateError(RuntimeError):
@@ -57,6 +62,17 @@ def _request(url: str) -> Request:
     )
 
 
+def _select_installer_asset(assets: list[dict]) -> dict | None:
+    legacy_asset = None
+    for asset in assets:
+        name = str(asset.get("name") or "").strip()
+        if _AUTOPRINT_INSTALLER_RE.fullmatch(name):
+            return asset
+        if legacy_asset is None and _LEGACY_INSTALLER_RE.fullmatch(name):
+            legacy_asset = asset
+    return legacy_asset
+
+
 def fetch_latest_release(timeout: int = 8) -> ReleaseInfo:
     try:
         with urlopen(_request(UPDATE_API_URL), timeout=timeout) as response:
@@ -80,15 +96,12 @@ def fetch_latest_release(timeout: int = 8) -> ReleaseInfo:
         raise UpdateError(f"У последнего Release некорректный тег версии: {tag!r}") from exc
     version = ".".join(str(x) for x in parsed[:3])
 
-    installer_asset = None
-    for asset in payload.get("assets") or []:
-        name = str(asset.get("name") or "").strip()
-        if _INSTALLER_RE.fullmatch(name):
-            installer_asset = asset
-            break
+    installer_asset = _select_installer_asset(payload.get("assets") or [])
 
     if installer_asset is None:
-        raise UpdateError("В последнем Release не найден установщик BarTenderGUI_Setup_*.exe.")
+        raise UpdateError(
+            "В последнем Release не найден установщик AutoPrint_Setup_*.exe."
+        )
 
     download_url = str(installer_asset.get("browser_download_url") or "").strip()
     if not download_url.startswith("https://"):
@@ -101,7 +114,7 @@ def fetch_latest_release(timeout: int = 8) -> ReleaseInfo:
 
     return ReleaseInfo(
         version=version,
-        installer_name=str(installer_asset.get("name") or "BarTenderGUI_Setup.exe"),
+        installer_name=str(installer_asset.get("name") or "AutoPrint_Setup.exe"),
         download_url=download_url,
         sha256=sha256,
         notes=str(payload.get("body") or "").strip(),

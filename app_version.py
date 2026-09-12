@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-APP_NAME = "BarTenderGUI"
+APP_NAME = "AutoPrint"
 APP_DISPLAY_NAME = "AutoPrint"
 APP_VERSION = "3.2.1"
 

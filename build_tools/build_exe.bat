@@ -23,13 +23,13 @@ echo [2/3] Install requirements...
 python -m pip install --upgrade pip
 python -m pip install -r "%SCRIPT_DIR%requirements.txt"
 
-echo [3/3] Build BarTenderGUI via PyInstaller...
+echo [3/3] Build AutoPrint via PyInstaller...
 python "%SCRIPT_DIR%build_exe.py"
 set "BUILD_ERR=%ERRORLEVEL%"
 if not "%BUILD_ERR%"=="0" (
     echo Build failed. Exit code: %BUILD_ERR%
 ) else (
-    echo Done. EXE: dist\BarTenderGUI\BarTenderGUI.exe
+    echo Done. EXE: dist\AutoPrint\AutoPrint.exe
 )
 echo.
 echo ---------- Finished (exit code %BUILD_ERR%). ----------

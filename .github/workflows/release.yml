@@ -19,6 +19,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Require tagged commit to be contained in main
+        shell: pwsh
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release blocked: tagged commit $env:GITHUB_SHA is not contained in origin/main. Merge it into main before tagging or publishing."
+          }
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -74,10 +85,17 @@ jobs:
       - name: Resolve installer
         shell: pwsh
         run: |
-          $installer = "dist\installer\BarTenderGUI_Setup_$env:APP_VERSION.exe"
+          $installer = "dist\installer\AutoPrint_Setup_$env:APP_VERSION.exe"
           if (-not (Test-Path $installer)) { throw "Installer not found: $installer" }
+          # AutoPrint 3.2.1 and older only recognize the legacy filename. Keep this
+          # byte-identical alias until compatibility with those updaters is intentionally dropped.
+          $legacyInstaller = "dist\installer\BarTenderGUI_Setup_$env:APP_VERSION.exe"
+          Copy-Item -LiteralPath $installer -Destination $legacyInstaller -Force
           $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $legacyHash = (Get-FileHash $legacyInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($legacyHash -ne $hash) { throw "Legacy installer alias is not byte-identical" }
           "INSTALLER_PATH=$installer" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LEGACY_INSTALLER_PATH=$legacyInstaller" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "INSTALLER_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Installer SHA256: $hash"
 
@@ -94,10 +112,10 @@ jobs:
           "@
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $env:INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --clobber
+            gh release upload $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --clobber
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
-            gh release create $tag $env:INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --title "AutoPrint $env:APP_VERSION" --notes $notes
+            gh release create $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --title "AutoPrint $env:APP_VERSION" --notes $notes
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
@@ -116,10 +134,10 @@ jobs:
           "@
           gh release view $tag --repo $env:PUBLIC_RELEASE_REPO *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $env:INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --clobber
+            gh release upload $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --clobber
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
-            gh release create $tag $env:INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --title "AutoPrint $env:APP_VERSION" --notes $notes
+            gh release create $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --title "AutoPrint $env:APP_VERSION" --notes $notes
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
@@ -133,6 +151,10 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: AutoPrint-Windows-Installer-release
-          path: dist/installer/BarTenderGUI_Setup_*.exe
+          # The BarTenderGUI-named file is a temporary compatibility alias for old updaters.
+          # Do not remove it until support for AutoPrint 3.2.1 and earlier is intentionally dropped.
+          path: |
+            dist/installer/AutoPrint_Setup_*.exe
+            dist/installer/BarTenderGUI_Setup_*.exe
           if-no-files-found: error
           retention-days: 30

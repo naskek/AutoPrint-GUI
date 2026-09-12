@@ -20,11 +20,11 @@ if exist "build" (
     echo build not found, skip.
 )
 
-if exist "BarTenderGUI.spec" (
-    echo Removing BarTenderGUI.spec...
-    del /f /q "BarTenderGUI.spec"
+if exist "AutoPrint.spec" (
+    echo Removing AutoPrint.spec...
+    del /f /q "AutoPrint.spec"
 ) else (
-    echo BarTenderGUI.spec not found, skip.
+    echo AutoPrint.spec not found, skip.
 )
 
 echo.

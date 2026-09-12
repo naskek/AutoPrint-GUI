@@ -21,6 +21,7 @@ class PackagingTests(unittest.TestCase):
 
         command = call.call_args.args[0]
         self.assertNotIn("--add-data", command)
+        self.assertEqual(command[command.index("--name") + 1], "AutoPrint")
 
     def test_installer_files_section_contains_only_application_bundle(self):
         installer = (ROOT / "build_tools" / "installer.iss").read_text(encoding="utf-8")
@@ -34,10 +35,37 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(
             sources,
             [
-                'Source: "..\\dist\\BarTenderGUI\\*"; DestDir: "{app}"; '
+                'Source: "..\\dist\\AutoPrint\\*"; DestDir: "{app}"; '
                 "Flags: ignoreversion recursesubdirs createallsubdirs"
             ],
         )
+
+    def test_installer_preserves_upgrade_identity_and_cleans_old_shell_artifacts(self):
+        installer = (ROOT / "build_tools" / "installer.iss").read_text(encoding="utf-8")
+
+        self.assertIn("AppId={{B9F5C8A4-4F63-4B43-B93B-FA2C1E25B111}}", installer)
+        self.assertIn('#define MyAppName "AutoPrint"', installer)
+        self.assertIn('#define MyAppExeName "AutoPrint.exe"', installer)
+        self.assertIn("DefaultDirName={localappdata}\\{#MyAppName}", installer)
+        self.assertIn("DeleteFile(ExpandConstant('{app}\\BarTenderGUI.exe'))", installer)
+        self.assertIn("DeleteFile(ExpandConstant('{group}\\BarTender GUI.lnk'))", installer)
+
+    def test_windows_version_resource_uses_autoprint_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            version_file = build_exe._write_windows_version_file(
+                Path(temp_dir), "3.2.1"
+            )
+            contents = version_file.read_text(encoding="utf-8")
+
+        for expected in (
+            "StringStruct('CompanyName', 'AutoPrint')",
+            "StringStruct('FileDescription', 'AutoPrint')",
+            "StringStruct('InternalName', 'AutoPrint')",
+            "StringStruct('OriginalFilename', 'AutoPrint.exe')",
+            "StringStruct('ProductName', 'AutoPrint')",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, contents)
 
     def test_missing_config_loads_empty_and_can_be_created(self):
         with tempfile.TemporaryDirectory() as temp_dir:
