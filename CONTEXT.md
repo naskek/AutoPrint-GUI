@@ -2,6 +2,10 @@
 
 This context describes the language used to decide whether a local AutoPrint installation may start its printing application.
 
+## BarTender integration rule
+
+Before changing BarTender printing, preview, COM lifecycle, or data-source integration, read and follow [the BarTender Automation technical reference](docs/bartender-automation.md).
+
 ## Language
 
 **License Document**:
