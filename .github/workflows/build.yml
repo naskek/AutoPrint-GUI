@@ -10,7 +10,65 @@ permissions:
   contents: read
 
 jobs:
+  unit-regression-tests:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: build_tools/requirements.txt
+
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r build_tools/requirements.txt
+
+      - name: Validate Python sources
+        shell: pwsh
+        run: |
+          python -m py_compile app_version.py updater.py autoprint_main.py bartender_com.py build_tools/build_exe.py tests/test_updater.py
+
+      - name: Run unit and regression tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+  bartender-com-contract:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: build_tools/requirements.txt
+
+      - name: Install contract-test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r build_tools/requirements.txt
+
+      - name: Validate BarTender contract harness
+        shell: pwsh
+        run: python -m py_compile bartender_com.py tests/contract_bartender_com.py tools/bartender_live_smoke.py
+
+      - name: Run BarTender COM contract tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -p "contract_*.py" -v
+
   build-windows:
+    needs: [unit-regression-tests, bartender-com-contract]
     runs-on: windows-latest
 
     steps:
@@ -29,12 +87,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r build_tools/requirements.txt
-
-      - name: Validate Python sources and tests
-        shell: pwsh
-        run: |
-          python -m py_compile app_version.py updater.py autoprint_main.py build_tools/build_exe.py tests/test_updater.py
-          python -m unittest discover -s tests -v
 
       - name: Build PyInstaller application
         shell: pwsh
