@@ -1,5 +1,7 @@
 import datetime as dt
 import inspect
+import os
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -20,6 +22,71 @@ class _EntryStub:
 
     def insert(self, _index, value):
         self.value = str(value)
+
+
+class StickerTemplateTests(unittest.TestCase):
+    def test_resolver_priority_config_then_templates_then_legacy(self):
+        with tempfile.TemporaryDirectory() as root:
+            templates_dir = os.path.join(root, "templates")
+            os.makedirs(templates_dir, exist_ok=True)
+            configured = os.path.join(root, "configured.btw")
+            canonical = os.path.join(templates_dir, bartender_gui.STICKER_BTW_NAME)
+            legacy = os.path.join(root, bartender_gui.STICKER_BTW_NAME)
+
+            for path, content in (
+                (configured, "configured"),
+                (canonical, "canonical"),
+                (legacy, "legacy"),
+            ):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+
+            with patch.object(bartender_gui, "BASE_DIR", root), patch.object(
+                bartender_gui, "TEMPLATES_DIR", templates_dir
+            ):
+                cfg = {"sticker_btw": configured}
+                self.assertEqual(
+                    bartender_gui.resolve_sticker_template_path(cfg), configured
+                )
+
+                os.remove(configured)
+                self.assertEqual(
+                    bartender_gui.resolve_sticker_template_path(cfg), canonical
+                )
+
+                os.remove(canonical)
+                self.assertEqual(
+                    bartender_gui.resolve_sticker_template_path(cfg), legacy
+                )
+
+                os.remove(legacy)
+                self.assertIsNone(
+                    bartender_gui.resolve_sticker_template_path(cfg)
+                )
+
+    def test_import_copies_to_canonical_name_and_persists_config(self):
+        app = object.__new__(bartender_gui.App)
+        app.cfg = {}
+
+        with tempfile.TemporaryDirectory() as root:
+            templates_dir = os.path.join(root, "templates")
+            source = os.path.join(root, "custom-name.btw")
+            with open(source, "w", encoding="utf-8") as fh:
+                fh.write("fixture")
+
+            with patch.object(
+                bartender_gui, "TEMPLATES_DIR", templates_dir
+            ), patch("bartender_gui.save_config") as save_config:
+                target = app._import_sticker_template(source)
+
+            self.assertEqual(
+                target,
+                os.path.join(templates_dir, bartender_gui.STICKER_BTW_NAME),
+            )
+            with open(target, "r", encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "fixture")
+            self.assertEqual(app.cfg["sticker_btw"], target)
+            save_config.assert_called_once_with(app.cfg)
 
 
 class VersionMenuTests(unittest.TestCase):
