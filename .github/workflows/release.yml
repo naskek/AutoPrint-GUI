@@ -56,11 +56,17 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r build_tools/requirements.txt
 
-      - name: Validate Python sources and tests
+      - name: Validate Python sources and unit/regression tests
         shell: pwsh
         run: |
-          python -m py_compile app_version.py updater.py autoprint_main.py build_tools/build_exe.py tests/test_updater.py
-          python -m unittest discover -s tests -v
+          python -m py_compile app_version.py updater.py autoprint_main.py bartender_com.py build_tools/build_exe.py tests/test_updater.py
+          python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Run BarTender COM contract tests
+        shell: pwsh
+        run: |
+          python -m py_compile tests/contract_bartender_com.py tools/bartender_live_smoke.py
+          python -m unittest discover -s tests -p "contract_*.py" -v
 
       - name: Build PyInstaller application
         shell: pwsh

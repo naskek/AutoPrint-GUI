@@ -9,7 +9,7 @@ The four evidence categories used below are deliberately distinct:
 - **Current-code audit** — what the repository does at the audited commit, not necessarily desired behavior.
 - **Needs local verification** — behavior that cannot be established from documentation or source inspection alone.
 
-Official Seagull documentation is authoritative for the API. When different installed BarTender versions behave differently, the verified behavior of every supported local version must also be recorded.
+Official Seagull documentation is authoritative for the API. When different installed BarTender versions behave differently, the verified behavior of every supported local version must also be recorded. Test execution and CI layering are defined in [testing-bartender.md](testing-bartender.md).
 
 ## Official BarTender API contracts
 
