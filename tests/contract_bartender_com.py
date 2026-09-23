@@ -95,6 +95,14 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         fmt.Print.assert_called_once_with("job-timeout", False, 30000, messages)
         app._bt_print.assert_not_called()
         self.assertFalse(fmt.AutoPrintAgain)
+        app.logger.err.assert_not_called()
+        timeout_logs = [
+            str(call.args[0])
+            for call in app.logger.log.call_args_list
+            if call.args
+        ]
+        self.assertTrue(any("btTimeout (1)" in line for line in timeout_logs))
+        self.assertTrue(any("неоднозначным" in line for line in timeout_logs))
 
     @patch("win32com.client.VARIANT")
     def test_hard_failure_does_not_resubmit_via_fallback(self, variant):
