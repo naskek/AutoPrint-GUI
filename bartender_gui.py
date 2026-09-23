@@ -1507,6 +1507,18 @@ class App(ctk.CTk):
         except Exception:
             pass
 
+    def _reset_print_selection_for_loaded_csv(self):
+        total_rows = len(getattr(self, "csv_rows", []) or [])
+        try:
+            self.index_entry.delete(0, "end")
+            self.index_entry.insert(0, "1")
+            self.limit_entry.delete(0, "end")
+            if total_rows:
+                self.limit_entry.insert(0, str(total_rows))
+        except Exception:
+            return
+        self._update_print_selection_summary()
+
     def _mark_print_selection_valid(self, valid):
         defaults = getattr(self, "_selection_entry_border_defaults", (None, None))
         for entry, default in zip((self.index_entry, self.limit_entry), defaults):
@@ -6023,6 +6035,7 @@ class App(ctk.CTk):
             self.csv_rows = load_kontur_raw(p_abs)
             head = self.csv_rows[0] if self.csv_rows else {"DM": "", "NAME": ""}
             self.logger.log(f"CSV: строк={len(self.csv_rows)}; пример DM='{head.get('DM','')}', NAME='{head.get('NAME','')}'")
+            self._reset_print_selection_for_loaded_csv()
             try:
                 if self.csv_rows:
                     suggested = min(len(self.csv_rows), self.default_batch_size)
@@ -6037,11 +6050,6 @@ class App(ctk.CTk):
             self._update_brand_hint(sample_gtin)
 
             if auto_preview and self.csv_rows:
-                try:
-                    self.index_entry.delete(0, 'end')
-                    self.index_entry.insert(0, '1')
-                except Exception:
-                    pass
                 try:
                     self._preview()
                 except Exception as _e:
