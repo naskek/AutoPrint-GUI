@@ -5740,6 +5740,20 @@ class App(ctk.CTk):
             lines.append(f"{prefix}: {text}" if prefix else text)
         return lines
 
+    def _disable_auto_print_again(self, fmt):
+        """Disable BarTender's automatic repeat option when the COM member is supported."""
+        try:
+            fmt.AutoPrintAgain = False
+            return True
+        except Exception as e:
+            try:
+                self.logger.log(
+                    f"BT: AutoPrintAgain недоступен для этого документа/версии: {e}"
+                )
+            except Exception:
+                pass
+            return False
+
     def _bt_batch_print(self, fmt, prn_name: str, print_job_name: str, copies: int, show_dialog: bool):
         try:
             fmt.PrintSetup.Printer = prn_name
@@ -5753,6 +5767,7 @@ class App(ctk.CTk):
             fmt.PrintSetup.IdenticalCopiesOfLabel = int(copies)
         except Exception:
             pass
+        self._disable_auto_print_again(fmt)
 
         if show_dialog:
             try:
@@ -5766,26 +5781,91 @@ class App(ctk.CTk):
             from win32com.client import VARIANT
 
             messages = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_DISPATCH, None)
-            timeout_ms = 30000
+        except Exception as e:
+            try:
+                self.logger.err(
+                    "BT Batch Print: не удалось подготовить COM Messages до отправки; "
+                    f"безопасный fallback на PrintOut: {e}"
+                )
+            except Exception:
+                pass
+            return self._bt_print(fmt, copies, False)
+
+        timeout_ms = 30000
+        try:
             self.logger.log(
                 f"BT Batch Print: Print(Job='{print_job_name}', WaitForSpool=True, TimeoutMs={timeout_ms})"
             )
             result = fmt.Print(print_job_name or "", True, timeout_ms, messages)
-            message_lines = self._collect_bt_messages(messages)
-            for line in message_lines:
-                try:
-                    self.logger.log(f"BT Batch Message: {line}")
-                except Exception:
-                    pass
-            if int(result) != 0:
-                raise Exception(f"BarTender вернул код результата {result}.")
-            return True
         except Exception as e:
             try:
-                self.logger.err(f"BT Batch Print: Print(...) не сработал, fallback на PrintOut: {e}")
+                self.logger.err(
+                    "BT Batch Print: исключение после начала Print(...); "
+                    "результат отправки неоднозначен, повторная отправка отключена: "
+                    f"{e}"
+                )
             except Exception:
                 pass
-            return self._bt_print(fmt, copies, False)
+            return False
+
+        try:
+            message_lines = self._collect_bt_messages(messages)
+        except Exception as e:
+            message_lines = []
+            try:
+                self.logger.log(f"BT Batch Print: не удалось прочитать Messages: {e}")
+            except Exception:
+                pass
+        for line in message_lines:
+            try:
+                self.logger.log(f"BT Batch Message: {line}")
+            except Exception:
+                pass
+
+        try:
+            result_code = int(result)
+        except Exception as e:
+            try:
+                self.logger.err(
+                    "BT Batch Print: некорректный BtPrintResult после Print(...); "
+                    "повторная отправка отключена: "
+                    f"{result!r} ({e})"
+                )
+            except Exception:
+                pass
+            return False
+
+        if result_code == 0:
+            return True
+        if result_code == 1:
+            try:
+                self.logger.err(
+                    "BT Batch Print: BarTender вернул btTimeout (1). "
+                    "Задание могло уже быть создано и продолжать печататься; "
+                    "повторная отправка отключена."
+                )
+            except Exception:
+                pass
+            return False
+        if result_code == 2:
+            try:
+                self.logger.err(
+                    "BT Batch Print: BarTender вернул btFailure (2). "
+                    "После попытки Print(...) автоматический retry запрещён, "
+                    "чтобы не создать дубликат."
+                )
+            except Exception:
+                pass
+            return False
+
+        try:
+            self.logger.err(
+                f"BT Batch Print: неизвестный BtPrintResult={result_code}; "
+                "повторная отправка отключена."
+            )
+        except Exception:
+            pass
+        return False
 
     def _rebind_template_db(self, fmt, csv_path: str):
         """
@@ -7104,6 +7184,8 @@ class App(ctk.CTk):
     
     def _bt_print(self, fmt, copies: int, show_dialog: bool):
     
+        self._disable_auto_print_again(fmt)
+
         # Если выбран режим "Одно задание" — используем IdenticalCopiesOfLabel
         try:
             sj = False

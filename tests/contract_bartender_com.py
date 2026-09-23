@@ -75,11 +75,10 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         self.assertTrue(result)
         fmt.Print.assert_called_once_with("job-1", True, 30000, messages)
         app._bt_print.assert_not_called()
+        self.assertFalse(fmt.AutoPrintAgain)
 
-    @unittest.expectedFailure
     @patch("win32com.client.VARIANT")
-    def test_timeout_must_not_resubmit_via_fallback_tracked_by_issue_13(self, variant):
-        """Known contract violation. Remove expectedFailure as part of Issue #13."""
+    def test_timeout_does_not_resubmit_via_fallback(self, variant):
         messages = SimpleNamespace(value=SimpleNamespace(Count=0))
         variant.return_value = messages
         app = object.__new__(bartender_gui.App)
@@ -89,10 +88,60 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         fmt.PrintSetup = SimpleNamespace()
         fmt.Print.return_value = 1  # documented btTimeout
 
-        app._bt_batch_print(fmt, "Printer", "job-timeout", 1, False)
+        result = app._bt_batch_print(fmt, "Printer", "job-timeout", 1, False)
 
-        fmt.Print.assert_called_once()
+        self.assertFalse(result)
+        fmt.Print.assert_called_once_with("job-timeout", True, 30000, messages)
         app._bt_print.assert_not_called()
+        self.assertFalse(fmt.AutoPrintAgain)
+
+    @patch("win32com.client.VARIANT")
+    def test_hard_failure_does_not_resubmit_via_fallback(self, variant):
+        messages = SimpleNamespace(value=SimpleNamespace(Count=0))
+        variant.return_value = messages
+        app = object.__new__(bartender_gui.App)
+        app.logger = Mock()
+        app._bt_print = Mock(return_value=True)
+        fmt = Mock()
+        fmt.PrintSetup = SimpleNamespace()
+        fmt.Print.return_value = 2  # documented btFailure
+
+        result = app._bt_batch_print(fmt, "Printer", "job-failure", 1, False)
+
+        self.assertFalse(result)
+        fmt.Print.assert_called_once_with("job-failure", True, 30000, messages)
+        app._bt_print.assert_not_called()
+
+    @patch("win32com.client.VARIANT")
+    def test_print_exception_is_ambiguous_and_does_not_retry(self, variant):
+        messages = SimpleNamespace(value=SimpleNamespace(Count=0))
+        variant.return_value = messages
+        app = object.__new__(bartender_gui.App)
+        app.logger = Mock()
+        app._bt_print = Mock(return_value=True)
+        fmt = Mock()
+        fmt.PrintSetup = SimpleNamespace()
+        fmt.Print.side_effect = RuntimeError("COM timeout")
+
+        result = app._bt_batch_print(fmt, "Printer", "job-exception", 1, False)
+
+        self.assertFalse(result)
+        fmt.Print.assert_called_once_with("job-exception", True, 30000, messages)
+        app._bt_print.assert_not_called()
+
+    @patch("win32com.client.VARIANT", side_effect=RuntimeError("VARIANT unavailable"))
+    def test_pre_submit_messages_setup_failure_can_use_safe_fallback(self, _variant):
+        app = object.__new__(bartender_gui.App)
+        app.logger = Mock()
+        app._bt_print = Mock(return_value=True)
+        fmt = Mock()
+        fmt.PrintSetup = SimpleNamespace()
+
+        result = app._bt_batch_print(fmt, "Printer", "job-pre-submit", 1, False)
+
+        self.assertTrue(result)
+        fmt.Print.assert_not_called()
+        app._bt_print.assert_called_once_with(fmt, 1, False)
 
 
 if __name__ == "__main__":
