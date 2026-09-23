@@ -112,6 +112,9 @@ TOP_LEVEL_MENU_ORDER = ("Каталог", "Шаблоны", "Работа с к�
 CODES_MENU_ORDER = ("Проверка кодов", "Отчёт о вводе в оборот")
 PRINT_SELECTION_MODE_RANGE = "Диапазон"
 PRINT_SELECTION_MODE_COUNT = "Количество"
+BT_BATCH_SUBMITTED = "submitted"
+BT_BATCH_AMBIGUOUS = "ambiguous"
+BT_BATCH_FAILED = "failed"
 
 
 def application_icon_path() -> str:
@@ -5783,7 +5786,11 @@ class App(ctk.CTk):
                 self.logger.log("BT Batch Print: включён диалог печати, использую совместимый PrintOut.")
             except Exception:
                 pass
-            return self._bt_print(fmt, copies, show_dialog)
+            return (
+                BT_BATCH_SUBMITTED
+                if self._bt_print(fmt, copies, show_dialog)
+                else BT_BATCH_FAILED
+            )
 
         try:
             import pythoncom
@@ -5799,14 +5806,18 @@ class App(ctk.CTk):
                 )
             except Exception:
                 pass
-            return False
+            return BT_BATCH_FAILED
 
+        # AutoPrint needs confirmation that BarTender accepted/submitted the job,
+        # not synchronous completion of a potentially very large print run.
+        # Seagull documents WaitForJobToComplete=False as the non-waiting mode.
         timeout_ms = 30000
         try:
             self.logger.log(
-                f"BT Batch Print: Print(Job='{print_job_name}', WaitForSpool=True, TimeoutMs={timeout_ms})"
+                f"BT Batch Print: Print(Job='{print_job_name}', "
+                f"WaitForJobToComplete=False, TimeoutMs={timeout_ms})"
             )
-            result = fmt.Print(print_job_name or "", True, timeout_ms, messages)
+            result = fmt.Print(print_job_name or "", False, timeout_ms, messages)
         except Exception as e:
             try:
                 self.logger.err(
@@ -5816,7 +5827,7 @@ class App(ctk.CTk):
                 )
             except Exception:
                 pass
-            return False
+            return BT_BATCH_AMBIGUOUS
 
         try:
             message_lines = self._collect_bt_messages(messages)
@@ -5838,25 +5849,25 @@ class App(ctk.CTk):
             try:
                 self.logger.err(
                     "BT Batch Print: некорректный BtPrintResult после Print(...); "
-                    "повторная отправка отключена: "
+                    "результат отправки неоднозначен, повторная отправка отключена: "
                     f"{result!r} ({e})"
                 )
             except Exception:
                 pass
-            return False
+            return BT_BATCH_AMBIGUOUS
 
         if result_code == 0:
-            return True
+            return BT_BATCH_SUBMITTED
         if result_code == 1:
             try:
-                self.logger.err(
+                self.logger.log(
                     "BT Batch Print: BarTender вернул btTimeout (1). "
                     "Задание могло уже быть создано и продолжать печататься; "
-                    "повторная отправка отключена."
+                    "статус считается неоднозначным, повторная отправка отключена."
                 )
             except Exception:
                 pass
-            return False
+            return BT_BATCH_AMBIGUOUS
         if result_code == 2:
             try:
                 self.logger.err(
@@ -5866,16 +5877,16 @@ class App(ctk.CTk):
                 )
             except Exception:
                 pass
-            return False
+            return BT_BATCH_FAILED
 
         try:
             self.logger.err(
                 f"BT Batch Print: неизвестный BtPrintResult={result_code}; "
-                "повторная отправка отключена."
+                "результат отправки неоднозначен, повторная отправка отключена."
             )
         except Exception:
             pass
-        return False
+        return BT_BATCH_AMBIGUOUS
 
     def _rebind_template_db(self, fmt, csv_path: str):
         """
@@ -8208,15 +8219,22 @@ class App(ctk.CTk):
                         fmt.RecordRange = f"1-{len(enriched)}"
                         self.logger.log(f"Отправка на печать: {real_in_batch} строк через tmp_batch." + extra_info)
                         batch_job_name = f"AutoPrint {fmt_name} {batch_start_num}-{batch_end_num}"
-                        ok = self._bt_batch_print(
+                        batch_outcome = self._bt_batch_print(
                             fmt,
                             prn,
                             batch_job_name,
                             copies,
                             self._dialog_flag(),
                         )
-                        if not ok:
-                            raise Exception("BarTender не подтвердил пакетную печать.")
+                        if batch_outcome == BT_BATCH_AMBIGUOUS:
+                            self.logger.log(
+                                f"Пакет {bidx}: задание могло быть отправлено в BarTender, "
+                                "но подтверждение результата не получено. "
+                                "Повторная отправка и автоматическое продолжение отключены."
+                            )
+                            break
+                        if batch_outcome != BT_BATCH_SUBMITTED:
+                            raise Exception("BarTender сообщил об ошибке пакетной печати.")
                     else:
                         self.logger.log(
                             f"Отправка на печать: {real_in_batch} строк прямой подстановкой полей." + extra_info

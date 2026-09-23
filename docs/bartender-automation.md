@@ -101,7 +101,7 @@ A `Message` is informational, warning, or error and exposes message text, number
 
 Always capture the numeric result and all messages, including warnings and informational messages. `PrintOut` can confirm only that the call returned without raising; it supplies no `BtPrintResult` or completion evidence.
 
-**AutoPrint rule.** Prefer the documented four-argument `Format.Print` for unattended printing because it returns a result and messages. Use the documented two-Boolean `PrintOut` only when its status-window/print-dialog behavior is intentionally required or as an explicitly tested compatibility path; never treat its return as proof of submission or completion.
+**AutoPrint rule.** Prefer the documented four-argument `Format.Print` for unattended printing because it returns a result and messages. For unattended batch submission, AutoPrint uses `WaitForJobToComplete=False`: the application needs the BarTender submission result, not synchronous completion of a potentially long print run. This avoids deliberately blocking the Tk event loop while waiting for job completion and avoids turning long-running jobs into routine 30-second `btTimeout` results. A returned `btTimeout`, malformed result, or COM exception after `Print` begins remains an ambiguous outcome and must never trigger a retry. Use the documented two-Boolean `PrintOut` only when its status-window/print-dialog behavior is intentionally required or as an explicitly tested compatibility path; never treat its return as proof of submission or completion.
 
 ### Events, print state, and the System Database
 

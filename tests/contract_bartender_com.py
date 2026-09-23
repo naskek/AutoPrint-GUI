@@ -72,8 +72,8 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
 
         result = app._bt_batch_print(fmt, "Printer", "job-1", 1, False)
 
-        self.assertTrue(result)
-        fmt.Print.assert_called_once_with("job-1", True, 30000, messages)
+        self.assertEqual(result, bartender_gui.BT_BATCH_SUBMITTED)
+        fmt.Print.assert_called_once_with("job-1", False, 30000, messages)
         app._bt_print.assert_not_called()
         self.assertFalse(fmt.AutoPrintAgain)
         self.assertFalse(fmt.PrintSetup.AutoPrintAgain)
@@ -91,8 +91,8 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
 
         result = app._bt_batch_print(fmt, "Printer", "job-timeout", 1, False)
 
-        self.assertFalse(result)
-        fmt.Print.assert_called_once_with("job-timeout", True, 30000, messages)
+        self.assertEqual(result, bartender_gui.BT_BATCH_AMBIGUOUS)
+        fmt.Print.assert_called_once_with("job-timeout", False, 30000, messages)
         app._bt_print.assert_not_called()
         self.assertFalse(fmt.AutoPrintAgain)
 
@@ -109,8 +109,8 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
 
         result = app._bt_batch_print(fmt, "Printer", "job-failure", 1, False)
 
-        self.assertFalse(result)
-        fmt.Print.assert_called_once_with("job-failure", True, 30000, messages)
+        self.assertEqual(result, bartender_gui.BT_BATCH_FAILED)
+        fmt.Print.assert_called_once_with("job-failure", False, 30000, messages)
         app._bt_print.assert_not_called()
 
     @patch("win32com.client.VARIANT")
@@ -126,8 +126,26 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
 
         result = app._bt_batch_print(fmt, "Printer", "job-exception", 1, False)
 
-        self.assertFalse(result)
-        fmt.Print.assert_called_once_with("job-exception", True, 30000, messages)
+        self.assertEqual(result, bartender_gui.BT_BATCH_AMBIGUOUS)
+        fmt.Print.assert_called_once_with("job-exception", False, 30000, messages)
+        app._bt_print.assert_not_called()
+
+
+    @patch("win32com.client.VARIANT")
+    def test_malformed_result_is_ambiguous_and_does_not_retry(self, variant):
+        messages = SimpleNamespace(value=SimpleNamespace(Count=0))
+        variant.return_value = messages
+        app = object.__new__(bartender_gui.App)
+        app.logger = Mock()
+        app._bt_print = Mock(return_value=True)
+        fmt = Mock()
+        fmt.PrintSetup = SimpleNamespace()
+        fmt.Print.return_value = object()
+
+        result = app._bt_batch_print(fmt, "Printer", "job-malformed", 1, False)
+
+        self.assertEqual(result, bartender_gui.BT_BATCH_AMBIGUOUS)
+        fmt.Print.assert_called_once_with("job-malformed", False, 30000, messages)
         app._bt_print.assert_not_called()
 
     @patch("win32com.client.VARIANT", side_effect=RuntimeError("VARIANT unavailable"))
@@ -140,7 +158,7 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
 
         result = app._bt_batch_print(fmt, "Printer", "job-pre-submit", 1, False)
 
-        self.assertFalse(result)
+        self.assertEqual(result, bartender_gui.BT_BATCH_FAILED)
         fmt.Print.assert_not_called()
         app._bt_print.assert_not_called()
 
