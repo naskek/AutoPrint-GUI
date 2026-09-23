@@ -204,7 +204,47 @@ def default_template_path(name: str) -> str:
     return os.path.join(TEMPLATES_DIR, name)
 
 
-STICKER_BTW_DEFAULT = default_template_path(STICKER_BTW_NAME)
+def sticker_template_candidates(cfg=None):
+    """Кандидаты для специального маркировочного BTW в порядке приоритета."""
+    configured = ""
+    if isinstance(cfg, dict):
+        configured = str(cfg.get("sticker_btw") or "").strip()
+    candidates = [
+        configured,
+        os.path.join(TEMPLATES_DIR, STICKER_BTW_NAME),
+        os.path.join(BASE_DIR, STICKER_BTW_NAME),
+    ]
+    result = []
+    seen = set()
+    for path in candidates:
+        if not path:
+            continue
+        key = os.path.normcase(os.path.abspath(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def resolve_sticker_template_path(cfg=None):
+    """Возвращает первый существующий маркировочный BTW или None."""
+    for path in sticker_template_candidates(cfg):
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def sticker_template_display_path(cfg=None):
+    """Путь, который показываем оператору, даже если файл пока отсутствует."""
+    resolved = resolve_sticker_template_path(cfg)
+    if resolved:
+        return resolved
+    if isinstance(cfg, dict):
+        configured = str(cfg.get("sticker_btw") or "").strip()
+        if configured:
+            return configured
+    return os.path.join(TEMPLATES_DIR, STICKER_BTW_NAME)
 
 
 
@@ -2388,7 +2428,7 @@ class App(ctk.CTk):
     def _open_template_editor(self):
         win = ctk.CTkToplevel(self)
         win.title("Редактор шаблонов")
-        win.geometry("980x560")
+        win.geometry("980x700")
         win.grab_set()
         try:
             win.lift()
@@ -2683,6 +2723,91 @@ class App(ctk.CTk):
             self._refresh_format_choices(preserve_value=self.format_combo.get())
             self._refresh_printers()
             refresh_tree()
+
+        sticker_frame = ctk.CTkFrame(win)
+        sticker_frame.pack(fill="x", padx=12, pady=(0, 10))
+        sticker_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            sticker_frame,
+            text="Маркировочный стикер",
+            font=ctk.CTkFont(weight="bold"),
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(10, 4))
+
+        ctk.CTkLabel(sticker_frame, text="BTW файл:").grid(
+            row=1, column=0, sticky="w", padx=(10, 8), pady=4
+        )
+        sticker_path_label = ctk.CTkLabel(sticker_frame, text="", anchor="w")
+        sticker_path_label.grid(row=1, column=1, sticky="ew", pady=4)
+
+        sticker_status_label = ctk.CTkLabel(sticker_frame, text="", width=120)
+        sticker_status_label.grid(row=1, column=2, sticky="e", padx=(8, 10), pady=4)
+
+        ctk.CTkLabel(sticker_frame, text="Принтер:").grid(
+            row=2, column=0, sticky="w", padx=(10, 8), pady=(4, 10)
+        )
+        sticker_printers = self._get_printer_values()
+        sticker_current_printer = str(self.cfg.get("sticker_printer") or "").strip()
+        sticker_extra = (
+            [sticker_current_printer]
+            if sticker_current_printer and sticker_current_printer not in sticker_printers
+            else []
+        )
+        sticker_printer_options = ["(Авто: TE210 / выбранный)"] + sticker_extra + sticker_printers
+        sticker_printer_var = tk.StringVar(
+            value=sticker_current_printer or "(Авто: TE210 / выбранный)"
+        )
+
+        def on_sticker_printer_change(value):
+            value = str(value or "").strip()
+            if value == "(Авто: TE210 / выбранный)":
+                self.cfg.pop("sticker_printer", None)
+            else:
+                self.cfg["sticker_printer"] = value
+            save_config(self.cfg)
+
+        ctk.CTkOptionMenu(
+            sticker_frame,
+            variable=sticker_printer_var,
+            values=sticker_printer_options,
+            command=on_sticker_printer_change,
+        ).grid(row=2, column=1, sticky="ew", pady=(4, 10))
+
+        def refresh_sticker_section():
+            resolved = resolve_sticker_template_path(self.cfg)
+            display_path = sticker_template_display_path(self.cfg)
+            sticker_path_label.configure(text=display_path)
+            sticker_status_label.configure(
+                text="OK" if resolved else "Файл не найден"
+            )
+
+        def on_sticker_import():
+            src = fd.askopenfilename(
+                title="Выбери BTW маркировочного стикера",
+                filetypes=[("BarTender Template", "*.btw")],
+            )
+            if not src:
+                return
+            try:
+                target = self._import_sticker_template(src)
+                refresh_sticker_section()
+                self.logger.log(
+                    f"[Шаблон] Маркировочный стикер импортирован: {target}"
+                )
+            except Exception as e:
+                mb.showerror(
+                    "Маркировочный стикер",
+                    f"Не удалось импортировать BTW:\n{e}",
+                )
+
+        ctk.CTkButton(
+            sticker_frame,
+            text="Импортировать…",
+            width=130,
+            command=on_sticker_import,
+        ).grid(row=2, column=2, sticky="e", padx=(8, 10), pady=(4, 10))
+
+        refresh_sticker_section()
 
         btns = ctk.CTkFrame(win)
         btns.pack(pady=(0, 12))
@@ -3045,6 +3170,19 @@ class App(ctk.CTk):
             if os.path.isfile(path):
                 return path
         return ""
+
+    def _import_sticker_template(self, src_path: str):
+        src_path = str(src_path or "").strip()
+        if not src_path or not os.path.isfile(src_path):
+            raise FileNotFoundError(src_path or "Sticker template file is missing")
+        os.makedirs(TEMPLATES_DIR, exist_ok=True)
+        target = os.path.join(TEMPLATES_DIR, STICKER_BTW_NAME)
+        import shutil as _shutil
+        if os.path.normcase(os.path.abspath(src_path)) != os.path.normcase(os.path.abspath(target)):
+            _shutil.copy2(src_path, target)
+        self.cfg["sticker_btw"] = target
+        save_config(self.cfg)
+        return target
 
     def _copy_template_into_workspace(self, src_path: str, template_id: str = ""):
         src_path = str(src_path or "").strip()
@@ -6317,14 +6455,12 @@ class App(ctk.CTk):
         if not prn:
             self.logger.err("Стикер: принтер не найден.")
             return
-        sticker_path = (self.cfg.get("sticker_btw") or STICKER_BTW_DEFAULT)
-        if not os.path.isfile(sticker_path):
-            fallback = default_template_path(STICKER_BTW_NAME)
-            if os.path.isfile(fallback):
-                sticker_path = fallback
-            else:
-                self.logger.err(f"Стикер: шаблон не найден: {sticker_path}.")
-                return
+        sticker_path = resolve_sticker_template_path(self.cfg)
+        if not sticker_path:
+            self.logger.err(
+                f"Стикер: шаблон не найден: {sticker_template_display_path(self.cfg)}."
+            )
+            return
         # Собираем полезные поля для подстановки
         payload = {
             "PKG": str(bidx),
