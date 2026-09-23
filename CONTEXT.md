@@ -4,7 +4,13 @@ This context describes the language used to decide whether a local AutoPrint ins
 
 ## BarTender integration rule
 
-Before changing BarTender printing, preview, COM lifecycle, or data-source integration, read and follow [the BarTender Automation technical reference](docs/bartender-automation.md).
+Before changing BarTender printing, preview, COM lifecycle, BTW handling, data-source integration, printers, copies/serialization, messages/results, events, or cancellation:
+
+1. read and follow [the BarTender Automation technical reference](docs/bartender-automation.md);
+2. verify the exact COM member/signature/semantics against the official Seagull Scientific documentation linked there;
+3. follow [the BarTender testing strategy](docs/testing-bartender.md) and add/update COM-boundary contract coverage.
+
+Official Seagull documentation is the baseline API contract. Do not guess overloads, properties, result semantics, or retry/fallback behavior. Any undocumented compatibility heuristic must be isolated, justified, and locally verified.
 
 ## Language
 
