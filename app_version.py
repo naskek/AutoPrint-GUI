@@ -2,7 +2,7 @@ from __future__ import annotations
 
 APP_NAME = "AutoPrint"
 APP_DISPLAY_NAME = "AutoPrint"
-APP_VERSION = "3.2.2"
+APP_VERSION = "3.2.3"
 
 # Public repository that contains only compiled release assets.
 # Source code stays in the private AutoPrint-GUI repository.
