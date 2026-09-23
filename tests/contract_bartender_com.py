@@ -76,6 +76,7 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         fmt.Print.assert_called_once_with("job-1", True, 30000, messages)
         app._bt_print.assert_not_called()
         self.assertFalse(fmt.AutoPrintAgain)
+        self.assertFalse(fmt.PrintSetup.AutoPrintAgain)
 
     @patch("win32com.client.VARIANT")
     def test_timeout_does_not_resubmit_via_fallback(self, variant):
@@ -130,7 +131,7 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         app._bt_print.assert_not_called()
 
     @patch("win32com.client.VARIANT", side_effect=RuntimeError("VARIANT unavailable"))
-    def test_pre_submit_messages_setup_failure_can_use_safe_fallback(self, _variant):
+    def test_pre_submit_messages_setup_failure_stops_without_printout_fallback(self, _variant):
         app = object.__new__(bartender_gui.App)
         app.logger = Mock()
         app._bt_print = Mock(return_value=True)
@@ -139,9 +140,9 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
 
         result = app._bt_batch_print(fmt, "Printer", "job-pre-submit", 1, False)
 
-        self.assertTrue(result)
+        self.assertFalse(result)
         fmt.Print.assert_not_called()
-        app._bt_print.assert_called_once_with(fmt, 1, False)
+        app._bt_print.assert_not_called()
 
 
 if __name__ == "__main__":

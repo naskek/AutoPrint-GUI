@@ -5741,18 +5741,27 @@ class App(ctk.CTk):
         return lines
 
     def _disable_auto_print_again(self, fmt):
-        """Disable BarTender's automatic repeat option when the COM member is supported."""
+        """Disable BarTender's automatic repeat option on every supported COM surface."""
+        disabled = False
+        errors = []
         try:
             fmt.AutoPrintAgain = False
-            return True
+            disabled = True
         except Exception as e:
+            errors.append(f"Format.AutoPrintAgain: {e}")
+        try:
+            fmt.PrintSetup.AutoPrintAgain = False
+            disabled = True
+        except Exception as e:
+            errors.append(f"PrintSetup.AutoPrintAgain: {e}")
+        if errors:
             try:
                 self.logger.log(
-                    f"BT: AutoPrintAgain недоступен для этого документа/версии: {e}"
+                    "BT: часть AutoPrintAgain-настроек недоступна: " + "; ".join(errors)
                 )
             except Exception:
                 pass
-            return False
+        return disabled
 
     def _bt_batch_print(self, fmt, prn_name: str, print_job_name: str, copies: int, show_dialog: bool):
         try:
@@ -5785,11 +5794,12 @@ class App(ctk.CTk):
             try:
                 self.logger.err(
                     "BT Batch Print: не удалось подготовить COM Messages до отправки; "
-                    f"безопасный fallback на PrintOut: {e}"
+                    "автоматический fallback отключён, чтобы исключить двойную печать: "
+                    f"{e}"
                 )
             except Exception:
                 pass
-            return self._bt_print(fmt, copies, False)
+            return False
 
         timeout_ms = 30000
         try:
