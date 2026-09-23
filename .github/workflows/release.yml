@@ -125,8 +125,13 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
+      - name: Require public updater channel credentials
+        if: env.PUBLIC_RELEASE_TOKEN == ''
+        shell: pwsh
+        run: |
+          throw "Production release blocked: AUTOPRINT_RELEASE_TOKEN is required to publish the public updater channel."
+
       - name: Publish public updater release
-        if: env.PUBLIC_RELEASE_TOKEN != ''
         env:
           GH_TOKEN: ${{ secrets.AUTOPRINT_RELEASE_TOKEN }}
         shell: pwsh
@@ -147,11 +152,42 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
-      - name: Public updater channel not configured
-        if: env.PUBLIC_RELEASE_TOKEN == ''
+      - name: Verify public updater release
+        env:
+          GH_TOKEN: ${{ secrets.AUTOPRINT_RELEASE_TOKEN }}
         shell: pwsh
         run: |
-          Write-Warning "AUTOPRINT_RELEASE_TOKEN is not configured. Private Release was created, but in-app updates cannot see it."
+          $tag = $env:GITHUB_REF_NAME
+          $expectedCurrent = "AutoPrint_Setup_$env:APP_VERSION.exe"
+          $expectedLegacy = "BarTenderGUI_Setup_$env:APP_VERSION.exe"
+
+          $releaseJson = gh api "repos/$env:PUBLIC_RELEASE_REPO/releases/tags/$tag"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $release = $releaseJson | ConvertFrom-Json
+
+          if ([string]$release.tag_name -ne $tag) {
+            throw "Public updater release tag mismatch: expected $tag, got $($release.tag_name)"
+          }
+
+          $assets = @($release.assets)
+          $current = $assets | Where-Object { $_.name -eq $expectedCurrent } | Select-Object -First 1
+          $legacy = $assets | Where-Object { $_.name -eq $expectedLegacy } | Select-Object -First 1
+
+          if (-not $current) { throw "Public updater release is missing $expectedCurrent" }
+          if (-not $legacy) { throw "Public updater release is missing $expectedLegacy" }
+
+          foreach ($asset in @($current, $legacy)) {
+            $digest = [string]$asset.digest
+            if (-not $digest.StartsWith("sha256:")) {
+              throw "Public updater asset $($asset.name) has no SHA-256 digest"
+            }
+            $publishedHash = $digest.Substring(7).ToLowerInvariant()
+            if ($publishedHash -ne $env:INSTALLER_SHA256) {
+              throw "Public updater asset $($asset.name) digest does not match built installer"
+            }
+          }
+
+          Write-Host "Public updater release verified: $tag"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6
