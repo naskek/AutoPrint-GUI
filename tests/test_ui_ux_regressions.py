@@ -8,6 +8,20 @@ import autoprint_main
 import bartender_gui
 
 
+class _EntryStub:
+    def __init__(self, value=""):
+        self.value = str(value)
+
+    def get(self):
+        return self.value
+
+    def delete(self, _start, _end=None):
+        self.value = ""
+
+    def insert(self, _index, value):
+        self.value = str(value)
+
+
 class VersionMenuTests(unittest.TestCase):
     def test_runtime_icon_path_uses_pyinstaller_bundle_root(self):
         with patch.object(
@@ -370,6 +384,77 @@ class ResizeDebounceTests(unittest.TestCase):
 
 
 class PrintSelectionTests(unittest.TestCase):
+    @staticmethod
+    def _make_csv_load_app(mode=bartender_gui.PRINT_SELECTION_MODE_RANGE):
+        app = object.__new__(bartender_gui.App)
+        app.csv_dir = ""
+        app.cfg = {}
+        app.logger = Mock()
+        app.csv_label = Mock()
+        app.default_batch_size = 100
+        app.batch_entry = _EntryStub()
+        app.index_entry = _EntryStub("99")
+        app.limit_entry = _EntryStub("7")
+        app.print_selection_mode_var = Mock()
+        app.print_selection_mode_var.get.return_value = mode
+        app.print_selection_summary_label = Mock()
+        app._update_csv_dir_label = Mock()
+        app._update_brand_hint = Mock()
+        app._render_csv_list = Mock()
+        app._refresh_runtime_status = Mock()
+        app._preview = Mock()
+        return app
+
+    def test_loading_csv_defaults_selection_to_full_file_and_resets_on_reload(self):
+        app = self._make_csv_load_app()
+        three_rows = [
+            {"GTIN": "1", "DM": "a", "NAME": "one"},
+            {"GTIN": "1", "DM": "b", "NAME": "two"},
+            {"GTIN": "1", "DM": "c", "NAME": "three"},
+        ]
+        one_row = [{"GTIN": "2", "DM": "x", "NAME": "single"}]
+
+        with patch("bartender_gui.save_config"), patch(
+            "bartender_gui.load_kontur_raw", side_effect=[three_rows, one_row]
+        ):
+            app._load_csv_from_path("first.csv", auto_preview=False)
+            self.assertEqual(app.index_entry.get(), "1")
+            self.assertEqual(app.limit_entry.get(), "3")
+
+            app.index_entry.value = "2"
+            app.limit_entry.value = "2"
+            app._load_csv_from_path("second.csv", auto_preview=False)
+
+        self.assertEqual(app.index_entry.get(), "1")
+        self.assertEqual(app.limit_entry.get(), "1")
+
+    def test_full_file_default_is_valid_in_count_mode(self):
+        app = self._make_csv_load_app(bartender_gui.PRINT_SELECTION_MODE_COUNT)
+        rows = [
+            {"GTIN": "1", "DM": str(index), "NAME": "row"}
+            for index in range(4)
+        ]
+
+        with patch("bartender_gui.save_config"), patch(
+            "bartender_gui.load_kontur_raw", return_value=rows
+        ):
+            app._load_csv_from_path("count.csv", auto_preview=False)
+
+        self.assertEqual(app.index_entry.get(), "1")
+        self.assertEqual(app.limit_entry.get(), "4")
+        self.assertEqual(
+            bartender_gui.resolve_print_selection(
+                bartender_gui.PRINT_SELECTION_MODE_COUNT,
+                app.index_entry.get(),
+                app.limit_entry.get(),
+                total_rows=len(rows),
+            ),
+            (1, 4, 4),
+        )
+        app.print_selection_summary_label.configure.assert_called_with(
+            text="Строки 1–4 · 4 шт. · из 4"
+        )
+
     def test_range_math_is_inclusive(self):
         self.assertEqual(bartender_gui.count_from_range(1, 1), 1)
         self.assertEqual(bartender_gui.count_from_range(25, 74), 50)
