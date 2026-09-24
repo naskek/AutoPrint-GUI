@@ -177,11 +177,13 @@ def _submit_one_batch(btw_path, printer_name, record_range):
 
 def main(argv=None):
     args = _parse_args(argv)
+    cleanup_allowed = False
 
     try:
         _require_live_gate()
         before = _printer_snapshot(args.printer)
         _assert_safe_test_queue(before)
+        cleanup_allowed = True
 
         print(
             "Safe queue verified: "
@@ -224,13 +226,14 @@ def main(argv=None):
         print(f"BarTender spooler smoke: FAILED: {exc}", file=sys.stderr)
         return 1
     finally:
-        try:
-            snapshot = _printer_snapshot(args.printer)
-            if snapshot["jobs"]:
-                _delete_test_jobs(args.printer, snapshot["jobs"])
-                print(f"Deleted {len(snapshot['jobs'])} test spool job(s).")
-        except Exception as exc:
-            print(f"Test spool cleanup warning: {exc}", file=sys.stderr)
+        if cleanup_allowed:
+            try:
+                snapshot = _printer_snapshot(args.printer)
+                if snapshot["jobs"]:
+                    _delete_test_jobs(args.printer, snapshot["jobs"])
+                    print(f"Deleted {len(snapshot['jobs'])} test spool job(s).")
+            except Exception as exc:
+                print(f"Test spool cleanup warning: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":
