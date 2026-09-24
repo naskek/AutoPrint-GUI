@@ -1547,26 +1547,26 @@ class App(ctk.CTk):
         """Debounce automatic preview generation while keeping BarTender COM on the Tk thread."""
         state = self.__dict__
         generation = int(state.get("_live_preview_generation", 0)) + 1
-        self._live_preview_generation = generation
+        state["_live_preview_generation"] = generation
 
         pending = state.get("_live_preview_after_id")
         if pending is not None:
             try:
-                self.after_cancel(pending)
+                object.__getattribute__(self, "after_cancel")(pending)
             except Exception:
                 pass
-        self._live_preview_after_id = None
+        state["_live_preview_after_id"] = None
 
         def refresh():
-            if generation != self.__dict__.get("_live_preview_generation", 0):
+            if generation != state.get("_live_preview_generation", 0):
                 return
-            self._live_preview_after_id = None
-            if self.__dict__.get("_live_preview_busy", False):
-                self._live_preview_requested = True
+            state["_live_preview_after_id"] = None
+            if state.get("_live_preview_busy", False):
+                state["_live_preview_requested"] = True
                 return
 
-            self._live_preview_busy = True
-            self._live_preview_requested = False
+            state["_live_preview_busy"] = True
+            state["_live_preview_requested"] = False
             try:
                 self._preview(silent=True)
             except Exception as exc:
@@ -1575,16 +1575,17 @@ class App(ctk.CTk):
                 except Exception:
                     pass
             finally:
-                self._live_preview_busy = False
-                if self.__dict__.get("_live_preview_requested", False):
-                    self._live_preview_requested = False
+                state["_live_preview_busy"] = False
+                if state.get("_live_preview_requested", False):
+                    state["_live_preview_requested"] = False
                     self._schedule_live_preview(immediate=True)
 
         try:
             delay = 0 if immediate else LIVE_PREVIEW_DEBOUNCE_MS
-            self._live_preview_after_id = self.after(delay, refresh)
+            after = object.__getattribute__(self, "after")
+            state["_live_preview_after_id"] = after(delay, refresh)
         except Exception:
-            self._live_preview_after_id = None
+            state["_live_preview_after_id"] = None
 
     def _on_print_selection_mode_change(self, mode):
         previous = getattr(self, "_print_selection_mode", DEFAULT_PRINT_SELECTION_MODE)
@@ -3119,14 +3120,14 @@ class App(ctk.CTk):
         state = self.__dict__
         if state.get("_shutdown_started", False):
             return
-        self._shutdown_started = True
+        state["_shutdown_started"] = True
         pending_preview = state.get("_live_preview_after_id")
         if pending_preview is not None:
             try:
-                self.after_cancel(pending_preview)
+                object.__getattribute__(self, "after_cancel")(pending_preview)
             except Exception:
                 pass
-        self._live_preview_after_id = None
+        state["_live_preview_after_id"] = None
         self._cleanup_preview_temp_dir()
         self._close_date_popover()
         version_closer = getattr(type(self), "_close_version_dialog", None)
@@ -7234,11 +7235,12 @@ class App(ctk.CTk):
             return False
 
     def _cleanup_preview_temp_dir(self, path=None):
-        target = path if path is not None else self.__dict__.get("_preview_temp_dir")
+        state = self.__dict__
+        target = path if path is not None else state.get("_preview_temp_dir")
         if not target:
             return
-        if path is None or target == self.__dict__.get("_preview_temp_dir"):
-            self._preview_temp_dir = None
+        if path is None or target == state.get("_preview_temp_dir"):
+            state["_preview_temp_dir"] = None
         try:
             import shutil
             shutil.rmtree(target, ignore_errors=True)
