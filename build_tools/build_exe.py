@@ -6,6 +6,9 @@ import sys
 from pathlib import Path
 
 
+REQUIRED_BUNDLED_TEMPLATES = ("16x16.btw", "30x20.btw", "58x60.btw")
+
+
 def _version_tuple(version: str) -> tuple[int, int, int, int]:
     parts = [int(x) for x in version.split(".")]
     if len(parts) != 3:
@@ -49,6 +52,19 @@ def main() -> int:
 
     target = root / "autoprint_main.py"
     icon_file = root / "assets" / "icons" / "autoprint.ico"
+    templates_dir = root / "templates"
+    bundled_template_files = sorted(templates_dir.glob("*.btw"))
+    missing_templates = [
+        name for name in REQUIRED_BUNDLED_TEMPLATES
+        if not (templates_dir / name).is_file()
+    ]
+    if missing_templates:
+        print(
+            "[ERROR] Missing bundled templates: " + ", ".join(missing_templates),
+            file=sys.stderr,
+        )
+        return 2
+
     generated_spec_dir = root / "build" / "pyinstaller-spec"
     generated_spec_dir.mkdir(parents=True, exist_ok=True)
     version_file = _write_windows_version_file(root, APP_VERSION)
@@ -76,6 +92,14 @@ def main() -> int:
         "--hidden-import",
         "tkcalendar",
     ]
+
+    for template_path in bundled_template_files:
+        args.extend(
+            [
+                "--add-data",
+                f"{template_path}{os.pathsep}bundled_templates",
+            ]
+        )
 
     args.append(str(target))
 
