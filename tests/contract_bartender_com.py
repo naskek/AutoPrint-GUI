@@ -1,4 +1,6 @@
 import datetime as dt
+import os
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -59,6 +61,54 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
                 unittest.mock.call("NAME", "Test"),
             ],
         )
+
+    @patch("win32com.client.VARIANT")
+    def test_preview_uses_documented_export_api_and_never_prints(self, variant):
+        messages = SimpleNamespace(value=SimpleNamespace(Count=0))
+        variant.return_value = messages
+        bt = bartender_com.BT(self.logger)
+        fmt = Mock()
+        fmt.ExportPrintPreviewToImage.return_value = 0
+
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "preview_%PageNumber%.png")
+            result = bt.export_preview(fmt, path)
+
+        self.assertTrue(result)
+        fmt.ExportPrintPreviewToImage.assert_called_once_with(
+            root,
+            "preview_%PageNumber%.png",
+            "PNG",
+            bartender_com.BT_COLORS_24BIT,
+            300,
+            bartender_com.PREVIEW_BACKGROUND_WHITE,
+            bartender_com.BT_DO_NOT_SAVE_CHANGES,
+            False,
+            False,
+            messages,
+        )
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+        fmt.ExportToFile.assert_not_called()
+
+    @patch("win32com.client.VARIANT")
+    def test_preview_failure_does_not_fallback_to_print_or_template_export(self, variant):
+        messages = SimpleNamespace(value=SimpleNamespace(Count=0))
+        variant.return_value = messages
+        bt = bartender_com.BT(self.logger)
+        fmt = Mock()
+        fmt.ExportPrintPreviewToImage.return_value = 2
+
+        with tempfile.TemporaryDirectory() as root:
+            result = bt.export_preview(
+                fmt, os.path.join(root, "preview_%PageNumber%.png")
+            )
+
+        self.assertFalse(result)
+        fmt.ExportPrintPreviewToImage.assert_called_once()
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+        fmt.ExportToFile.assert_not_called()
 
     @patch("bartender_gui.resolve_sticker_template_path", return_value=r"C:\\labels\\sticker60x40.btw")
     def test_manual_part_num_reaches_sticker_named_data_source(self, _resolve_sticker):
