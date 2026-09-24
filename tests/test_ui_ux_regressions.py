@@ -440,6 +440,26 @@ class CsvBrowserLargeDirectoryTests(unittest.TestCase):
         self.assertTrue(app._csv_entries_truncated)
         self.assertTrue(all(kind == "dir" for _path, kind in entries))
 
+    def test_total_scan_work_is_bounded_even_when_entries_are_not_csv(self):
+        app = object.__new__(bartender_gui.App)
+
+        with tempfile.TemporaryDirectory() as root, patch.object(
+            bartender_gui, "CSV_FILE_SCAN_LIMIT", 3
+        ):
+            for index in range(5):
+                with open(
+                    os.path.join(root, f"ignore-{index}.txt"),
+                    "w",
+                    encoding="utf-8",
+                ) as fh:
+                    fh.write("x")
+            app.csv_dir = root
+
+            entries = app._list_csv_entries()
+
+        self.assertEqual(entries, [])
+        self.assertTrue(app._csv_entries_truncated)
+
     def test_normal_directory_keeps_folder_first_and_csv_only_semantics(self):
         app = object.__new__(bartender_gui.App)
 
@@ -471,6 +491,7 @@ class CsvBrowserLargeDirectoryTests(unittest.TestCase):
         self.assertIn("Каталог слишком большой", source)
         self.assertIn("CSV_FILE_ENTRY_RENDER_LIMIT", source)
         self.assertIn("Сменить папку", source)
+        self.assertIn("CSV не найдены в просмотренной части каталога", source)
 
 
 class ResizeDebounceTests(unittest.TestCase):
