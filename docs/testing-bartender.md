@@ -116,6 +116,14 @@ After the smoke completes, remove the dedicated test queue and local port:
 
 The cleanup helper refuses to touch a queue without `TEST` in its name, refuses to remove an unexpected port, and only removes the local test port after confirming no printer queue still uses it.
 
+Windows Print Spooler can keep a local port handle busy after the queue is deleted. The default cleanup never restarts the spooler. If the TEST port remains busy and the workstation is idle, rerun explicitly with:
+
+```powershell
+.\tools\remove_bartender_spooler_test_queue.ps1 -AllowSpoolerRestart
+```
+
+Before restarting the Spooler service, the helper enumerates every installed printer queue and refuses the restart if any print job exists or any queue cannot be queried. It never clears the spool directory and never modifies production queue configuration.
+
 Required opt-in flag:
 
 ```text
