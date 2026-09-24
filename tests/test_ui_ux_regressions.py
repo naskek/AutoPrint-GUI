@@ -361,7 +361,7 @@ class MainLayoutContractTests(unittest.TestCase):
         app.status_rows_label.configure.assert_called_once_with(text="Строк: 2")
         app.status_template_label.configure.assert_called_once_with(text="Шаблон: Auto")
         app.status_printer_label.configure.assert_called_once_with(text="Принтер: TSC")
-        app.csv_summary_label.configure.assert_called_once_with(text="CSV: 2 строк")
+        app.csv_summary_label.configure.assert_called_once_with(text="CSV: строк — 2")
         app.csv_available_label.configure.assert_called_once_with(text="к печати: 2")
         app.csv_skipped_label.configure.assert_called_once_with(text="ошибок: —")
 
