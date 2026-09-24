@@ -624,6 +624,68 @@ class MarkingPreviewUiTests(unittest.TestCase):
         app._preview_marking_sticker.assert_called_once_with(silent=True)
 
 
+class PrintControlsLayoutTests(unittest.TestCase):
+    def test_print_section_owns_all_selection_controls_and_has_no_manual_preview_button(self):
+        source = inspect.getsource(bartender_gui.App._build_ui)
+        print_block = source.split(
+            "self.print_section = self._make_main_section(", 1
+        )[1].split(
+            "self.preview_section = self._make_main_section(", 1
+        )[0]
+        preview_block = source.split(
+            "self.preview_section = self._make_main_section(", 1
+        )[1].split(
+            "self.right_column_frame = ctk.CTkFrame", 1
+        )[0]
+
+        for token in (
+            "self.print_selection_mode_control",
+            "self.index_entry",
+            "self.limit_entry",
+            "self.batch_entry",
+            "self.print_selection_summary_label",
+            "self.print_btn",
+            "self.cancel_btn",
+            "self.sticker_reprint_btn",
+        ):
+            self.assertIn(token, print_block)
+            self.assertNotIn(token, preview_block)
+
+        self.assertNotIn('text="Предпросмотр"', print_block)
+        self.assertNotIn("self.preview_btn =", print_block)
+
+    def test_cancel_button_is_disabled_while_idle_and_secondary(self):
+        source = inspect.getsource(bartender_gui.App._build_ui)
+        print_block = source.split(
+            "self.print_section = self._make_main_section(", 1
+        )[1].split(
+            "self.preview_section = self._make_main_section(", 1
+        )[0]
+
+        cancel_block = print_block.split("self.cancel_btn = ctk.CTkButton(", 1)[1].split(
+            "self.cancel_btn.pack", 1
+        )[0]
+        self.assertIn('state="disabled"', cancel_block)
+        self.assertNotIn('fg_color="#dc3545"', cancel_block)
+
+    def test_cancel_state_tracks_print_activity_without_touching_print_submission(self):
+        app = object.__new__(bartender_gui.App)
+        app.cancel_btn = Mock()
+
+        app._set_print_active_ui(True)
+        app.cancel_btn.configure.assert_called_with(state="normal")
+
+        app.cancel_btn.reset_mock()
+        app._set_print_active_ui(False)
+        app.cancel_btn.configure.assert_called_with(state="disabled")
+
+        source = inspect.getsource(bartender_gui.App._print_range_one_job_via_csv)
+        self.assertIn("self._set_print_active_ui(True)", source)
+        self.assertIn(
+            "self._set_print_active_ui(self._catalog_print_active > 0)", source
+        )
+
+
 class PrintSelectionTests(unittest.TestCase):
     @staticmethod
     def _make_csv_load_app(mode=bartender_gui.PRINT_SELECTION_MODE_RANGE):
