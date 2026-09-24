@@ -68,14 +68,15 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         variant.return_value = messages
         bt = bartender_com.BT(self.logger)
         fmt = Mock()
-        fmt.ExportPrintPreviewToImage.return_value = 0
+        fmt.ExportPrintPreviewRangeToImage.return_value = 0
 
         with tempfile.TemporaryDirectory() as root:
             path = os.path.join(root, "preview_%PageNumber%.png")
             result = bt.export_preview(fmt, path)
 
         self.assertTrue(result)
-        fmt.ExportPrintPreviewToImage.assert_called_once_with(
+        fmt.ExportPrintPreviewRangeToImage.assert_called_once_with(
+            bartender_com.PREVIEW_PAGE_RANGE,
             root,
             "preview_%PageNumber%.png",
             "PNG",
@@ -89,6 +90,7 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         )
         fmt.Print.assert_not_called()
         fmt.PrintOut.assert_not_called()
+        fmt.ExportPrintPreviewToImage.assert_not_called()
         fmt.ExportToFile.assert_not_called()
 
     @patch("win32com.client.VARIANT")
@@ -97,7 +99,7 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         variant.return_value = messages
         bt = bartender_com.BT(self.logger)
         fmt = Mock()
-        fmt.ExportPrintPreviewToImage.return_value = 2
+        fmt.ExportPrintPreviewRangeToImage.return_value = 2
 
         with tempfile.TemporaryDirectory() as root:
             result = bt.export_preview(
@@ -105,7 +107,8 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
             )
 
         self.assertFalse(result)
-        fmt.ExportPrintPreviewToImage.assert_called_once()
+        fmt.ExportPrintPreviewRangeToImage.assert_called_once()
+        fmt.ExportPrintPreviewToImage.assert_not_called()
         fmt.Print.assert_not_called()
         fmt.PrintOut.assert_not_called()
         fmt.ExportToFile.assert_not_called()
