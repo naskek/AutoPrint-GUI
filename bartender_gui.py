@@ -1740,7 +1740,7 @@ class App(ctk.CTk):
             self.status_template_label.configure(text=f"Шаблон: {template}")
             self.status_printer_label.configure(text=f"Принтер: {printer}")
             self.csv_summary_label.configure(
-                text=f"CSV: {rows} строк" if csv_path else "CSV: —"
+                text=f"CSV: строк — {rows}" if csv_path else "CSV: —"
             )
             self.csv_available_label.configure(text=f"к печати: {rows}")
             self.csv_skipped_label.configure(text="ошибок: —")
