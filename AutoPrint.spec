@@ -21,7 +21,7 @@ for src, dest in [
 templates_dir = ROOT / 'templates'
 if templates_dir.exists():
     for template_path in templates_dir.glob('*.btw'):
-        datas.append((str(template_path), 'templates'))
+        datas.append((str(template_path), 'bundled_templates'))
 
 binaries = []
 hiddenimports = ['darkdetect', 'tkcalendar']

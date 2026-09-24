@@ -19,19 +19,34 @@ class PackagingTests(unittest.TestCase):
         "build_tools.build_exe._write_windows_version_file",
         return_value=Path("version_info.txt"),
     )
-    def test_pyinstaller_command_includes_only_icon_asset_data(self, _version_file, call):
+    def test_pyinstaller_command_includes_icon_and_bundled_templates(self, _version_file, call):
         self.assertEqual(build_exe.main(), 0)
 
         command = call.call_args.args[0]
         self.assertEqual(command[command.index("--name") + 1], "AutoPrint")
         icon = ROOT / "assets" / "icons" / "autoprint.ico"
         self.assertEqual(command[command.index("--icon") + 1], str(icon))
-        self.assertEqual(
-            command[command.index("--add-data") + 1],
-            f"{icon}{os.pathsep}assets/icons",
-        )
+        add_data = [
+            command[index + 1]
+            for index, item in enumerate(command[:-1])
+            if item == "--add-data"
+        ]
+        self.assertIn(f"{icon}{os.pathsep}assets/icons", add_data)
+        for template_name in build_exe.REQUIRED_BUNDLED_TEMPLATES:
+            template_path = ROOT / "templates" / template_name
+            self.assertIn(
+                f"{template_path}{os.pathsep}bundled_templates",
+                add_data,
+            )
         for operational_name in ("product_catalog.xlsx", "tmp_batch.csv", "config.json"):
             self.assertFalse(any(operational_name in item for item in command))
+
+    def test_required_bundled_templates_are_versioned(self):
+        for template_name in build_exe.REQUIRED_BUNDLED_TEMPLATES:
+            with self.subTest(template_name=template_name):
+                path = ROOT / "templates" / template_name
+                self.assertTrue(path.is_file())
+                self.assertGreater(path.stat().st_size, 100)
 
     @patch("build_tools.build_exe.subprocess.call", return_value=0)
     @patch(
@@ -67,6 +82,7 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("ROOT = Path(__file__).resolve().parent", spec)
         self.assertNotRegex(spec, r"['\"][A-Za-z]:[/\\]")
         self.assertIn("datas.append((str(icon_file), 'assets/icons'))", spec)
+        self.assertIn("datas.append((str(template_path), 'bundled_templates'))", spec)
         self.assertIn("icon=str(icon_file)", spec)
 
     def test_installer_files_section_contains_only_application_bundle(self):

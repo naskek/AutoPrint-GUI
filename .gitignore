@@ -33,7 +33,7 @@ tmp_batch.csv
 _btxml_*/
 _saved_db_*/
 tmp_batch_xmltest.csv
-templates/*.btw
+# templates/*.btw are versioned bundled defaults; user imports live in persistent app data.
 templates/preview.png
 !templates/.gitkeep
 
