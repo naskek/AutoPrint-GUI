@@ -15,6 +15,13 @@ class BarTenderLiveSmokeHarnessTests(unittest.TestCase):
             IdenticalCopiesOfLabel=1,
             Printer="Test Printer",
         )
+        fmt.PageSetup = SimpleNamespace(
+            MediaHandling=SimpleNamespace(
+                Action=0,
+                Occurrence=0,
+                NumberOfLabels=1,
+            )
+        )
         fmt.NamedSubStrings = [
             SimpleNamespace(Name="DM"),
             SimpleNamespace(Name="NUM"),
@@ -36,6 +43,61 @@ class BarTenderLiveSmokeHarnessTests(unittest.TestCase):
             bartender_live_smoke.BT_DO_NOT_SAVE_CHANGES
         )
         self.assertEqual(fmt.PrintSetup.IdenticalCopiesOfLabel, 1)
+        self.assertEqual(fmt.PageSetup.MediaHandling.Action, 0)
+        self.assertEqual(fmt.PageSetup.MediaHandling.Occurrence, 0)
+        self.assertEqual(fmt.PageSetup.MediaHandling.NumberOfLabels, 1)
+
+    def test_media_handling_probe_is_read_only_and_decodes_values(self):
+        fmt = Mock()
+        fmt.PageSetup = SimpleNamespace(
+            MediaHandling=SimpleNamespace(
+                Action=4,
+                Occurrence=2,
+                NumberOfLabels=7,
+            )
+        )
+
+        result = bartender_live_smoke._inspect_media_handling(fmt)
+
+        self.assertEqual(
+            result,
+            {
+                "action": 4,
+                "action_name": "btMHCut",
+                "occurrence": 2,
+                "occurrence_name": "btMHAfterEveryRecord",
+                "number_of_labels": 7,
+            },
+        )
+        self.assertEqual(fmt.PageSetup.MediaHandling.Action, 4)
+        self.assertEqual(fmt.PageSetup.MediaHandling.Occurrence, 2)
+        self.assertEqual(fmt.PageSetup.MediaHandling.NumberOfLabels, 7)
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+
+    def test_media_handling_enum_tables_match_documented_values(self):
+        self.assertEqual(
+            bartender_live_smoke.MEDIA_ACTION_NAMES,
+            {
+                0: "btMHDriverSettings",
+                1: "btMHPageBreak",
+                2: "btMHPause",
+                3: "btMHWaitForLabelTakenSensor",
+                4: "btMHCut",
+                5: "btMHCutAndPause",
+            },
+        )
+        self.assertEqual(
+            bartender_live_smoke.MEDIA_OCCURRENCE_NAMES,
+            {
+                0: "btMHAtEndOfPrintJob",
+                1: "btMHAfterEveryPage",
+                2: "btMHAfterEveryRecord",
+                3: "btMHAfterIdenticalCopies",
+                4: "btMHAfterDataChange",
+                5: "btMHAfterNumberOfLabels",
+            },
+        )
 
     def test_btw_inspection_rejects_missing_path_before_open(self):
         app = Mock()
