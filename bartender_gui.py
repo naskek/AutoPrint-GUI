@@ -102,6 +102,7 @@ MAIN_LAYOUT_BLOCK_ORDER = (
 PRINT_BATCH_CONTAINER_SCROLLABLE = False
 CSV_FILE_LIST_SCROLL_POLICY = "vertical-auto"
 CSV_FILE_ENTRY_RENDER_LIMIT = 120
+CSV_FILE_SCAN_LIMIT = 500
 PATH_RESIZE_DEBOUNCE_MS = 80
 CSV_SCROLLBAR_RESIZE_DEBOUNCE_MS = 120
 PREVIEW_RESIZE_DEBOUNCE_MS = 160
@@ -5611,8 +5612,10 @@ class App(ctk.CTk):
             dirs = []
             files = []
             eligible = 0
+            scanned = 0
             with os.scandir(self.csv_dir) as iterator:
                 for entry in iterator:
+                    scanned += 1
                     try:
                         if entry.is_dir(follow_symlinks=False):
                             dirs.append(entry.path)
@@ -5624,9 +5627,12 @@ class App(ctk.CTk):
                             files.append(entry.path)
                             eligible += 1
                     except OSError:
-                        continue
+                        pass
 
-                    if eligible > CSV_FILE_ENTRY_RENDER_LIMIT:
+                    if (
+                        eligible > CSV_FILE_ENTRY_RENDER_LIMIT
+                        or scanned >= CSV_FILE_SCAN_LIMIT
+                    ):
                         self._csv_entries_truncated = True
                         break
 
@@ -6382,11 +6388,9 @@ class App(ctk.CTk):
             return
 
         entries = self._list_csv_entries()
-        if not entries:
-            ctk.CTkLabel(frame, text="CSV не найдены").pack(anchor="w", padx=6, pady=4)
-            return
+        truncated = bool(getattr(self, "_csv_entries_truncated", False))
 
-        if getattr(self, "_csv_entries_truncated", False):
+        if truncated:
             ctk.CTkLabel(
                 frame,
                 text=(
@@ -6399,6 +6403,17 @@ class App(ctk.CTk):
                 wraplength=300,
                 text_color=("#8a5a00", "#f0b44c"),
             ).pack(fill="x", padx=6, pady=(4, 6))
+
+        if not entries:
+            ctk.CTkLabel(
+                frame,
+                text=(
+                    "CSV не найдены в просмотренной части каталога"
+                    if truncated
+                    else "CSV не найдены"
+                ),
+            ).pack(anchor="w", padx=6, pady=4)
+            return
 
         cur_norm = self._norm_csv_path(getattr(self, "csv_path", ""))
         # сброс hover
