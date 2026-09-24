@@ -1545,10 +1545,11 @@ class App(ctk.CTk):
 
     def _schedule_live_preview(self, event=None, immediate=False):
         """Debounce automatic preview generation while keeping BarTender COM on the Tk thread."""
-        generation = int(getattr(self, "_live_preview_generation", 0)) + 1
+        state = self.__dict__
+        generation = int(state.get("_live_preview_generation", 0)) + 1
         self._live_preview_generation = generation
 
-        pending = getattr(self, "_live_preview_after_id", None)
+        pending = state.get("_live_preview_after_id")
         if pending is not None:
             try:
                 self.after_cancel(pending)
@@ -1557,10 +1558,10 @@ class App(ctk.CTk):
         self._live_preview_after_id = None
 
         def refresh():
-            if generation != getattr(self, "_live_preview_generation", 0):
+            if generation != self.__dict__.get("_live_preview_generation", 0):
                 return
             self._live_preview_after_id = None
-            if getattr(self, "_live_preview_busy", False):
+            if self.__dict__.get("_live_preview_busy", False):
                 self._live_preview_requested = True
                 return
 
@@ -1575,7 +1576,7 @@ class App(ctk.CTk):
                     pass
             finally:
                 self._live_preview_busy = False
-                if getattr(self, "_live_preview_requested", False):
+                if self.__dict__.get("_live_preview_requested", False):
                     self._live_preview_requested = False
                     self._schedule_live_preview(immediate=True)
 
@@ -3115,10 +3116,11 @@ class App(ctk.CTk):
         return self._require_catalog_ready(action) and self._require_bartender(action)
 
     def _shutdown_app(self):
-        if getattr(self, "_shutdown_started", False):
+        state = self.__dict__
+        if state.get("_shutdown_started", False):
             return
         self._shutdown_started = True
-        pending_preview = getattr(self, "_live_preview_after_id", None)
+        pending_preview = state.get("_live_preview_after_id")
         if pending_preview is not None:
             try:
                 self.after_cancel(pending_preview)
@@ -7232,10 +7234,10 @@ class App(ctk.CTk):
             return False
 
     def _cleanup_preview_temp_dir(self, path=None):
-        target = path if path is not None else getattr(self, "_preview_temp_dir", None)
+        target = path if path is not None else self.__dict__.get("_preview_temp_dir")
         if not target:
             return
-        if path is None or target == getattr(self, "_preview_temp_dir", None):
+        if path is None or target == self.__dict__.get("_preview_temp_dir"):
             self._preview_temp_dir = None
         try:
             import shutil
