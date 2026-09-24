@@ -108,6 +108,14 @@ Queue setup helper:
 
 The helper creates/validates the dedicated local `AUTOPRINT_TEST` port and `AutoPrint_TEST_Printronix` queue, selects exactly one installed Printronix driver, pauses the queue through documented `Win32_Printer.Pause()`, and refuses to proceed when the queue already contains jobs.
 
+After the smoke completes, remove the dedicated test queue and local port:
+
+```powershell
+.\tools\remove_bartender_spooler_test_queue.ps1
+```
+
+The cleanup helper refuses to touch a queue without `TEST` in its name, refuses to remove an unexpected port, and only removes the local test port after confirming no printer queue still uses it.
+
 Required opt-in flag:
 
 ```text
