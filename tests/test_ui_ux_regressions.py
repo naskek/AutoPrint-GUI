@@ -450,6 +450,76 @@ class ResizeDebounceTests(unittest.TestCase):
         preview_callback()
 
 
+class LivePreviewTests(unittest.TestCase):
+    @staticmethod
+    def _scheduled_app():
+        app = object.__new__(bartender_gui.App)
+        callbacks = []
+
+        def schedule(delay, callback):
+            callbacks.append((delay, callback))
+            return f"after-{len(callbacks)}"
+
+        app.after = Mock(side_effect=schedule)
+        app.after_cancel = Mock()
+        app.logger = Mock()
+        app._preview = Mock(return_value=True)
+        return app, callbacks
+
+    def test_repeated_changes_coalesce_and_only_latest_preview_runs(self):
+        app, callbacks = self._scheduled_app()
+
+        app._schedule_live_preview()
+        app._schedule_live_preview()
+
+        self.assertEqual(
+            [delay for delay, _callback in callbacks],
+            [
+                bartender_gui.LIVE_PREVIEW_DEBOUNCE_MS,
+                bartender_gui.LIVE_PREVIEW_DEBOUNCE_MS,
+            ],
+        )
+        app.after_cancel.assert_called_once_with("after-1")
+
+        callbacks[0][1]()
+        app._preview.assert_not_called()
+
+        callbacks[-1][1]()
+        app._preview.assert_called_once_with(silent=True)
+        self.assertIsNone(app._live_preview_after_id)
+        self.assertFalse(app._live_preview_busy)
+
+    def test_immediate_preview_uses_zero_delay(self):
+        app, callbacks = self._scheduled_app()
+
+        app._schedule_live_preview(immediate=True)
+
+        self.assertEqual(callbacks[0][0], 0)
+        callbacks[0][1]()
+        app._preview.assert_called_once_with(silent=True)
+
+    def test_silent_invalid_preview_row_does_not_show_modal_error(self):
+        app = object.__new__(bartender_gui.App)
+        app.index_entry = _EntryStub("bad")
+        app.csv_rows = [{"GTIN": "1"}]
+
+        with patch("bartender_gui.mb.showerror") as showerror:
+            result = app._resolve_preview_index(silent=True)
+
+        self.assertIsNone(result)
+        showerror.assert_not_called()
+
+    def test_silent_invalid_date_does_not_show_modal_error(self):
+        app = object.__new__(bartender_gui.App)
+        app.prod_date_entry = _EntryStub("24.09.")
+
+        with patch("bartender_gui.mb.showerror") as showerror:
+            result = app._get_prod_date(silent=True)
+
+        self.assertIsNone(result)
+        showerror.assert_not_called()
+
+
 class PrintSelectionTests(unittest.TestCase):
     @staticmethod
     def _make_csv_load_app(mode=bartender_gui.PRINT_SELECTION_MODE_RANGE):
@@ -470,7 +540,20 @@ class PrintSelectionTests(unittest.TestCase):
         app._render_csv_list = Mock()
         app._refresh_runtime_status = Mock()
         app._preview = Mock()
+        app._schedule_live_preview = Mock()
         return app
+
+    def test_loading_csv_schedules_immediate_live_preview(self):
+        app = self._make_csv_load_app()
+        rows = [{"GTIN": "1", "DM": "a", "NAME": "one"}]
+
+        with patch("bartender_gui.save_config"), patch(
+            "bartender_gui.load_kontur_raw", return_value=rows
+        ):
+            app._load_csv_from_path("first.csv", auto_preview=True)
+
+        app._schedule_live_preview.assert_called_once_with(immediate=True)
+        app._preview.assert_not_called()
 
     def test_loading_csv_defaults_selection_to_full_file_and_resets_on_reload(self):
         app = self._make_csv_load_app()
