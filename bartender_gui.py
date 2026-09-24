@@ -114,6 +114,7 @@ CSV_FILE_LIST_SCROLL_POLICY = "vertical-auto"
 PATH_RESIZE_DEBOUNCE_MS = 80
 CSV_SCROLLBAR_RESIZE_DEBOUNCE_MS = 120
 PREVIEW_RESIZE_DEBOUNCE_MS = 160
+LIVE_PREVIEW_DEBOUNCE_MS = 400
 TOP_LEVEL_MENU_ORDER = ("Каталог", "Шаблоны", "Работа с кодами")
 CODES_MENU_ORDER = ("Проверка кодов", "Отчёт о вводе в оборот")
 PRINT_SELECTION_MODE_RANGE = "Диапазон"
@@ -862,6 +863,11 @@ class App(ctk.CTk):
         self.csv_path = ""
         self.csv_rows = []
         self.preview_ctkimg = None
+        self._live_preview_after_id = None
+        self._live_preview_busy = False
+        self._live_preview_requested = False
+        self._live_preview_generation = 0
+        self._preview_temp_dir = None
         self.product_map = {}
 
         self._build_ui()
@@ -1251,12 +1257,14 @@ class App(ctk.CTk):
         vcmd = (self.register(lambda s: re.fullmatch(r"[0-9.]*", s or "") is not None), "%P")
         self.prod_date_entry.configure(validate="key", validatecommand=vcmd)
         self.prod_date_entry.bind("<KeyRelease>", self._format_prod_date)
+        self.prod_date_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
         ctk.CTkLabel(params, text="Номер партии:", anchor="w").grid(row=1, column=0, sticky="w", padx=10, pady=5)
         self.part_entry = ctk.CTkEntry(params, placeholder_text="Номер партии вручную")
         self.part_entry.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
         vcmd_part = (self.register(lambda s: re.fullmatch(r"[0-9]*", s or "") is not None), "%P")
         self.part_entry.configure(validate="key", validatecommand=vcmd_part)
         self.part_entry.bind("<KeyRelease>", lambda _e: self._mark_part_entry(False))
+        self.part_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
         try:
             self.part_entry_border_default = self.part_entry.cget("border_color")
         except Exception:
@@ -1266,6 +1274,7 @@ class App(ctk.CTk):
         client_box.grid(row=2, column=1, sticky="ew", padx=10, pady=5)
         self.client_entry = ctk.CTkEntry(client_box, placeholder_text="Название клиента")
         self.client_entry.pack(fill="x", expand=True)
+        self.client_entry.bind("<KeyRelease>", self._schedule_live_preview)
         self.client_combo = ctk.CTkComboBox(
             client_box, values=[], state="readonly", command=lambda value: self._on_client_select(value)
         )
@@ -1370,6 +1379,7 @@ class App(ctk.CTk):
         )
         self.print_selection_summary_label.pack(fill="x", pady=(4, 0))
         self.index_entry.bind("<KeyRelease>", self._update_print_selection_summary)
+        self.index_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
         self.limit_entry.bind("<KeyRelease>", self._update_print_selection_summary)
         try:
             self._selection_entry_border_defaults = (
@@ -1533,6 +1543,50 @@ class App(ctk.CTk):
         if path:
             self._show_preview_path(path)
 
+    def _schedule_live_preview(self, event=None, immediate=False):
+        """Debounce automatic preview generation while keeping BarTender COM on the Tk thread."""
+        state = self.__dict__
+        generation = int(state.get("_live_preview_generation", 0)) + 1
+        state["_live_preview_generation"] = generation
+
+        pending = state.get("_live_preview_after_id")
+        if pending is not None:
+            try:
+                object.__getattribute__(self, "after_cancel")(pending)
+            except Exception:
+                pass
+        state["_live_preview_after_id"] = None
+
+        def refresh():
+            if generation != state.get("_live_preview_generation", 0):
+                return
+            state["_live_preview_after_id"] = None
+            if state.get("_live_preview_busy", False):
+                state["_live_preview_requested"] = True
+                return
+
+            state["_live_preview_busy"] = True
+            state["_live_preview_requested"] = False
+            try:
+                self._preview(silent=True)
+            except Exception as exc:
+                try:
+                    self.logger.err(f"Авто-превью: {exc}")
+                except Exception:
+                    pass
+            finally:
+                state["_live_preview_busy"] = False
+                if state.get("_live_preview_requested", False):
+                    state["_live_preview_requested"] = False
+                    self._schedule_live_preview(immediate=True)
+
+        try:
+            delay = 0 if immediate else LIVE_PREVIEW_DEBOUNCE_MS
+            after = object.__getattribute__(self, "after")
+            state["_live_preview_after_id"] = after(delay, refresh)
+        except Exception:
+            state["_live_preview_after_id"] = None
+
     def _on_print_selection_mode_change(self, mode):
         previous = getattr(self, "_print_selection_mode", DEFAULT_PRINT_SELECTION_MODE)
         if mode not in (PRINT_SELECTION_MODE_RANGE, PRINT_SELECTION_MODE_COUNT):
@@ -1617,18 +1671,20 @@ class App(ctk.CTk):
         self._mark_print_selection_valid(True)
         return selection
 
-    def _resolve_preview_index(self):
+    def _resolve_preview_index(self, silent=False):
         raw = (self.index_entry.get() or "").strip()
         try:
             index = int(raw)
         except (TypeError, ValueError):
-            mb.showerror("Предпросмотр", "Начальная строка должна быть целым числом.")
+            if not silent:
+                mb.showerror("Предпросмотр", "Начальная строка должна быть целым числом.")
             return None
         if index < 1 or index > len(self.csv_rows):
-            mb.showerror(
-                "Предпросмотр",
-                f"Начальная строка должна быть от 1 до {len(self.csv_rows)}.",
-            )
+            if not silent:
+                mb.showerror(
+                    "Предпросмотр",
+                    f"Начальная строка должна быть от 1 до {len(self.csv_rows)}.",
+                )
             return None
         return index
 
@@ -3061,9 +3117,18 @@ class App(ctk.CTk):
         return self._require_catalog_ready(action) and self._require_bartender(action)
 
     def _shutdown_app(self):
-        if getattr(self, "_shutdown_started", False):
+        state = self.__dict__
+        if state.get("_shutdown_started", False):
             return
-        self._shutdown_started = True
+        state["_shutdown_started"] = True
+        pending_preview = state.get("_live_preview_after_id")
+        if pending_preview is not None:
+            try:
+                object.__getattribute__(self, "after_cancel")(pending_preview)
+            except Exception:
+                pass
+        state["_live_preview_after_id"] = None
+        self._cleanup_preview_temp_dir()
         self._close_date_popover()
         version_closer = getattr(type(self), "_close_version_dialog", None)
         if callable(version_closer):
@@ -3370,6 +3435,7 @@ class App(ctk.CTk):
     def _on_format_change(self, value):
         self._apply_format_ui(value)
         self._refresh_runtime_status()
+        self._schedule_live_preview()
 
     def _load_presets(self):
         p16 = self._resolve_template_btw_path("16x16")
@@ -6347,13 +6413,7 @@ class App(ctk.CTk):
             self._update_brand_hint(sample_gtin)
 
             if auto_preview and self.csv_rows:
-                try:
-                    self._preview()
-                except Exception as _e:
-                    try:
-                        self.logger.err(f"Авто-превью: {_e}")
-                    except Exception:
-                        pass
+                self._schedule_live_preview(immediate=True)
         except Exception as e:
             try:
                 self.logger.err(f"Ошибка CSV: {e}")
@@ -6732,7 +6792,7 @@ class App(ctk.CTk):
             except Exception:
                 pass
 
-    def _get_prod_date(self):
+    def _get_prod_date(self, silent=False):
         try:
             txt = (self.prod_date_entry.get() or "").strip()
         except Exception:
@@ -6741,7 +6801,8 @@ class App(ctk.CTk):
         try:
             return parse_date_ru(txt)
         except Exception as e:
-            mb.showerror("Дата производства", str(e))
+            if not silent:
+                mb.showerror("Дата производства", str(e))
             return None
 
     def _get_client_name(self):
@@ -6947,6 +7008,7 @@ class App(ctk.CTk):
                     self.client_combo.set(v)
         except Exception:
             pass
+        self._schedule_live_preview()
 
     def _client_add(self):
         name = self._get_client_name()
@@ -6994,15 +7056,17 @@ class App(ctk.CTk):
             self._refresh_client_combo(None)
         except Exception:
             pass
+        self._schedule_live_preview()
 
-    def _get_exp_days(self):
+    def _get_exp_days(self, silent=False):
         t = (self.exp_days_entry.get() or "").strip()
         if not t:
             return None
         try:
             return max(0, int(t))
         except Exception:
-            mb.showerror("Срок годности (дней)", f"Ожидается целое число дней, получено: '{t}'")
+            if not silent:
+                mb.showerror("Срок годности (дней)", f"Ожидается целое число дней, получено: '{t}'")
             return None
 
     def _get_index(self):
@@ -7031,12 +7095,13 @@ class App(ctk.CTk):
             mb.showerror("Лимит", f"Ожидается целое число, получено: '{t}'")
             return None
 
-    def _get_btw_for_format(self, fmt_name: str):
+    def _get_btw_for_format(self, fmt_name: str, interactive=True):
 
         """
 
         BTW ищем по описанию шаблона в templates рядом с .exe/.py.
-        Если файла нет — спрашиваем путь и копируем выбранный BTW в templates.
+        Если файла нет — спрашиваем путь и копируем выбранный BTW в templates
+        только для явного интерактивного действия.
 
         """
 
@@ -7057,6 +7122,9 @@ class App(ctk.CTk):
             path = ""
         if path and os.path.isfile(path):
             return path
+
+        if not interactive:
+            return None
 
         try:
             if getattr(self, "logger", None):
@@ -7094,15 +7162,16 @@ class App(ctk.CTk):
         return None
 
     
-    def _enrich(self, base_row, idx1, allow_empty_part=False):
-        d = self._get_prod_date()
+    def _enrich(self, base_row, idx1, allow_empty_part=False, silent_validation=False):
+        d = self._get_prod_date(silent=silent_validation)
         if not d:
             return None
+        exp_days_override = self._get_exp_days(silent=silent_validation)
         enr = enrich_row(
             base_row=base_row,
             idx1=idx1,
             prod_date=d,
-            exp_days_override=self._get_exp_days(),
+            exp_days_override=exp_days_override,
             product_map=self.product_map,
             mode_choice=self.format_combo.get()
         )
@@ -7137,17 +7206,18 @@ class App(ctk.CTk):
         src = "не задан"
         if enr.get("_SHELF_LOG"):
             src = enr["_SHELF_LOG"]
-        elif self._get_exp_days() is not None:
-            src = f"override_days={self._get_exp_days()}"
+        elif exp_days_override is not None:
+            src = f"override_days={exp_days_override}"
         self.logger.log(f"Срок годности: {src}; EXP_DATE={enr.get('EXP_DATE','')}")
 
         # источник ShortName
         self.logger.log(f"ShortName источник: {enr.get('_SHORT_SRC','?')} → '{enr.get('ShortName','')}'")
         return enr
 
-    def _show_preview_path(self, path):
+    def _show_preview_path(self, path, preserve_on_error=False):
         try:
-            img = Image.open(path)
+            with Image.open(path) as source:
+                img = source.copy()
             self.preview_label.update_idletasks()
             box_w = max(320, int(self.preview_label.winfo_width() or 560)) - 40
             box_h = max(240, int(self.preview_label.winfo_height() or 360)) - 40
@@ -7157,9 +7227,25 @@ class App(ctk.CTk):
             self.preview_ctkimg = ctk.CTkImage(light_image=img, dark_image=img, size=(new_w, new_h))
             self.preview_label.configure(image=self.preview_ctkimg, text="")
             self.preview_current_path = path
+            return True
         except Exception as e:
             self.logger.err(f"Не удалось показать превью: {e}")
-            self.preview_label.configure(text="Не удалось показать превью")
+            if not preserve_on_error:
+                self.preview_label.configure(text="Не удалось показать превью")
+            return False
+
+    def _cleanup_preview_temp_dir(self, path=None):
+        state = self.__dict__
+        target = path if path is not None else state.get("_preview_temp_dir")
+        if not target:
+            return
+        if path is None or target == state.get("_preview_temp_dir"):
+            state["_preview_temp_dir"] = None
+        try:
+            import shutil
+            shutil.rmtree(target, ignore_errors=True)
+        except Exception:
+            pass
 
     def _preprint_stickers_for_all_batches(self, batches, rows_all, idx0, total, total_rolls, record_jobs=False):
         """Печать стикеров сразу на все пакеты перед основной печатью."""
@@ -7520,6 +7606,7 @@ class App(ctk.CTk):
         self.prod_date_entry.insert(0, format_production_date(value))
         self._mark_prod_date_entry(False)
         self._close_date_popover()
+        self._schedule_live_preview()
 
     def _open_date_picker(self):
         existing = getattr(self, "_date_popover", None)
@@ -7644,71 +7731,104 @@ class App(ctk.CTk):
 
     # ---------- actions ----------
     
-    def _preview(self):
-        if not self._require_print_capabilities("Предпросмотр печати"):
-            return
+    def _preview(self, silent=False):
+        if silent:
+            if getattr(self, "catalog_state", None) != "ready" or not self._bartender_available():
+                return False
+        elif not self._require_print_capabilities("Предпросмотр печати"):
+            return False
+
         if not self.csv_path:
-            mb.showerror("CSV", "Выбери CSV")
-            return
+            if not silent:
+                mb.showerror("CSV", "Выбери CSV")
+            return False
         if not self.csv_rows:
             try:
                 self.csv_rows = load_kontur_raw(self.csv_path)
             except Exception as e:
                 self.logger.err(f"CSV ошибка: {e}")
-                return
+                return False
         if not self.csv_rows:
-            mb.showerror("CSV", "Нет данных")
-            return
-    
-        idx1 = self._resolve_preview_index()
+            if not silent:
+                mb.showerror("CSV", "Нет данных")
+            return False
+
+        idx1 = self._resolve_preview_index(silent=silent)
         if idx1 is None:
-            return
+            return False
         base = self.csv_rows[idx1 - 1]
-        enr = self._enrich(base, idx1, allow_empty_part=True)
+        enr = self._enrich(
+            base,
+            idx1,
+            allow_empty_part=True,
+            silent_validation=silent,
+        )
         if not enr:
-            return
-    
+            return False
+
         src = "manual" if (self.format_combo.get() or "").strip() != "Auto" else "auto"
-        self.logger.log(f"Выбран шаблон: {enr['_FORMAT']} (источник: {src}, комбо: {self.format_combo.get()}, GTIN={base.get('GTIN','')})")
+        self.logger.log(
+            f"Выбран шаблон: {enr['_FORMAT']} "
+            f"(источник: {src}, комбо: {self.format_combo.get()}, GTIN={base.get('GTIN','')})"
+        )
         fmt_name = enr["_FORMAT"]
-        # если формат вычислен (Auto), синхронизируем UI/принтер под реальный формат
         try:
             self._apply_format_ui(fmt_name)
         except Exception:
             pass
-        btw = self._get_btw_for_format(fmt_name)
+        btw = self._get_btw_for_format(fmt_name, interactive=not silent)
         if not btw:
-            return
-    
+            return False
+
+        fmt = None
+        preview_dir = None
         try:
+            preview_dir = tempfile.mkdtemp(prefix="autoprint-preview-")
+            out_template = os.path.join(preview_dir, "preview_%PageNumber%.png")
+
             fmt = self.bt.open_format(btw)
             self.bt.set_common_print_flags(fmt)
             fmt.PrintSetup.IdenticalCopiesOfLabel = 1
             ok = self.bt.apply_fields(fmt, enr)
             if not ok:
                 self.logger.err("Не удалось подставить значения (проверь имена полей в BTW).")
-    
-            out = os.path.join(os.path.dirname(btw), PREVIEW_NAME)
-            # перезаписываем без вопросов
-            try:
-                if os.path.exists(out):
-                    os.remove(out)
-            except Exception:
-                pass
-    
-            if self.bt.export_preview(fmt, out):
-                self._show_preview_path(out)
-                self.logger.log(f"Превью сохранено: {out} (шаблон {fmt_name})")
-            else:
+
+            if not self.bt.export_preview(fmt, out_template):
                 self.logger.err("Не удалось сформировать превью.")
+                return False
+
+            generated = sorted(
+                os.path.join(preview_dir, name)
+                for name in os.listdir(preview_dir)
+                if name.lower().endswith(".png")
+            )
+            if not generated:
+                self.logger.err("BarTender сообщил успех, но файл превью не найден.")
+                return False
+
+            if not self._show_preview_path(generated[0], preserve_on_error=silent):
+                return False
+
+            old_dir = getattr(self, "_preview_temp_dir", None)
+            self._preview_temp_dir = preview_dir
+            preview_dir = None
+            if old_dir and old_dir != self._preview_temp_dir:
+                self._cleanup_preview_temp_dir(old_dir)
+
+            self.logger.log(f"Превью обновлено (шаблон {fmt_name})")
+            return True
         except Exception as e:
             self.logger.err(f"Превью: {e}\n{traceback.format_exc()}")
+            return False
         finally:
-            try:
-                fmt.Close(1)
-            except Exception:
-                pass
-    
+            if fmt is not None:
+                try:
+                    fmt.Close(1)
+                except Exception:
+                    pass
+            if preview_dir:
+                self._cleanup_preview_temp_dir(preview_dir)
+
     def _print_all(self):
         """Устаревшая полная печать через BarTender. Оставлена как заглушка."""
         try:
