@@ -423,6 +423,56 @@ class MainLayoutContractTests(unittest.TestCase):
         self.assertNotIn("height=", actions)
 
 
+class CsvBrowserLargeDirectoryTests(unittest.TestCase):
+    def test_entry_scan_is_bounded_and_marks_truncation(self):
+        app = object.__new__(bartender_gui.App)
+
+        with tempfile.TemporaryDirectory() as root, patch.object(
+            bartender_gui, "CSV_FILE_ENTRY_RENDER_LIMIT", 3
+        ):
+            for name in ("alpha", "beta", "gamma", "delta"):
+                os.makedirs(os.path.join(root, name))
+            app.csv_dir = root
+
+            entries = app._list_csv_entries()
+
+        self.assertEqual(len(entries), 3)
+        self.assertTrue(app._csv_entries_truncated)
+        self.assertTrue(all(kind == "dir" for _path, kind in entries))
+
+    def test_normal_directory_keeps_folder_first_and_csv_only_semantics(self):
+        app = object.__new__(bartender_gui.App)
+
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "folder-b"))
+            os.makedirs(os.path.join(root, "folder-a"))
+            for name in ("b.csv", "a.csv", "ignore.txt"):
+                with open(os.path.join(root, name), "w", encoding="utf-8") as fh:
+                    fh.write("x")
+            app.csv_dir = root
+
+            entries = app._list_csv_entries()
+
+        self.assertFalse(app._csv_entries_truncated)
+        self.assertEqual(
+            [(os.path.basename(path), kind) for path, kind in entries],
+            [
+                ("folder-b", "dir"),
+                ("folder-a", "dir"),
+                ("a.csv", "file"),
+                ("b.csv", "file"),
+            ],
+        )
+
+    def test_large_directory_render_has_visible_operator_notice(self):
+        source = inspect.getsource(bartender_gui.App._render_csv_list)
+
+        self.assertIn("_csv_entries_truncated", source)
+        self.assertIn("Каталог слишком большой", source)
+        self.assertIn("CSV_FILE_ENTRY_RENDER_LIMIT", source)
+        self.assertIn("Сменить папку", source)
+
+
 class ResizeDebounceTests(unittest.TestCase):
     @staticmethod
     def _scheduled_app():
