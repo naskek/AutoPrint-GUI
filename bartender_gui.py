@@ -101,6 +101,7 @@ MAIN_LAYOUT_BLOCK_ORDER = (
 )
 PRINT_BATCH_CONTAINER_SCROLLABLE = False
 CSV_FILE_LIST_SCROLL_POLICY = "vertical-auto"
+CSV_FILE_ENTRY_RENDER_LIMIT = 120
 PATH_RESIZE_DEBOUNCE_MS = 80
 CSV_SCROLLBAR_RESIZE_DEBOUNCE_MS = 120
 PREVIEW_RESIZE_DEBOUNCE_MS = 160
@@ -5602,18 +5603,47 @@ class App(ctk.CTk):
             return p or ""
 
     def _list_csv_entries(self):
-        """Возвращает список (path, kind) где kind in {'dir','file'}; файлы - только .csv."""
+        """Возвращает ограниченный список директорий и CSV без блокирующего полного обхода."""
+        self._csv_entries_truncated = False
         try:
             if not os.path.isdir(self.csv_dir):
                 return []
-            dirs = [os.path.join(self.csv_dir, d) for d in os.listdir(self.csv_dir)
-                    if os.path.isdir(os.path.join(self.csv_dir, d))]
-            files = [os.path.join(self.csv_dir, f) for f in os.listdir(self.csv_dir)
-                     if f.lower().endswith(".csv") and os.path.isfile(os.path.join(self.csv_dir, f))]
-            # Папки — по убыванию (свежие/важные сверху), файлы — как раньше, по возрастанию
-            entries = [(d, "dir") for d in sorted(dirs, key=lambda x: os.path.basename(x).lower(), reverse=True)]
-            entries += [(f, "file") for f in sorted(files, key=lambda x: os.path.basename(x).lower())]
-            return entries
+            dirs = []
+            files = []
+            eligible = 0
+            with os.scandir(self.csv_dir) as iterator:
+                for entry in iterator:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            dirs.append(entry.path)
+                            eligible += 1
+                        elif (
+                            entry.name.lower().endswith(".csv")
+                            and entry.is_file(follow_symlinks=False)
+                        ):
+                            files.append(entry.path)
+                            eligible += 1
+                    except OSError:
+                        continue
+
+                    if eligible > CSV_FILE_ENTRY_RENDER_LIMIT:
+                        self._csv_entries_truncated = True
+                        break
+
+            # Папки — по убыванию, CSV — по возрастанию, как раньше.
+            entries = [
+                (path, "dir")
+                for path in sorted(
+                    dirs, key=lambda x: os.path.basename(x).lower(), reverse=True
+                )
+            ]
+            entries += [
+                (path, "file")
+                for path in sorted(
+                    files, key=lambda x: os.path.basename(x).lower()
+                )
+            ]
+            return entries[:CSV_FILE_ENTRY_RENDER_LIMIT]
         except Exception:
             return []
 
@@ -6355,6 +6385,20 @@ class App(ctk.CTk):
         if not entries:
             ctk.CTkLabel(frame, text="CSV не найдены").pack(anchor="w", padx=6, pady=4)
             return
+
+        if getattr(self, "_csv_entries_truncated", False):
+            ctk.CTkLabel(
+                frame,
+                text=(
+                    f"Каталог слишком большой: показано до "
+                    f"{CSV_FILE_ENTRY_RENDER_LIMIT} элементов. "
+                    "Используйте «Сменить папку» для быстрого перехода."
+                ),
+                anchor="w",
+                justify="left",
+                wraplength=300,
+                text_color=("#8a5a00", "#f0b44c"),
+            ).pack(fill="x", padx=6, pady=(4, 6))
 
         cur_norm = self._norm_csv_path(getattr(self, "csv_path", ""))
         # сброс hover
