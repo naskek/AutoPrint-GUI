@@ -698,6 +698,26 @@ class CollapsibleLogTests(unittest.TestCase):
         self.assertIn('label="Сохранить лог…"', source)
 
 
+class CalibrationDefaultTests(unittest.TestCase):
+    def test_tsc_calibration_is_enabled_by_default(self):
+        self.assertIs(bartender_gui.DEFAULT_TSC_CALIBRATION_ENABLED, True)
+
+        source = inspect.getsource(bartender_gui.App._build_ui)
+        self.assertIn(
+            "self.calib_var = ctk.BooleanVar(value=DEFAULT_TSC_CALIBRATION_ENABLED)",
+            source,
+        )
+
+    def test_calibration_batch_logic_is_unchanged(self):
+        source = inspect.getsource(bartender_gui.App._write_tmp_batch_csv)
+
+        self.assertIn(
+            'if add_calib and self._bool_var(getattr(self, "calib_var", False))',
+            source,
+        )
+        self.assertIn("rows2 = [dummy.copy() for _ in range(6)] + rows2", source)
+
+
 class PrintControlsLayoutTests(unittest.TestCase):
     def test_print_section_owns_all_selection_controls_and_has_no_manual_preview_button(self):
         source = inspect.getsource(bartender_gui.App._build_ui)
