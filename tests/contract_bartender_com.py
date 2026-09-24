@@ -59,6 +59,38 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
             ],
         )
 
+    @patch("bartender_gui.resolve_sticker_template_path", return_value=r"C:\\labels\\sticker60x40.btw")
+    def test_sticker_passes_manual_part_num_to_named_data_source(self, _resolve_sticker):
+        app = object.__new__(bartender_gui.App)
+        app.cfg = {}
+        app.logger = self.logger
+        app._require_print_capabilities = Mock(return_value=True)
+        app._get_sticker_printer = Mock(return_value="Sticker Printer")
+        app._get_client_name = Mock(return_value="")
+        app.product_map = {}
+
+        bt = bartender_com.BT(self.logger)
+        fmt = Mock()
+        fmt.NamedSubStrings = [SimpleNamespace(Name="PART_NUM")]
+        fmt.PrintSetup = SimpleNamespace()
+        bt.app = Mock()
+        bt.app.Formats.Open.return_value = fmt
+        app.bt = bt
+
+        app._print_sticker_placeholder(
+            1,
+            1,
+            100,
+            100,
+            sample_row={"PART_NUM": "42001"},
+            km_count=100,
+            total_rolls=1,
+        )
+
+        fmt.SetNamedSubStringValue.assert_called_once_with("PART_NUM", "42001")
+        fmt.PrintOut.assert_called_once_with(False, False)
+        fmt.Close.assert_called_once_with(1)
+
     @patch("win32com.client.VARIANT")
     def test_batch_success_submits_exactly_once(self, variant):
         messages = SimpleNamespace(value=SimpleNamespace(Count=0))
