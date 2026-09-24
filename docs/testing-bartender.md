@@ -32,17 +32,38 @@ Known contract violations may be represented temporarily with `unittest.expected
 
 Entry point: `tools/bartender_live_smoke.py`.
 
-This smoke is intentionally excluded from ordinary CI. It only runs when `AUTOPRINT_LIVE_BARTENDER=1` is explicitly set and only on Windows. It starts a hidden `BarTender.Application`, reports Version/FullVersion/Edition, and quits with `btDoNotSaveChanges`. It does not open a BTW, submit a print job, touch the Windows spooler, or claim physical-print verification.
+This smoke is intentionally excluded from ordinary CI. It only runs when `AUTOPRINT_LIVE_BARTENDER=1` is explicitly set and only on Windows.
+
+Without arguments it starts a hidden `BarTender.Application`, reports Version/FullVersion/Edition, and quits with `btDoNotSaveChanges`.
+
+With `--btw <path>` it additionally opens a real disposable/test BTW and verifies the installed COM object shape used by AutoPrint:
+
+- documented `Format.Print`, `Format.PrintOut`, `Format.SetNamedSubStringValue`, and `Format.Close`;
+- `Format.PrintSetup`;
+- documented `PrintSetup.IdenticalCopiesOfLabel` read/write access;
+- documented `PrintSetup.Printer`;
+- `NamedSubStrings` enumeration;
+- `Databases` collection probe;
+- document close with `btDoNotSaveChanges`.
+
+The BTW inspection mode deliberately does **not** call `Print` or `PrintOut`, does not touch the Windows spooler, and does not claim physical-print verification. Its output includes `NO PRINT SUBMITTED` when the inspection completes. This lets a work branch validate the installed BarTender COM surface without building/installing a production AutoPrint release.
 
 PowerShell:
 
 ```powershell
+Set-Location -LiteralPath 'D:\Projects\AutoPrint-GUI'
 $env:AUTOPRINT_LIVE_BARTENDER = '1'
-python .\tools\bartender_live_smoke.py
+
+# Startup/shutdown only
+.\.venv\Scripts\python.exe .\tools\bartender_live_smoke.py
+
+# Real BTW inspection, still no print submission
+.\.venv\Scripts\python.exe .\tools\bartender_live_smoke.py --btw 'C:\Path\To\Disposable-Test.btw'
+
 Remove-Item Env:AUTOPRINT_LIVE_BARTENDER
 ```
 
-This covers only the startup/shutdown portion of LV-01 in `docs/bartender-automation.md`. More invasive LV checks must use disposable templates/queues and be run deliberately.
+This extends LV-01 and provides non-printing capability evidence for LV-06/LV-08/LV-09. Any test that actually invokes `Format.Print` or `PrintOut` remains a separate deliberate live-print/queue check and must never be hidden inside this smoke harness.
 
 ### 4. Physical print verification
 
