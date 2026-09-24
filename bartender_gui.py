@@ -1423,7 +1423,7 @@ class App(ctk.CTk):
         )
         self.csv_available_label.pack(side="left", padx=8, pady=7)
         self.csv_skipped_label = ctk.CTkLabel(
-            self.csv_status_strip_frame, text="ошибок: 0", anchor="w"
+            self.csv_status_strip_frame, text="ошибок: —", anchor="w"
         )
         self.csv_skipped_label.pack(side="left", padx=8, pady=7)
         self.brand_value_label = ctk.CTkLabel(
@@ -1746,7 +1746,7 @@ class App(ctk.CTk):
             )
             self.csv_rows_count_label.configure(text=f"строк: {rows}")
             self.csv_available_label.configure(text=f"к печати: {rows}")
-            self.csv_skipped_label.configure(text="ошибок: 0")
+            self.csv_skipped_label.configure(text="ошибок: —")
             self._schedule_path_label_refresh()
         except Exception:
             pass
@@ -6428,7 +6428,7 @@ class App(ctk.CTk):
         except Exception:
             pass
         try:
-            self.csv_label.configure(text=f"CSV: {_os.path.basename(self.csv_path)}")
+            self.csv_label.configure(text=_os.path.basename(self.csv_path))
         except Exception:
             pass
         try:
