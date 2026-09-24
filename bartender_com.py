@@ -12,6 +12,7 @@ BT_DO_NOT_SAVE_CHANGES = 1
 BT_COLORS_24BIT = 4
 BT_PRINT_SUCCESS = 0
 PREVIEW_BACKGROUND_WHITE = 0xFFFFFF
+PREVIEW_PAGE_RANGE = "1"
 
 
 class BT:
@@ -117,7 +118,7 @@ class BT:
             )
 
     def export_preview(self, fmt, path):
-        """Экспортирует print preview через документированный ExportPrintPreviewToImage."""
+        """Экспортирует первую страницу print preview через документированный Range API."""
         directory = os.path.dirname(os.path.abspath(path))
         file_name_template = os.path.basename(path)
         try:
@@ -131,7 +132,8 @@ class BT:
             return False
 
         try:
-            result = fmt.ExportPrintPreviewToImage(
+            result = fmt.ExportPrintPreviewRangeToImage(
+                PREVIEW_PAGE_RANGE,
                 directory,
                 file_name_template,
                 "PNG",
