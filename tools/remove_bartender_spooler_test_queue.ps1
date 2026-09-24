@@ -2,7 +2,8 @@
 param(
     [string]$QueueName = 'AutoPrint_TEST_Printronix',
     [string]$PortName = 'AUTOPRINT_TEST_SINK',
-    [int]$ReleaseTimeoutSeconds = 15
+    [int]$ReleaseTimeoutSeconds = 15,
+    [switch]$AllowSpoolerRestart
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,6 +29,64 @@ function Get-TestPortUsers {
     )
 
     return @($printManagementUsers + $cimUsers)
+}
+
+function Get-AllPrintJobsSafe {
+    $allJobs = @()
+    foreach ($printer in @(Get-Printer -ErrorAction SilentlyContinue)) {
+        try {
+            $jobs = @(Get-PrintJob -PrinterName $printer.Name -ErrorAction Stop)
+            foreach ($job in $jobs) {
+                $allJobs += [pscustomobject]@{
+                    PrinterName = $printer.Name
+                    JobId       = $job.ID
+                    DocumentName = $job.DocumentName
+                }
+            }
+        }
+        catch {
+            # A queue that cannot be queried is treated conservatively by returning
+            # a synthetic blocker so the helper will not restart the spooler.
+            $allJobs += [pscustomobject]@{
+                PrinterName = $printer.Name
+                JobId       = $null
+                DocumentName = '<unable to query queue>'
+            }
+        }
+    }
+    return @($allJobs)
+}
+
+function Remove-TestPortWithRetry {
+    param(
+        [string]$Name,
+        [int]$Attempts = 10,
+        [int]$DelayMilliseconds = 750
+    )
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            Remove-PrinterPort -Name $Name -ErrorAction Stop
+            return $true
+        }
+        catch {
+            $lastError = $_
+
+            $remainingUsers = @(Get-TestPortUsers -Name $Name)
+            if ($remainingUsers.Count -gt 0) {
+                $names = ($remainingUsers | Select-Object -ExpandProperty Name -Unique) -join ', '
+                throw "Refusing port cleanup: $Name became used by: $names"
+            }
+
+            Start-Sleep -Milliseconds $DelayMilliseconds
+        }
+    }
+
+    if ($lastError) {
+        Write-Host "TEST port is still busy: $($lastError.Exception.Message)"
+    }
+    return $false
 }
 
 $queue = Get-Printer -Name $QueueName -ErrorAction SilentlyContinue
@@ -72,32 +131,40 @@ if ($remainingUsers.Count -gt 0) {
 
 $port = Get-PrinterPort -Name $PortName -ErrorAction SilentlyContinue
 if ($port) {
-    $lastError = $null
-    for ($attempt = 1; $attempt -le 10; $attempt++) {
-        try {
-            Remove-PrinterPort -Name $PortName -ErrorAction Stop
-            $lastError = $null
-            break
-        }
-        catch {
-            $lastError = $_
+    $removed = Remove-TestPortWithRetry -Name $PortName
 
-            # Never retry if a printer starts using the port while cleanup waits.
-            $remainingUsers = @(Get-TestPortUsers -Name $PortName)
-            if ($remainingUsers.Count -gt 0) {
-                $names = ($remainingUsers | Select-Object -ExpandProperty Name -Unique) -join ', '
-                throw "Refusing port cleanup: $PortName became used by: $names"
-            }
-
-            Start-Sleep -Milliseconds 750
+    if (-not $removed -and $AllowSpoolerRestart) {
+        $allJobs = @(Get-AllPrintJobsSafe)
+        if ($allJobs.Count -gt 0) {
+            Write-Host "Refusing Print Spooler restart because print jobs/unknown queue states exist:"
+            $allJobs | Format-Table PrinterName, JobId, DocumentName -AutoSize
+            throw "Spooler restart blocked: active or unverified print queues exist."
         }
+
+        Write-Host "No print jobs found. Restarting Windows Print Spooler to release TEST port handle..."
+        Restart-Service -Name Spooler -Force -ErrorAction Stop
+
+        $service = Get-Service -Name Spooler
+        $service.WaitForStatus(
+            [System.ServiceProcess.ServiceControllerStatus]::Running,
+            [TimeSpan]::FromSeconds(15)
+        )
+        Start-Sleep -Seconds 1
+
+        $remainingUsers = @(Get-TestPortUsers -Name $PortName)
+        if ($remainingUsers.Count -gt 0) {
+            $names = ($remainingUsers | Select-Object -ExpandProperty Name -Unique) -join ', '
+            throw "Refusing port cleanup after spooler restart: $PortName is used by: $names"
+        }
+
+        $removed = Remove-TestPortWithRetry -Name $PortName -Attempts 5
     }
 
-    if ($lastError) {
+    if (-not $removed) {
         throw (
-            "TEST port is still busy after spooler-release retries. " +
-            "No production queue was modified. Re-run this cleanup helper later. " +
-            "Last error: " + $lastError.Exception.Message
+            "TEST port is still busy. No production queue was modified. " +
+            "Re-run later, reboot Windows, or explicitly rerun with -AllowSpoolerRestart " +
+            "when no print jobs are active."
         )
     }
 
