@@ -273,7 +273,7 @@ class MainLayoutContractTests(unittest.TestCase):
             source.index("self._build_ui()"),
         )
 
-    def test_main_layout_declares_all_approved_sections(self):
+    def test_main_layout_declares_only_active_top_level_sections(self):
         self.assertEqual(
             bartender_gui.MAIN_LAYOUT_SECTION_NAMES,
             (
@@ -282,13 +282,12 @@ class MainLayoutContractTests(unittest.TestCase):
                 "print_section",
                 "preview_section",
                 "source_section",
-                "csv_status_section",
                 "log_section",
                 "status_bar_frame",
             ),
         )
 
-    def test_csv_file_manager_is_the_first_left_column_block(self):
+    def test_csv_file_manager_is_the_only_primary_csv_selection_block(self):
         self.assertEqual(
             bartender_gui.MAIN_LAYOUT_BLOCK_ORDER,
             (
@@ -297,22 +296,46 @@ class MainLayoutContractTests(unittest.TestCase):
                 ("left", "print_section"),
                 ("center", "preview_section"),
                 ("right", "source_section"),
-                ("right", "csv_status_section"),
             ),
         )
         self.assertNotEqual(
             bartender_gui.MAIN_LAYOUT_BLOCK_ORDER[0][1], "source_section"
         )
 
-    def test_main_sections_have_unique_sequential_numbers(self):
-        numbers = [
-            bartender_gui.MAIN_LAYOUT_SECTION_NUMBERS[name]
-            for _column, name in bartender_gui.MAIN_LAYOUT_BLOCK_ORDER
-        ]
-        self.assertEqual(numbers, ["1", "2", "3", "4", "5", "6"])
-        self.assertEqual(len(numbers), len(set(numbers)))
+        source = inspect.getsource(bartender_gui.App._build_ui)
+        right_block = source.split(
+            "self.source_section = self._make_main_section(", 1
+        )[1].split("self.log_section = ctk.CTkFrame", 1)[0]
+        self.assertIn('"Шаблон / принтер"', right_block)
+        self.assertIn('text="Выбранный CSV:"', right_block)
+        self.assertNotIn('text="Папка:"', right_block)
+        self.assertNotIn('text="Выбрать файл"', right_block)
+        self.assertNotIn("command=self._choose_csv", right_block)
 
-    def test_runtime_status_updates_without_rebuilding_widgets(self):
+    def test_main_sections_have_no_numbered_step_badges(self):
+        self.assertFalse(hasattr(bartender_gui, "MAIN_LAYOUT_SECTION_NUMBERS"))
+        source = inspect.getsource(bartender_gui.App._make_main_section)
+        self.assertNotIn('fg_color="#2f80ed"', source)
+        self.assertNotIn("number", inspect.signature(bartender_gui.App._make_main_section).parameters)
+
+    def test_csv_status_is_compact_and_lives_below_preview(self):
+        source = inspect.getsource(bartender_gui.App._build_ui)
+        preview_block = source.split(
+            "self.preview_section = self._make_main_section(", 1
+        )[1].split(
+            "self.right_column_frame = ctk.CTkFrame", 1
+        )[0]
+
+        self.assertIn("self.csv_status_strip_frame", preview_block)
+        self.assertIn('text="CSV: не выбран"', preview_block)
+        self.assertIn('text="строк: 0"', preview_block)
+        self.assertIn('text="к печати: 0"', preview_block)
+        self.assertIn('text="ошибок: —"', preview_block)
+        self.assertIn('text="бренд: —"', preview_block)
+        self.assertNotIn("csv_status_section", source)
+        self.assertNotIn('"Проверка данных CSV"', source)
+
+    def test_runtime_status_updates_compact_csv_strip_without_rebuilding_widgets(self):
         app = object.__new__(bartender_gui.App)
         app.csv_path = r"D:\input\batch.csv"
         app.csv_rows = [{"GTIN": "1"}, {"GTIN": "2"}]
@@ -320,6 +343,8 @@ class MainLayoutContractTests(unittest.TestCase):
         app.format_combo.get.return_value = "Auto"
         app.prn_combo = Mock()
         app.prn_combo.get.return_value = "TSC"
+        app._schedule_path_label_refresh = Mock()
+        app._update_print_selection_summary = Mock()
         for name in (
             "status_ready_label",
             "status_csv_label",
@@ -329,6 +354,7 @@ class MainLayoutContractTests(unittest.TestCase):
             "csv_summary_label",
             "csv_rows_count_label",
             "csv_available_label",
+            "csv_skipped_label",
         ):
             setattr(app, name, Mock())
 
@@ -337,6 +363,10 @@ class MainLayoutContractTests(unittest.TestCase):
         app.status_rows_label.configure.assert_called_once_with(text="Строк: 2")
         app.status_template_label.configure.assert_called_once_with(text="Шаблон: Auto")
         app.status_printer_label.configure.assert_called_once_with(text="Принтер: TSC")
+        app.csv_summary_label.configure.assert_called_once_with(text="CSV: batch.csv")
+        app.csv_rows_count_label.configure.assert_called_once_with(text="строк: 2")
+        app.csv_available_label.configure.assert_called_once_with(text="к печати: 2")
+        app.csv_skipped_label.configure.assert_called_once_with(text="ошибок: —")
 
     def test_path_shortening_responds_to_available_width(self):
         app = object.__new__(bartender_gui.App)
