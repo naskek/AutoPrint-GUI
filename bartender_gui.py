@@ -1375,13 +1375,6 @@ class App(ctk.CTk):
         self.limit_entry = ctk.CTkEntry(fields_row, width=70)
         self.limit_entry.pack(side="left", padx=(5, 12))
         ctk.CTkLabel(fields_row, text="Масштаб: по размеру").pack(side="left", padx=6)
-        self.preview_mode_btn = ctk.CTkButton(
-            fields_row,
-            text="Показать маркировочный стикер",
-            width=190,
-            command=self._toggle_preview_mode,
-        )
-        self.preview_mode_btn.pack(side="right")
         self.print_selection_summary_label = ctk.CTkLabel(
             preview_nav, text="—", anchor="w", text_color=("#65717c", "#aeb6bf")
         )
@@ -1404,6 +1397,13 @@ class App(ctk.CTk):
             self.preview_strip_frame, text="Текущая этикетка", anchor="w"
         )
         self.preview_mode_label.pack(side="left", padx=12, pady=10)
+        self.preview_mode_btn = ctk.CTkButton(
+            self.preview_strip_frame,
+            text="Показать маркировочный стикер",
+            width=190,
+            command=self._toggle_preview_mode,
+        )
+        self.preview_mode_btn.pack(side="right", padx=12, pady=10)
 
         self.right_column_frame = ctk.CTkFrame(self.main_layout_frame, fg_color="transparent")
         self.right_column_frame.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
