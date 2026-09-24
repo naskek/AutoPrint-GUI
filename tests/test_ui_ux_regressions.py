@@ -327,8 +327,7 @@ class MainLayoutContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn("self.csv_status_strip_frame", preview_block)
-        self.assertIn('text="CSV: не выбран"', preview_block)
-        self.assertIn('text="строк: 0"', preview_block)
+        self.assertIn('text="CSV: —"', preview_block)
         self.assertIn('text="к печати: 0"', preview_block)
         self.assertIn('text="ошибок: —"', preview_block)
         self.assertIn('text="бренд: —"', preview_block)
@@ -352,7 +351,6 @@ class MainLayoutContractTests(unittest.TestCase):
             "status_template_label",
             "status_printer_label",
             "csv_summary_label",
-            "csv_rows_count_label",
             "csv_available_label",
             "csv_skipped_label",
         ):
@@ -363,8 +361,7 @@ class MainLayoutContractTests(unittest.TestCase):
         app.status_rows_label.configure.assert_called_once_with(text="Строк: 2")
         app.status_template_label.configure.assert_called_once_with(text="Шаблон: Auto")
         app.status_printer_label.configure.assert_called_once_with(text="Принтер: TSC")
-        app.csv_summary_label.configure.assert_called_once_with(text="CSV: batch.csv")
-        app.csv_rows_count_label.configure.assert_called_once_with(text="строк: 2")
+        app.csv_summary_label.configure.assert_called_once_with(text="CSV: 2 строк")
         app.csv_available_label.configure.assert_called_once_with(text="к печати: 2")
         app.csv_skipped_label.configure.assert_called_once_with(text="ошибок: —")
 
