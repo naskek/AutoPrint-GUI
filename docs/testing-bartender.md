@@ -44,6 +44,8 @@ With `--btw <path>` it additionally opens a real disposable/test BTW and verifie
 - documented `PrintSetup.Printer`;
 - `NamedSubStrings` enumeration;
 - `Databases` collection probe;
+- read-only `Format.PageSetup.MediaHandling.Action` / `Occurrence` inspection, including documented enum decoding;
+- optional `MediaHandling.NumberOfLabels` read;
 - document close with `btDoNotSaveChanges`.
 
 The BTW inspection mode deliberately does **not** call `Print` or `PrintOut`, does not touch the Windows spooler, and does not claim physical-print verification. Its output includes `NO PRINT SUBMITTED` when the inspection completes. This lets a work branch validate the installed BarTender COM surface without building/installing a production AutoPrint release.
@@ -63,7 +65,16 @@ $env:AUTOPRINT_LIVE_BARTENDER = '1'
 Remove-Item Env:AUTOPRINT_LIVE_BARTENDER
 ```
 
-This extends LV-01 and provides non-printing capability evidence for LV-06/LV-08/LV-09. Any test that actually invokes `Format.Print` or `PrintOut` remains a separate deliberate live-print/queue check and must never be hidden inside this smoke harness.
+This extends LV-01 and provides non-printing capability evidence for LV-06/LV-08/LV-09 plus a read-only media-handling snapshot relevant to historical feed/backfeed diagnostics. The documented values are decoded from Seagull's ActiveX contract: `Occurrence=0` is `btMHAtEndOfPrintJob`, `1` is after every page, `2` is after every record, etc. `Action=0` delegates the actual media handling to printer-driver settings, so this probe must not be treated as proof of physical feed/backfeed behavior.
+
+Official references:
+
+- https://help.seagullscientific.com/2022/en/subsystems/activex/content/PageSetup_Object.htm
+- https://help.seagullscientific.com/2022/en/subsystems/activex/content/MediaHandling_Object.htm
+- https://help.seagullscientific.com/11.8/en/Subsystems/ActiveX/Content/Action_Property.htm
+- https://help.seagullscientific.com/11.8/en/Subsystems/ActiveX/Content/Occurrence_Property.htm
+
+Any test that actually invokes `Format.Print` or `PrintOut` remains a separate deliberate live-print/queue check and must never be hidden inside this smoke harness.
 
 ### 4. Physical print verification
 
