@@ -7204,92 +7204,57 @@ class App(ctk.CTk):
     
     
     def _bt_print(self, fmt, copies: int, show_dialog: bool):
-    
+        """
+        Direct/legacy print path for templates that cannot use the tmp_batch database.
+
+        PrintOut has exactly two documented Boolean arguments. This path performs
+        exactly one submit attempt: no overload probing and no fallback retry.
+        """
         self._disable_auto_print_again(fmt)
 
-        # Если выбран режим "Одно задание" — используем IdenticalCopiesOfLabel
-        try:
-            sj = False
-            if hasattr(self, "single_job_var"):
-                if hasattr(self.single_job_var, "get"):
-                    sj = bool(self.single_job_var.get())
-                else:
-                    sj = bool(self.single_job_var)
-            if sj and not show_dialog:
-                try:
-                    fmt.IdenticalCopiesOfLabel = int(copies)
-                except Exception:
-                    pass
-                try:
-                    self.logger.log(f"SingleJob: IdenticalCopiesOfLabel={copies}")
-                except Exception:
-                    pass
-                try:
-                    # Одно задание, без диалогов
-                    fmt.PrintOut(False, True) if self._dialog_flag() else fmt.PrintOut(False, False)
-                    return True
-                except Exception as e:
-                    try:
-                        self.logger.err(f"SingleJob PrintOut error: {e}")
-                    except Exception:
-                        pass
-                    # Падать не будем — ниже сработают обычные пути
-        except Exception:
-            pass
-        if getattr(self, 'cancel_requested', False):
+        if getattr(self, "cancel_requested", False):
             try:
-                self.logger.log('Печать отменена пользователем (до отправки).')
+                self.logger.log("Печать отменена пользователем (до отправки).")
             except Exception:
                 pass
             return False
-        """
-        Если show_dialog=True: пробуем 2-булевые перегрузки (A1/A2) и затем трёхаргументную (B).
-        Если show_dialog=False: пропускаем A1/A2 полностью, используем B или тихий C.
-        Ошибку 'Недопустимое число параметров' в B понижаем до инфо-лога, если show_dialog=False.
-        """
-        prompt = bool(show_dialog)
-    
-        if False and prompt:
-            # A1: две булевые с ожиданием
-            try:
-                self.logger.log("BT Print: A1 -> PrintOut(True, True)")
-                fmt.PrintOut(True, True)
-                return True
-            except Exception as e:
-                self.logger.err(f"BT Print A1 ошибка: {e}")
-            # A2: две булевые без ожидания
-            try:
-                self.logger.log("BT Print: A2 -> PrintOut(True, False)")
-                fmt.PrintOut(True, False)
-                return True
-            except Exception as e:
-                self.logger.err(f"BT Print A2 ошибка: {e}")
-    
-        # B: трёхаргументная перегрузка (copies, serialized, showDialog)
+
         try:
-            self.logger.log(f"BT Print: B -> PrintOut(Copies={int(copies)}, Serialized=False, ShowDialog={prompt})")
-            fmt.PrintOut(int(copies), False, prompt)
-            return True
+            fmt.PrintSetup.IdenticalCopiesOfLabel = int(copies)
         except Exception as e:
-            if False and prompt:
-                self.logger.err(f"BT Print B ошибка: {e}")
-            else:
-                self.logger.log(f"BT Print: B недоступна (перехожу в C): {e}")
-    
-        # C: fallback — полностью тихо
-        try:
-            self.logger.log("BT Print: C -> PrintOut(False, False) (тихо)")
-            if self._should_stop():
-                return False
-            fmt.PrintOut(False, True) if self._dialog_flag() else fmt.PrintOut(False, False)
-            if False and prompt:
-                self.logger.err("Диалог печати не поддерживается COM — выполнена тихая печать.")
-            return True
-        except Exception as e:
-            self.logger.err(f"Печать не удалась: {e}")
+            try:
+                self.logger.err(
+                    "BT Direct Print: не удалось установить "
+                    f"PrintSetup.IdenticalCopiesOfLabel={int(copies)}: {e}"
+                )
+            except Exception:
+                pass
             return False
-    
-    
+
+        show_print_dialog = bool(show_dialog)
+        try:
+            self.logger.log(
+                "BT Direct Print: PrintOut("
+                f"ShowStatusWindow=False, ShowPrintDialog={show_print_dialog})"
+            )
+        except Exception:
+            pass
+
+        try:
+            fmt.PrintOut(False, show_print_dialog)
+            return True
+        except Exception as e:
+            try:
+                self.logger.err(
+                    "BT Direct Print: PrintOut завершился исключением; "
+                    "повторная отправка отключена: "
+                    f"{e}"
+                )
+            except Exception:
+                pass
+            return False
+
+
     # ---------- pause helpers ----------
     def _toggle_pause(self):
         # Переключатель Пауза / Продолжить (без отмены заданий)
