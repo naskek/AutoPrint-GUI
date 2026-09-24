@@ -68,16 +68,19 @@ The reviewed official ActiveX object model documents `Databases`; it does not es
 
 ### Template image export versus print preview
 
-The two APIs are not interchangeable:
+The image-export APIs are not interchangeable:
 
 | API | Official meaning | Result |
 | --- | --- | --- |
-| `Format.ExportToFile(file, type, colors, resolution, saveOptions)` | Creates an image of the document's **template**. | Image file; not a rendered multi-page print run. |
-| `Format.ExportPrintPreviewToImage(directory, fileNameTemplate, type, colors, dpi, background, saveOptions, includeMargins, includeBorder, messages)` | Exports an image for **each page of print preview**. `%PageNumber%` is supported. | `BtPrintResult.btSuccess` or `btFailure`, plus messages. |
+| `Format.ExportToFile(file, type, colors, resolution, saveOptions)` | Creates an image of the document's **template**. | Image file; not a rendered print preview. |
+| `Format.ExportPrintPreviewToImage(directory, fileNameTemplate, type, colors, dpi, background, saveOptions, includeMargins, includeBorder, messages)` | Exports an image for each page of print preview. | `BtPrintResult.btSuccess` or `btFailure`, plus messages. |
+| `Format.ExportPrintPreviewRangeToImage(pageRange, directory, fileNameTemplate, type, colors, dpi, background, saveOptions, includeMargins, includeBorder, messages)` | Exports only the specified print-preview pages. `%PageNumber%` is supported. | `BtPrintResult.btSuccess` or `btFailure`, plus messages. |
 
-See [Format.ExportToFile](https://help.seagullscientific.com/2022/en/subsystems/activex/content/ExportToFile_Method.htm) and [Format.ExportPrintPreviewToImage](https://help.seagullscientific.com/2022/en/subsystems/activex/content/ExportPreview_Method.htm).
+See [Format.ExportToFile](https://help.seagullscientific.com/2022/en/subsystems/activex/content/ExportToFile_Method.htm), [Format.ExportPrintPreviewToImage](https://help.seagullscientific.com/2022/en/subsystems/activex/content/ExportPreview_Method.htm), and [Format.ExportPrintPreviewRangeToImage](https://help.seagullscientific.com/11.8/en/Subsystems/ActiveX/Content/ExportPreviewRange_Method.htm).
 
-**AutoPrint rule.** User-facing print preview must use `ExportPrintPreviewToImage`, not `ExportToFile`. It must supply an explicit no-save option, `BtSaveOptions.btDoNotSaveChanges` (or the exact documented equivalent for the supported installed version), collect and inspect messages, write to an AutoPrint-owned temporary directory, and close the format with `btDoNotSaveChanges`. Preview-time printer, database, and named-data-source changes must not be persisted into the user's BTW. File naming, multi-page cleanup, overwrite behavior, and the precise behavior of the no-save option are **Needs local verification** before replacing the current implementation.
+**Verified target-install compatibility (2026-09-24).** The production Windows machine exposes BarTender `11.3 / 2022 R5 / Enterprise / build 197999`. On that COM type library, `Format.ExportPrintPreviewToImage` is absent (`GetIDsOfNames` reports unknown name), while `Format.ExportPrintPreviewRangeToImage` is present with DISPID 59. AutoPrint therefore uses the documented range API with `PageRange="1"` because the UI displays only the first preview page.
+
+**AutoPrint rule.** User-facing preview must use a documented print-preview API, never `ExportToFile` as a silent substitute. For the supported BarTender 2022 R5 installation, use `ExportPrintPreviewRangeToImage("1", ...)`. Supply `BtSaveOptions.btDoNotSaveChanges`, collect and inspect messages, write to an AutoPrint-owned temporary directory, and close the format with `btDoNotSaveChanges`. Preview must never call `Print` or `PrintOut`. Preview-time printer, database, and named-data-source changes must not be persisted into the user's BTW.
 
 ### `Format.Print`, `PrintOut`, results, and messages
 
