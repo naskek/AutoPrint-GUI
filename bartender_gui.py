@@ -1473,12 +1473,20 @@ class App(ctk.CTk):
         self.log_section.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
         log_header = ctk.CTkFrame(self.log_section, fg_color="transparent")
         log_header.pack(fill="x", padx=10, pady=(6, 2))
-        ctk.CTkLabel(log_header, text="Лог выполнения", font=("Arial", 14, "bold")).pack(side="left")
-        ctk.CTkButton(log_header, text="Очистить", width=80, command=self._clear_log).pack(side="right")
+        ctk.CTkLabel(
+            log_header, text="Лог выполнения", font=("Arial", 14, "bold")
+        ).pack(side="left")
+        self.log_toggle_btn = ctk.CTkButton(
+            log_header,
+            text="Показать лог",
+            width=110,
+            command=self._toggle_log_visibility,
+        )
+        self.log_toggle_btn.pack(side="right")
         self.log_frame = ctk.CTkFrame(self.log_section, fg_color="transparent")
-        self.log_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self.logbox = ctk.CTkTextbox(self.log_frame, height=125)
         self.logbox.pack(fill="both", expand=True)
+        self._log_visible = False
         self.log_follow = True
         self._bind_log_scroll_events()
         self.logger = Logger(self.logbox, self)
@@ -1721,6 +1729,34 @@ class App(ctk.CTk):
             self.logbox.configure(state=state)
         except Exception:
             pass
+
+    def _set_log_visible(self, visible):
+        """Show or collapse the log body without destroying the textbox contents."""
+        state = self.__dict__
+        visible = bool(visible)
+        if visible:
+            try:
+                self.log_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+            except Exception:
+                return False
+        else:
+            try:
+                self.log_frame.pack_forget()
+            except Exception:
+                return False
+        state["_log_visible"] = visible
+        try:
+            self.log_toggle_btn.configure(
+                text="Скрыть лог" if visible else "Показать лог"
+            )
+        except Exception:
+            pass
+        return True
+
+    def _toggle_log_visibility(self):
+        return self._set_log_visible(
+            not bool(self.__dict__.get("_log_visible", False))
+        )
 
     def _refresh_runtime_status(self):
         csv_path = getattr(self, "csv_path", "") or ""
@@ -3094,8 +3130,13 @@ class App(ctk.CTk):
         m.add_command(label="Копировать", command=_copy)
         m.add_command(label="Выделить всё", command=_all)
         m.add_separator()
+        m.add_command(label="Очистить лог", command=self._clear_log)
         m.add_command(label="Сохранить лог…", command=self._save_log)
-        self.logbox.bind("<Button-3>", lambda e: (m.tk_popup(e.x_root, e.y_root), m.grab_release()))
+        self.log_context_menu = m
+        self.logbox.bind(
+            "<Button-3>",
+            lambda e: (m.tk_popup(e.x_root, e.y_root), m.grab_release()),
+        )
 
     def _start_bt(self):
         bt = BT(self.logger)

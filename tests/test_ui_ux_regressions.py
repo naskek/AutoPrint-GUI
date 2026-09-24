@@ -651,6 +651,53 @@ class MarkingPreviewUiTests(unittest.TestCase):
         app._preview_marking_sticker.assert_called_once_with(silent=True)
 
 
+class CollapsibleLogTests(unittest.TestCase):
+    def test_log_starts_collapsed_with_show_toggle_and_no_clear_header_button(self):
+        source = inspect.getsource(bartender_gui.App._build_ui)
+        log_block = source.split(
+            "self.log_section = ctk.CTkFrame", 1
+        )[1].split(
+            "self.status_bar_frame = ctk.CTkFrame", 1
+        )[0]
+
+        self.assertIn('text="Показать лог"', log_block)
+        self.assertIn("command=self._toggle_log_visibility", log_block)
+        self.assertIn("self._log_visible = False", log_block)
+        self.assertNotIn("self.log_frame.pack(", log_block)
+        self.assertNotIn('text="Очистить"', log_block)
+
+    def test_toggle_preserves_log_widgets_and_only_changes_visibility(self):
+        app = object.__new__(bartender_gui.App)
+        app.log_frame = Mock()
+        app.log_toggle_btn = Mock()
+        app.logbox = Mock()
+        app._log_visible = False
+
+        self.assertTrue(app._toggle_log_visibility())
+        self.assertTrue(app._log_visible)
+        app.log_frame.pack.assert_called_once_with(
+            fill="both", expand=True, padx=8, pady=(0, 8)
+        )
+        app.log_toggle_btn.configure.assert_called_with(text="Скрыть лог")
+        app.logbox.delete.assert_not_called()
+
+        app.log_frame.reset_mock()
+        app.log_toggle_btn.reset_mock()
+
+        self.assertTrue(app._toggle_log_visibility())
+        self.assertFalse(app._log_visible)
+        app.log_frame.pack_forget.assert_called_once_with()
+        app.log_toggle_btn.configure.assert_called_with(text="Показать лог")
+        app.logbox.delete.assert_not_called()
+
+    def test_log_context_menu_contains_explicit_clear_action(self):
+        source = inspect.getsource(bartender_gui.App._enable_log_copy)
+
+        self.assertIn('label="Очистить лог"', source)
+        self.assertIn("command=self._clear_log", source)
+        self.assertIn('label="Сохранить лог…"', source)
+
+
 class PrintControlsLayoutTests(unittest.TestCase):
     def test_print_section_owns_all_selection_controls_and_has_no_manual_preview_button(self):
         source = inspect.getsource(bartender_gui.App._build_ui)
