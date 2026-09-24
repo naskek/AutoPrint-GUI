@@ -6,6 +6,24 @@ import sys
 LIVE_FLAG = "AUTOPRINT_LIVE_BARTENDER"
 BT_DO_NOT_SAVE_CHANGES = 1
 
+MEDIA_ACTION_NAMES = {
+    0: "btMHDriverSettings",
+    1: "btMHPageBreak",
+    2: "btMHPause",
+    3: "btMHWaitForLabelTakenSensor",
+    4: "btMHCut",
+    5: "btMHCutAndPause",
+}
+
+MEDIA_OCCURRENCE_NAMES = {
+    0: "btMHAtEndOfPrintJob",
+    1: "btMHAfterEveryPage",
+    2: "btMHAfterEveryRecord",
+    3: "btMHAfterIdenticalCopies",
+    4: "btMHAfterDataChange",
+    5: "btMHAfterNumberOfLabels",
+}
+
 
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(
@@ -32,6 +50,55 @@ def _require_member(obj, name: str, owner: str):
     return value
 
 
+def _inspect_media_handling(fmt):
+    page_setup = _require_member(fmt, "PageSetup", "Format")
+    media_handling = _require_member(page_setup, "MediaHandling", "PageSetup")
+
+    try:
+        action = int(_require_member(media_handling, "Action", "MediaHandling"))
+        occurrence = int(
+            _require_member(media_handling, "Occurrence", "MediaHandling")
+        )
+    except Exception as exc:
+        raise RuntimeError(f"MediaHandling read-only probe failed: {exc}") from exc
+
+    action_name = MEDIA_ACTION_NAMES.get(action, "UNKNOWN")
+    occurrence_name = MEDIA_OCCURRENCE_NAMES.get(occurrence, "UNKNOWN")
+
+    number_of_labels = None
+    try:
+        number_of_labels = int(media_handling.NumberOfLabels)
+    except Exception:
+        pass
+
+    summary = (
+        f"Media handling: Action={action} ({action_name}), "
+        f"Occurrence={occurrence} ({occurrence_name})"
+    )
+    if number_of_labels is not None:
+        summary += f", NumberOfLabels={number_of_labels}"
+    print(summary)
+
+    if action == 0:
+        print(
+            "Media handling note: action is delegated to printer-driver settings; "
+            "this read-only COM probe cannot prove physical feed/backfeed behavior."
+        )
+    elif occurrence != 0:
+        print(
+            "Media handling note: configured action can occur before end-of-job; "
+            "physical behavior still requires printer/driver verification."
+        )
+
+    return {
+        "action": action,
+        "action_name": action_name,
+        "occurrence": occurrence,
+        "occurrence_name": occurrence_name,
+        "number_of_labels": number_of_labels,
+    }
+
+
 def _inspect_format(app, btw_path: str):
     path = os.path.abspath(btw_path)
     if not os.path.isfile(path):
@@ -49,6 +116,7 @@ def _inspect_format(app, btw_path: str):
         _require_member(fmt, "Close", "Format")
         _require_member(print_setup, "IdenticalCopiesOfLabel", "PrintSetup")
         _require_member(print_setup, "Printer", "PrintSetup")
+        _inspect_media_handling(fmt)
 
         try:
             copies = int(print_setup.IdenticalCopiesOfLabel)
