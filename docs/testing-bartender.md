@@ -87,7 +87,7 @@ This is a deliberate live-submit test. Unlike the non-printing BTW inspection, i
 - is already paused before the script starts;
 - contains no pre-existing jobs.
 
-The recommended queue uses the installed Printronix driver but an unroutable RFC 5737 host (`192.0.2.1:9100`). The queue remains paused for the entire smoke. This lets Windows/BarTender build a real spool job while preventing physical output.
+The recommended queue uses the installed Printronix driver but a dedicated local sink port named `AUTOPRINT_TEST_SINK`. No TCP/IP host is configured at all. The queue remains paused for the entire smoke. This lets Windows/BarTender build a real spool job while preventing physical output and avoids any dependency on network-port creation.
 
 The smoke rejects unsafe queues before submission, then requires:
 
@@ -99,6 +99,14 @@ one BarTender Format.Print call
 Any result other than exactly one job is a regression signal. Test jobs are deleted after the observation while the queue remains paused. Cleanup is enabled only after the queue has passed all safety checks; an accidentally supplied production queue is never cleaned or modified by this script.
 
 This test does **not** prove physical feed/backfeed behavior or high-speed printer throughput. It proves the BarTender/driver/Windows-spooler job boundary for the selected batch.
+
+Queue setup helper:
+
+```powershell
+.\tools\setup_bartender_spooler_test_queue.ps1
+```
+
+The helper creates/validates the dedicated local `AUTOPRINT_TEST` port and `AutoPrint_TEST_Printronix` queue, selects exactly one installed Printronix driver, pauses the queue through documented `Win32_Printer.Pause()`, and refuses to proceed when the queue already contains jobs.
 
 Required opt-in flag:
 
