@@ -1,3 +1,4 @@
+import datetime as dt
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -60,14 +61,28 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         )
 
     @patch("bartender_gui.resolve_sticker_template_path", return_value=r"C:\\labels\\sticker60x40.btw")
-    def test_sticker_passes_manual_part_num_to_named_data_source(self, _resolve_sticker):
+    def test_manual_part_num_reaches_sticker_named_data_source(self, _resolve_sticker):
         app = object.__new__(bartender_gui.App)
         app.cfg = {}
         app.logger = self.logger
         app._require_print_capabilities = Mock(return_value=True)
         app._get_sticker_printer = Mock(return_value="Sticker Printer")
         app._get_client_name = Mock(return_value="")
-        app.product_map = {}
+        app._get_prod_date = Mock(return_value=dt.date(2026, 9, 24))
+        app._get_exp_days = Mock(return_value=None)
+        app._mark_part_entry = Mock()
+        app._bool_var = Mock(return_value=False)
+        app.format_combo = Mock()
+        app.format_combo.get.return_value = "Auto"
+        app.part_entry = Mock()
+        app.part_entry.get.return_value = "42001"
+        app.product_map = {
+            "123": {
+                "TEMPLATE_ID": "16x16",
+                "SHELF": {},
+            }
+        }
+        app._template_part_mode = Mock(return_value="manual")
 
         bt = bartender_com.BT(self.logger)
         fmt = Mock()
@@ -77,16 +92,18 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         bt.app.Formats.Open.return_value = fmt
         app.bt = bt
 
-        app._print_sticker_placeholder(
+        printed = app._preprint_stickers_for_all_batches(
+            [(0, 1)],
+            [{"DM": "code", "GTIN": "123", "NAME": "Product"}],
+            0,
             1,
             1,
-            100,
-            100,
-            sample_row={"PART_NUM": "42001"},
-            km_count=100,
-            total_rolls=1,
+            record_jobs=False,
         )
 
+        self.assertTrue(printed)
+        app.part_entry.get.assert_called()
+        app._template_part_mode.assert_called()
         fmt.SetNamedSubStringValue.assert_called_once_with("PART_NUM", "42001")
         fmt.PrintOut.assert_called_once_with(False, False)
         fmt.Close.assert_called_once_with(1)
