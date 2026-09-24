@@ -863,6 +863,7 @@ class App(ctk.CTk):
         self.csv_path = ""
         self.csv_rows = []
         self.preview_ctkimg = None
+        self._preview_mode = "label"
         self._live_preview_after_id = None
         self._live_preview_busy = False
         self._live_preview_requested = False
@@ -1308,6 +1309,7 @@ class App(ctk.CTk):
         self.batch_entry = ctk.CTkEntry(batch_head, width=90)
         self.batch_entry.insert(0, "0")
         self.batch_entry.pack(side="left")
+        self.batch_entry.bind("<KeyRelease>", self._schedule_live_preview)
         self.sticker_reprint_btn = ctk.CTkButton(
             batch_head, text="Перепечатать стикер", width=145, command=self._open_sticker_reprint_dialog
         )
@@ -1373,7 +1375,6 @@ class App(ctk.CTk):
         self.limit_entry = ctk.CTkEntry(fields_row, width=70)
         self.limit_entry.pack(side="left", padx=(5, 12))
         ctk.CTkLabel(fields_row, text="Масштаб: по размеру").pack(side="left", padx=6)
-        ctk.CTkButton(fields_row, text="Вписать", width=75, command=self._fit_current_preview).pack(side="right")
         self.print_selection_summary_label = ctk.CTkLabel(
             preview_nav, text="—", anchor="w", text_color=("#65717c", "#aeb6bf")
         )
@@ -1381,6 +1382,7 @@ class App(ctk.CTk):
         self.index_entry.bind("<KeyRelease>", self._update_print_selection_summary)
         self.index_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
         self.limit_entry.bind("<KeyRelease>", self._update_print_selection_summary)
+        self.limit_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
         try:
             self._selection_entry_border_defaults = (
                 self.index_entry.cget("border_color"),
@@ -1391,7 +1393,17 @@ class App(ctk.CTk):
         self.preview_strip_frame = ctk.CTkFrame(preview_body, height=66)
         self.preview_strip_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
         self.preview_strip_frame.grid_propagate(False)
-        ctk.CTkLabel(self.preview_strip_frame, text="Текущая этикетка", anchor="w").pack(side="left", padx=12, pady=10)
+        self.preview_mode_label = ctk.CTkLabel(
+            self.preview_strip_frame, text="Текущая этикетка", anchor="w"
+        )
+        self.preview_mode_label.pack(side="left", padx=12, pady=10)
+        self.preview_mode_btn = ctk.CTkButton(
+            self.preview_strip_frame,
+            text="Показать маркировочный стикер",
+            width=190,
+            command=self._toggle_preview_mode,
+        )
+        self.preview_mode_btn.pack(side="right", padx=12, pady=10)
 
         self.right_column_frame = ctk.CTkFrame(self.main_layout_frame, fg_color="transparent")
         self.right_column_frame.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
@@ -1543,6 +1555,40 @@ class App(ctk.CTk):
         if path:
             self._show_preview_path(path)
 
+    def _update_preview_mode_ui(self):
+        mode = self.__dict__.get("_preview_mode", "label")
+        button_text = (
+            "Показать этикетку"
+            if mode == "sticker"
+            else "Показать маркировочный стикер"
+        )
+        strip_text = "Маркировочный стикер" if mode == "sticker" else "Текущая этикетка"
+        try:
+            self.preview_mode_btn.configure(text=button_text)
+        except Exception:
+            pass
+        try:
+            self.preview_mode_label.configure(text=strip_text)
+        except Exception:
+            pass
+
+    def _toggle_preview_mode(self):
+        state = self.__dict__
+        current = state.get("_preview_mode", "label")
+        if current == "label":
+            cfg = state.get("cfg") or {}
+            if not resolve_sticker_template_path(cfg):
+                mb.showerror(
+                    "Предпросмотр стикера",
+                    f"Шаблон не найден: {sticker_template_display_path(cfg)}.",
+                )
+                return
+            state["_preview_mode"] = "sticker"
+        else:
+            state["_preview_mode"] = "label"
+        self._update_preview_mode_ui()
+        self._schedule_live_preview(immediate=True)
+
     def _schedule_live_preview(self, event=None, immediate=False):
         """Debounce automatic preview generation while keeping BarTender COM on the Tk thread."""
         state = self.__dict__
@@ -1608,6 +1654,7 @@ class App(ctk.CTk):
             text="По строку:" if mode == PRINT_SELECTION_MODE_RANGE else "Количество:"
         )
         self._update_print_selection_summary()
+        self._schedule_live_preview()
 
     def _update_print_selection_summary(self, event=None):
         state = self.__dict__
@@ -3457,7 +3504,7 @@ class App(ctk.CTk):
 
     def _update_action_capabilities(self):
         available = self._bartender_available() and self.catalog_state == "ready"
-        for name in ("preview_btn", "print_btn", "sticker_reprint_btn"):
+        for name in ("preview_btn", "preview_mode_btn", "print_btn", "sticker_reprint_btn"):
             try:
                 button = getattr(self, name, None)
                 if button:
@@ -6666,21 +6713,19 @@ class App(ctk.CTk):
         ctk.CTkButton(btns, text="Печать всех", command=_print_all, width=110).pack(side="left", padx=6)
         ctk.CTkButton(btns, text="Закрыть", command=win.destroy, width=90, fg_color="#444").pack(side="left", padx=6)
 
-    def _print_sticker_placeholder(self, bidx, start, end, total, sample_row=None, km_count=None, total_rolls=None):
-        """Печать стикера через BarTender, если есть шаблон sticker60x40.btw (или cfg['sticker_btw'])."""
-        if not self._require_print_capabilities("Печать стикера"):
-            return
-        prn = self._get_sticker_printer()
-        if not prn:
-            self.logger.err("Стикер: принтер не найден.")
-            return
-        sticker_path = resolve_sticker_template_path(self.cfg)
-        if not sticker_path:
-            self.logger.err(
-                f"Стикер: шаблон не найден: {sticker_template_display_path(self.cfg)}."
-            )
-            return
-        # Собираем полезные поля для подстановки
+    def _build_sticker_payload(
+        self,
+        bidx,
+        start,
+        end,
+        total,
+        sample_row=None,
+        km_count=None,
+        total_rolls=None,
+        client_name=None,
+        log_details=False,
+    ):
+        """Build the exact Named Data Source payload shared by sticker print and preview."""
         payload = {
             "PKG": str(bidx),
             "PACKAGE": str(bidx),
@@ -6697,79 +6742,275 @@ class App(ctk.CTk):
             payload["ROLL"] = str(bidx)
             payload["ROLL_TOTAL"] = str(total_rolls)
             payload["ROLL_OF"] = f"{bidx} из {total_rolls}"
-        try:
-            if sample_row:
-                gtin = sample_row.get("GTIN", "")
-                payload.update({
-                    "GTIN": gtin,
-                    "ShortNAME": sample_row.get("ShortName", ""),
-                    "ShortName": sample_row.get("ShortName", ""),
-                    "DM": sample_row.get("DM", ""),
-                    "NAME": sample_row.get("NAME", ""),
-                    "PROD_DATE": sample_row.get("PROD_DATE", ""),
-                    "EXP_DATE": sample_row.get("EXP_DATE", ""),
-                    "PART_NUM": sample_row.get("PART_NUM", ""),
-                    "BRAND": sample_row.get("BRAND", ""),
-                    "Бренд": sample_row.get("BRAND", ""),
-                    "CLIENT": sample_row.get("CLIENT", ""),
-                    "Клиент": sample_row.get("CLIENT", ""),
-                    "PACKAGING": sample_row.get("PACKAGING", ""),
-                    "Упаковка": sample_row.get("PACKAGING", ""),
-                    "WEIGHT": sample_row.get("WEIGHT", ""),
-                    "Вес": sample_row.get("WEIGHT", ""),
-                })
+
+        info = {}
+        if sample_row:
+            gtin = sample_row.get("GTIN", "")
+            payload.update({
+                "GTIN": gtin,
+                "ShortNAME": sample_row.get("ShortName", ""),
+                "ShortName": sample_row.get("ShortName", ""),
+                "DM": sample_row.get("DM", ""),
+                "NAME": sample_row.get("NAME", ""),
+                "PROD_DATE": sample_row.get("PROD_DATE", ""),
+                "EXP_DATE": sample_row.get("EXP_DATE", ""),
+                "PART_NUM": sample_row.get("PART_NUM", ""),
+                "BRAND": sample_row.get("BRAND", ""),
+                "Бренд": sample_row.get("BRAND", ""),
+                "CLIENT": sample_row.get("CLIENT", ""),
+                "Клиент": sample_row.get("CLIENT", ""),
+                "PACKAGING": sample_row.get("PACKAGING", ""),
+                "Упаковка": sample_row.get("PACKAGING", ""),
+                "WEIGHT": sample_row.get("WEIGHT", ""),
+                "Вес": sample_row.get("WEIGHT", ""),
+            })
+            try:
+                from utils import only_digits as _od
+                product_map = self.__dict__.get("product_map") or {}
+                info = product_map.get(_od(gtin), {})
+            except Exception:
+                info = {}
+            payload.update({
+                "Бренд": info.get("BRAND", "") or info.get("Бренд", "") or payload.get("BRAND", ""),
+                "Бренд_": info.get("BRAND", "") or payload.get("BRAND", ""),
+                "BRAND": info.get("BRAND", "") or payload.get("BRAND", ""),
+                "Клиент": info.get("CLIENT", "") or info.get("Клиент", "") or payload.get("CLIENT", ""),
+                "CLIENT": info.get("CLIENT", "") or payload.get("CLIENT", ""),
+                "Упаковка": info.get("PACKAGING", "") or info.get("PACK", "") or payload.get("PACKAGING", ""),
+                "PACKAGING": info.get("PACKAGING", "") or payload.get("PACKAGING", ""),
+                "Вес": info.get("WEIGHT", "") or payload.get("WEIGHT", ""),
+                "WEIGHT": info.get("WEIGHT", "") or payload.get("WEIGHT", ""),
+            })
+            if log_details:
                 try:
-                    from utils import only_digits as _od
-                    info = self.product_map.get(_od(gtin), {}) if getattr(self, "product_map", None) else {}
-                except Exception:
-                    info = {}
-                payload.update({
-                    "Бренд": info.get("BRAND", "") or info.get("Бренд", "") or payload.get("BRAND", ""),
-                    "Бренд_": info.get("BRAND", "") or payload.get("BRAND", ""),
-                    "BRAND": info.get("BRAND", "") or payload.get("BRAND", ""),
-                    "Клиент": info.get("CLIENT", "") or info.get("Клиент", "") or payload.get("CLIENT", ""),
-                    "CLIENT": info.get("CLIENT", "") or payload.get("CLIENT", ""),
-                    "Упаковка": info.get("PACKAGING", "") or info.get("PACK", "") or payload.get("PACKAGING", ""),
-                    "PACKAGING": info.get("PACKAGING", "") or payload.get("PACKAGING", ""),
-                    "Вес": info.get("WEIGHT", "") or payload.get("WEIGHT", ""),
-                    "WEIGHT": info.get("WEIGHT", "") or payload.get("WEIGHT", ""),
-                })
-                try:
-                    if getattr(self, "logger", None):
-                        self.logger.log(
-                            "[СТИКЕР] weight debug: "
-                            f"sample_row='{sample_row.get('WEIGHT','')}', "
-                            f"map='{info.get('WEIGHT','')}', "
-                            f"path='{self.cfg.get('product_map_path','')}'"
-                        )
+                    self.logger.log(
+                        "[СТИКЕР] weight debug: "
+                        f"sample_row='{sample_row.get('WEIGHT','')}', "
+                        f"map='{info.get('WEIGHT','')}', "
+                        f"path='{(self.__dict__.get('cfg') or {}).get('product_map_path','')}'"
+                    )
                 except Exception:
                     pass
-            # клиент задаётся вручную: перекрываем payload
+
+        if client_name is None:
             client_name = self._get_client_name()
-            if client_name:
-                payload["CLIENT"] = client_name
-                payload["Клиент"] = client_name
-                try:
-                    self.cfg["sticker_client"] = client_name
-                    save_config(self.cfg)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        client_name = str(client_name or "").strip()
+        if client_name:
+            payload["CLIENT"] = client_name
+            payload["Клиент"] = client_name
+
         if km_count is not None:
             payload["КоличествоКМ"] = str(km_count)
             payload["KM_COUNT"] = str(km_count)
-        # Диагностика заполнения полей стикера
+
+        if log_details:
+            try:
+                self.logger.log(
+                    f"[СТИКЕР] GTIN={payload.get('GTIN','')} "
+                    f"BRAND='{payload.get('BRAND','')}' "
+                    f"CLIENT='{payload.get('CLIENT','')}' "
+                    f"PACKAGING='{payload.get('PACKAGING','')}' "
+                    f"WEIGHT='{payload.get('WEIGHT','')}'"
+                )
+            except Exception:
+                pass
+        return payload
+
+    def _resolve_sticker_preview_context(self, silent=False):
+        rows = self.__dict__.get("csv_rows") or []
+        if not rows:
+            return None
         try:
-            self.logger.log(
-                f"[СТИКЕР] GTIN={payload.get('GTIN','')} "
-                f"BRAND='{payload.get('BRAND','')}' "
-                f"CLIENT='{payload.get('CLIENT','')}' "
-                f"PACKAGING='{payload.get('PACKAGING','')}' "
-                f"WEIGHT='{payload.get('WEIGHT','')}'"
+            start_row, _end_row, limit = resolve_print_selection(
+                self.print_selection_mode_var.get(),
+                self.index_entry.get(),
+                self.limit_entry.get(),
+                total_rows=len(rows),
             )
+        except (TypeError, ValueError) as exc:
+            if not silent:
+                mb.showerror("Предпросмотр стикера", str(exc))
+            return None
+
+        idx0 = start_row - 1
+        selected = rows[idx0:idx0 + limit]
+        total = len(selected)
+        if total <= 0:
+            return None
+
+        try:
+            raw_batch = (self.batch_entry.get() or "").strip()
         except Exception:
-            pass
+            raw_batch = ""
+        if not raw_batch or raw_batch == "0":
+            batch_size = total
+        else:
+            try:
+                parsed_batch = int(raw_batch)
+            except (TypeError, ValueError):
+                if not silent:
+                    mb.showerror(
+                        "Предпросмотр стикера",
+                        f"Пакет должен быть целым числом, получено: '{raw_batch}'.",
+                    )
+                return None
+            batch_size = parsed_batch if parsed_batch > 0 else total
+
+        first_batch = selected[:batch_size]
+        if not first_batch:
+            return None
+        sample_row = self._enrich(
+            first_batch[0],
+            start_row,
+            allow_empty_part=True,
+            silent_validation=silent,
+        )
+        if not sample_row:
+            return None
+
+        total_rolls = (total + batch_size - 1) // batch_size
+        return {
+            "bidx": 1,
+            "start": start_row,
+            "end": start_row + len(first_batch) - 1,
+            "total": total,
+            "sample_row": sample_row,
+            "km_count": len(first_batch),
+            "total_rolls": total_rolls,
+        }
+
+    def _preview_marking_sticker(self, silent=False):
+        if silent:
+            if self.__dict__.get("catalog_state") != "ready" or not self._bartender_available():
+                return False
+        elif not self._require_print_capabilities("Предпросмотр маркировочного стикера"):
+            return False
+
+        if not self.__dict__.get("csv_path"):
+            if not silent:
+                mb.showerror("CSV", "Выбери CSV")
+            return False
+        if not self.__dict__.get("csv_rows"):
+            try:
+                self.csv_rows = load_kontur_raw(self.csv_path)
+            except Exception as exc:
+                self.logger.err(f"CSV ошибка: {exc}")
+                return False
+        if not self.csv_rows:
+            if not silent:
+                mb.showerror("CSV", "Нет данных")
+            return False
+
+        cfg = self.__dict__.get("cfg") or {}
+        sticker_path = resolve_sticker_template_path(cfg)
+        if not sticker_path:
+            if not silent:
+                mb.showerror(
+                    "Предпросмотр стикера",
+                    f"Шаблон не найден: {sticker_template_display_path(cfg)}.",
+                )
+            return False
+
+        context = self._resolve_sticker_preview_context(silent=silent)
+        if not context:
+            return False
+        payload = self._build_sticker_payload(
+            context["bidx"],
+            context["start"],
+            context["end"],
+            context["total"],
+            sample_row=context["sample_row"],
+            km_count=context["km_count"],
+            total_rolls=context["total_rolls"],
+            client_name=self._get_client_name(),
+        )
+
+        fmt = None
+        preview_dir = None
+        try:
+            preview_dir = tempfile.mkdtemp(prefix="autoprint-sticker-preview-")
+            out_template = os.path.join(preview_dir, "preview_%PageNumber%.png")
+            fmt = self.bt.open_format(sticker_path)
+            self.bt.set_common_print_flags(fmt)
+            fmt.PrintSetup.IdenticalCopiesOfLabel = 1
+            if not self.bt.apply_fields(fmt, payload):
+                self.logger.err(
+                    "Стикер preview: не удалось подставить значения "
+                    "(проверь имена полей в BTW)."
+                )
+            if not self.bt.export_preview(fmt, out_template):
+                self.logger.err("Не удалось сформировать preview маркировочного стикера.")
+                return False
+
+            generated = sorted(
+                os.path.join(preview_dir, name)
+                for name in os.listdir(preview_dir)
+                if name.lower().endswith(".png")
+            )
+            if not generated:
+                self.logger.err(
+                    "BarTender сообщил успех, но файл preview стикера не найден."
+                )
+                return False
+            if not self._show_preview_path(generated[0], preserve_on_error=silent):
+                return False
+
+            old_dir = self.__dict__.get("_preview_temp_dir")
+            self._preview_temp_dir = preview_dir
+            preview_dir = None
+            if old_dir and old_dir != self._preview_temp_dir:
+                self._cleanup_preview_temp_dir(old_dir)
+            self.logger.log(
+                "Предпросмотр маркировочного стикера обновлён "
+                f"(пакет {context['bidx']}, строки {context['start']}-{context['end']})."
+            )
+            return True
+        except Exception as exc:
+            self.logger.err(
+                f"Предпросмотр маркировочного стикера: {exc}\n{traceback.format_exc()}"
+            )
+            return False
+        finally:
+            if fmt is not None:
+                try:
+                    fmt.Close(1)
+                except Exception:
+                    pass
+            if preview_dir:
+                self._cleanup_preview_temp_dir(preview_dir)
+
+    def _print_sticker_placeholder(self, bidx, start, end, total, sample_row=None, km_count=None, total_rolls=None):
+        """Печать стикера через BarTender, если есть шаблон sticker60x40.btw (или cfg['sticker_btw'])."""
+        if not self._require_print_capabilities("Печать стикера"):
+            return
+        prn = self._get_sticker_printer()
+        if not prn:
+            self.logger.err("Стикер: принтер не найден.")
+            return
+        sticker_path = resolve_sticker_template_path(self.cfg)
+        if not sticker_path:
+            self.logger.err(
+                f"Стикер: шаблон не найден: {sticker_template_display_path(self.cfg)}."
+            )
+            return
+        client_name = self._get_client_name()
+        payload = self._build_sticker_payload(
+            bidx,
+            start,
+            end,
+            total,
+            sample_row=sample_row,
+            km_count=km_count,
+            total_rolls=total_rolls,
+            client_name=client_name,
+            log_details=True,
+        )
+        if client_name:
+            try:
+                self.cfg["sticker_client"] = client_name
+                save_config(self.cfg)
+            except Exception:
+                pass
         try:
             fmt = self.bt.open_format(sticker_path)
             self.bt.set_common_print_flags(fmt)
@@ -7732,6 +7973,9 @@ class App(ctk.CTk):
     # ---------- actions ----------
     
     def _preview(self, silent=False):
+        if self.__dict__.get("_preview_mode", "label") == "sticker":
+            return self._preview_marking_sticker(silent=silent)
+
         if silent:
             if getattr(self, "catalog_state", None) != "ready" or not self._bartender_available():
                 return False

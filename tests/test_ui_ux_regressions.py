@@ -579,6 +579,51 @@ class LivePreviewTests(unittest.TestCase):
         showerror.assert_not_called()
 
 
+class MarkingPreviewUiTests(unittest.TestCase):
+    def test_preview_controls_use_marking_toggle_instead_of_fit_button(self):
+        source = inspect.getsource(bartender_gui.App._build_ui)
+
+        self.assertIn('text="Показать маркировочный стикер"', source)
+        self.assertIn("command=self._toggle_preview_mode", source)
+        self.assertNotIn('text="Вписать"', source)
+
+    @patch("bartender_gui.resolve_sticker_template_path", return_value=r"C:\\labels\\sticker60x40.btw")
+    def test_toggle_switches_preview_mode_and_schedules_immediate_refresh(self, _resolve_sticker):
+        app = object.__new__(bartender_gui.App)
+        app.cfg = {}
+        app._preview_mode = "label"
+        app.preview_mode_btn = Mock()
+        app.preview_mode_label = Mock()
+        app._schedule_live_preview = Mock()
+
+        app._toggle_preview_mode()
+
+        self.assertEqual(app._preview_mode, "sticker")
+        app.preview_mode_btn.configure.assert_called_with(text="Показать этикетку")
+        app.preview_mode_label.configure.assert_called_with(text="Маркировочный стикер")
+        app._schedule_live_preview.assert_called_once_with(immediate=True)
+
+        app._schedule_live_preview.reset_mock()
+        app._toggle_preview_mode()
+
+        self.assertEqual(app._preview_mode, "label")
+        app.preview_mode_btn.configure.assert_called_with(
+            text="Показать маркировочный стикер"
+        )
+        app.preview_mode_label.configure.assert_called_with(text="Текущая этикетка")
+        app._schedule_live_preview.assert_called_once_with(immediate=True)
+
+    def test_preview_dispatches_to_marking_renderer_while_sticker_mode_is_active(self):
+        app = object.__new__(bartender_gui.App)
+        app._preview_mode = "sticker"
+        app._preview_marking_sticker = Mock(return_value=True)
+
+        result = app._preview(silent=True)
+
+        self.assertTrue(result)
+        app._preview_marking_sticker.assert_called_once_with(silent=True)
+
+
 class PrintSelectionTests(unittest.TestCase):
     @staticmethod
     def _make_csv_load_app(mode=bartender_gui.PRINT_SELECTION_MODE_RANGE):
