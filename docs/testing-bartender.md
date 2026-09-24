@@ -76,7 +76,39 @@ Official references:
 
 Any test that actually invokes `Format.Print` or `PrintOut` remains a separate deliberate live-print/queue check and must never be hidden inside this smoke harness.
 
-### 4. Physical print verification
+### 4. Paused dummy-queue spooler smoke
+
+Entry point: `tools/bartender_spooler_smoke.py`.
+
+This is a deliberate live-submit test. Unlike the non-printing BTW inspection, it calls the documented four-argument `Format.Print(..., WaitForJobToComplete=False, ...)` once. It must target only a dedicated Windows printer queue that:
+
+- contains `TEST` in its queue name;
+- uses a port whose name contains `AUTOPRINT_TEST`;
+- is already paused before the script starts;
+- contains no pre-existing jobs.
+
+The recommended queue uses the installed Printronix driver but an unroutable RFC 5737 host (`192.0.2.1:9100`). The queue remains paused for the entire smoke. This lets Windows/BarTender build a real spool job while preventing physical output.
+
+The smoke rejects unsafe queues before submission, then requires:
+
+```text
+one BarTender Format.Print call
+    -> exactly one Windows spool job
+```
+
+Any result other than exactly one job is a regression signal. Test jobs are deleted after the observation while the queue remains paused. Cleanup is enabled only after the queue has passed all safety checks; an accidentally supplied production queue is never cleaned or modified by this script.
+
+This test does **not** prove physical feed/backfeed behavior or high-speed printer throughput. It proves the BarTender/driver/Windows-spooler job boundary for the selected batch.
+
+Required opt-in flag:
+
+```text
+AUTOPRINT_LIVE_BARTENDER_SPOOLER=1
+```
+
+### 5. Physical print verification
+
+
 
 Physical output is a separate release/manual gate. A green CI run, a successful COM call, a Windows queue entry, or `BtPrintResult.btSuccess` must never be reported as proof that labels physically printed correctly.
 
