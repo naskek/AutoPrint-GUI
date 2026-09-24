@@ -78,6 +78,42 @@ class BarTenderSpoolerSmokeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "not empty"):
                 bartender_spooler_smoke._assert_safe_test_queue(snapshot)
 
+    @patch("tools.bartender_spooler_smoke._delete_test_jobs")
+    @patch(
+        "tools.bartender_spooler_smoke._assert_safe_test_queue",
+        side_effect=RuntimeError("Unsafe queue name"),
+    )
+    @patch("tools.bartender_spooler_smoke._require_live_gate")
+    @patch("tools.bartender_spooler_smoke._printer_snapshot")
+    def test_unsafe_queue_failure_never_deletes_jobs(
+        self,
+        snapshot,
+        live_gate,
+        safe_queue,
+        delete_jobs,
+    ):
+        production = {
+            "name": "Printronix Production",
+            "port": "192.168.1.50",
+            "driver": "Printronix Driver",
+            "status": 0,
+            "jobs": [{"JobId": 77}],
+        }
+        snapshot.return_value = production
+
+        result = bartender_spooler_smoke.main(
+            [
+                "--btw",
+                "test.btw",
+                "--printer",
+                "Printronix Production",
+            ]
+        )
+
+        self.assertEqual(result, 1)
+        snapshot.assert_called_once_with("Printronix Production")
+        delete_jobs.assert_not_called()
+
     @patch("tools.bartender_spooler_smoke.time.sleep", return_value=None)
     @patch("tools.bartender_spooler_smoke._delete_test_jobs")
     @patch("tools.bartender_spooler_smoke._submit_one_batch", return_value=0)
