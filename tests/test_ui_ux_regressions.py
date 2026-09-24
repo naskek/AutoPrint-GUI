@@ -89,6 +89,65 @@ class StickerTemplateTests(unittest.TestCase):
             save_config.assert_called_once_with(app.cfg)
 
 
+class LabelTemplateStorageTests(unittest.TestCase):
+    def test_default_template_prefers_user_copy_over_bundled_and_legacy(self):
+        with tempfile.TemporaryDirectory() as root:
+            user_dir = os.path.join(root, "user")
+            bundled_dir = os.path.join(root, "bundled")
+            legacy_dir = os.path.join(root, "install")
+            os.makedirs(user_dir)
+            os.makedirs(bundled_dir)
+            os.makedirs(os.path.join(legacy_dir, "templates"))
+
+            name = "16x16.btw"
+            user_path = os.path.join(user_dir, name)
+            bundled_path = os.path.join(bundled_dir, name)
+            legacy_path = os.path.join(legacy_dir, "templates", name)
+            for path, content in (
+                (user_path, "user"),
+                (bundled_path, "bundled"),
+                (legacy_path, "legacy"),
+            ):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+
+            with patch.object(bartender_gui, "TEMPLATES_DIR", user_dir), patch.object(
+                bartender_gui, "BUNDLED_TEMPLATES_DIR", bundled_dir
+            ), patch.object(bartender_gui, "BASE_DIR", legacy_dir):
+                self.assertEqual(bartender_gui.default_template_path(name), user_path)
+                os.remove(user_path)
+                self.assertEqual(
+                    bartender_gui.default_template_path(name),
+                    bundled_path,
+                )
+                os.remove(bundled_path)
+                self.assertEqual(
+                    bartender_gui.default_template_path(name),
+                    legacy_path,
+                )
+
+    def test_template_import_copies_into_managed_user_directory(self):
+        app = object.__new__(bartender_gui.App)
+        app.label_templates = {}
+
+        with tempfile.TemporaryDirectory() as root:
+            user_dir = os.path.join(root, "user-templates")
+            source = os.path.join(root, "custom-40x40.btw")
+            with open(source, "w", encoding="utf-8") as fh:
+                fh.write("fixture")
+
+            with patch.object(bartender_gui, "TEMPLATES_DIR", user_dir):
+                target, file_name = app._copy_template_into_workspace(
+                    source,
+                    "40x40",
+                )
+
+            self.assertEqual(file_name, "custom-40x40.btw")
+            self.assertEqual(target, os.path.join(user_dir, file_name))
+            with open(target, "r", encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "fixture")
+
+
 class VersionMenuTests(unittest.TestCase):
     def test_runtime_icon_path_uses_pyinstaller_bundle_root(self):
         with patch.object(
