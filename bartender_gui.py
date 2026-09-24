@@ -89,7 +89,6 @@ MAIN_LAYOUT_SECTION_NAMES = (
     "print_section",
     "preview_section",
     "source_section",
-    "csv_status_section",
     "log_section",
     "status_bar_frame",
 )
@@ -99,16 +98,7 @@ MAIN_LAYOUT_BLOCK_ORDER = (
     ("left", "print_section"),
     ("center", "preview_section"),
     ("right", "source_section"),
-    ("right", "csv_status_section"),
 )
-MAIN_LAYOUT_SECTION_NUMBERS = {
-    "csv_files_section": "1",
-    "params_section": "2",
-    "print_section": "3",
-    "preview_section": "4",
-    "source_section": "5",
-    "csv_status_section": "6",
-}
 PRINT_BATCH_CONTAINER_SCROLLABLE = False
 CSV_FILE_LIST_SCROLL_POLICY = "vertical-auto"
 PATH_RESIZE_DEBOUNCE_MS = 80
@@ -1186,7 +1176,6 @@ class App(ctk.CTk):
 
         self.csv_files_section = self._make_main_section(
             self.left_column_frame,
-            MAIN_LAYOUT_SECTION_NUMBERS["csv_files_section"],
             "CSV-файлы",
         )
         self.csv_files_section.grid(row=0, column=0, sticky="nsew", pady=(0, 7))
@@ -1235,7 +1224,6 @@ class App(ctk.CTk):
 
         self.params_section = self._make_main_section(
             self.left_column_frame,
-            MAIN_LAYOUT_SECTION_NUMBERS["params_section"],
             "Параметры партии",
         )
         self.params_section.grid(row=1, column=0, sticky="ew", pady=7)
@@ -1298,7 +1286,6 @@ class App(ctk.CTk):
 
         self.print_section = self._make_main_section(
             self.left_column_frame,
-            MAIN_LAYOUT_SECTION_NUMBERS["print_section"],
             "Печать",
         )
         self.print_section.grid(row=2, column=0, sticky="nsew", pady=(7, 0))
@@ -1389,7 +1376,6 @@ class App(ctk.CTk):
 
         self.preview_section = self._make_main_section(
             self.main_layout_frame,
-            MAIN_LAYOUT_SECTION_NUMBERS["preview_section"],
             "Предпросмотр этикетки",
         )
         self.preview_section.grid(row=0, column=1, sticky="nsew", padx=6)
@@ -1419,17 +1405,39 @@ class App(ctk.CTk):
         )
         self.preview_mode_btn.pack(side="right", padx=12, pady=10)
 
+        self.csv_status_strip_frame = ctk.CTkFrame(preview_body, height=36)
+        self.csv_status_strip_frame.grid(
+            row=2, column=0, sticky="ew", padx=10, pady=(0, 10)
+        )
+        self.csv_status_strip_frame.grid_propagate(False)
+        self.csv_summary_label = ctk.CTkLabel(
+            self.csv_status_strip_frame, text="CSV: —", anchor="w"
+        )
+        self.csv_summary_label.pack(side="left", padx=(10, 4), pady=7)
+        self.csv_available_label = ctk.CTkLabel(
+            self.csv_status_strip_frame, text="к печати: 0", anchor="w"
+        )
+        self.csv_available_label.pack(side="left", padx=4, pady=7)
+        self.csv_skipped_label = ctk.CTkLabel(
+            self.csv_status_strip_frame, text="ошибок: —", anchor="w"
+        )
+        self.csv_skipped_label.pack(side="left", padx=4, pady=7)
+        self.brand_value_label = ctk.CTkLabel(
+            self.csv_status_strip_frame, text="бренд: —", anchor="w"
+        )
+        self.brand_value_label.pack(
+            side="left", fill="x", expand=True, padx=(4, 8), pady=7
+        )
+
         self.right_column_frame = ctk.CTkFrame(self.main_layout_frame, fg_color="transparent")
         self.right_column_frame.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
         self.right_column_frame.grid_columnconfigure(0, weight=1)
-        self.right_column_frame.grid_rowconfigure(1, weight=1)
 
         self.source_section = self._make_main_section(
             self.right_column_frame,
-            MAIN_LAYOUT_SECTION_NUMBERS["source_section"],
-            "Источник / шаблон / принтер",
+            "Шаблон / принтер",
         )
-        self.source_section.grid(row=0, column=0, sticky="ew", pady=(0, 7))
+        self.source_section.grid(row=0, column=0, sticky="ew")
         source_body = self.source_section.body
         source_body.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(source_body, text="Выбранный CSV:", anchor="w").grid(
@@ -1437,20 +1445,8 @@ class App(ctk.CTk):
         )
         self.csv_label = ctk.CTkLabel(source_body, text="Файл не выбран", anchor="w")
         self.csv_label.grid(row=0, column=1, sticky="ew", padx=10, pady=5)
-        ctk.CTkLabel(source_body, text="Папка:", anchor="w").grid(
-            row=1, column=0, sticky="w", padx=10, pady=5
-        )
-        self.source_dir_value_label = ctk.CTkLabel(
-            source_body, text=self._shorten_path(self.csv_dir), anchor="w", width=1
-        )
-        self.source_dir_value_label.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
-        self.source_dir_tooltip = SimpleTooltip(self.source_dir_value_label, self.csv_dir)
-        source_body.bind("<Configure>", self._schedule_path_label_refresh, add="+")
-        ctk.CTkButton(
-            source_body, text="Выбрать файл", width=110, command=self._choose_csv
-        ).grid(row=2, column=1, sticky="w", padx=10, pady=(2, 7))
         ctk.CTkLabel(source_body, text="Шаблон:", anchor="w").grid(
-            row=3, column=0, sticky="w", padx=10, pady=5
+            row=1, column=0, sticky="w", padx=10, pady=5
         )
         self.format_combo = ctk.CTkComboBox(
             source_body,
@@ -1458,10 +1454,10 @@ class App(ctk.CTk):
             state="readonly",
         )
         self.format_combo.set("Auto")
-        self.format_combo.grid(row=3, column=1, sticky="ew", padx=10, pady=5)
+        self.format_combo.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
         self.format_combo.configure(command=self._on_format_change)
         ctk.CTkLabel(source_body, text="Принтер:", anchor="w").grid(
-            row=4, column=0, sticky="w", padx=10, pady=(5, 10)
+            row=2, column=0, sticky="w", padx=10, pady=(5, 10)
         )
         self.prn_combo = ctk.CTkComboBox(
             source_body,
@@ -1469,39 +1465,9 @@ class App(ctk.CTk):
             state="readonly",
             command=lambda _value: self._refresh_runtime_status(),
         )
-        self.prn_combo.grid(row=4, column=1, sticky="ew", padx=10, pady=(5, 10))
+        self.prn_combo.grid(row=2, column=1, sticky="ew", padx=10, pady=(5, 10))
         self.btw16_entry = ctk.CTkEntry(source_body)
         self.btw30_entry = ctk.CTkEntry(source_body)
-
-        self.csv_status_section = self._make_main_section(
-            self.right_column_frame,
-            MAIN_LAYOUT_SECTION_NUMBERS["csv_status_section"],
-            "Проверка данных CSV",
-        )
-        self.csv_status_section.grid(row=1, column=0, sticky="nsew", pady=(7, 0))
-        csv_body = self.csv_status_section.body
-        summary = ctk.CTkFrame(csv_body, fg_color="transparent")
-        summary.pack(fill="x", padx=10, pady=(6, 2))
-        self.csv_summary_label = ctk.CTkLabel(summary, text="CSV не выбран", anchor="w", font=("Arial", 13, "bold"))
-        self.csv_summary_label.pack(fill="x")
-        self.csv_rows_count_label = ctk.CTkLabel(summary, text="Найдено строк: 0", anchor="w")
-        self.csv_rows_count_label.pack(fill="x", pady=(4, 0))
-        self.csv_available_label = ctk.CTkLabel(summary, text="Доступно к печати: 0", anchor="w")
-        self.csv_available_label.pack(fill="x")
-        self.csv_skipped_label = ctk.CTkLabel(summary, text="Пропущено / ошибки: —", anchor="w")
-        self.csv_skipped_label.pack(fill="x")
-        brand_row = ctk.CTkFrame(csv_body, fg_color="transparent")
-        brand_row.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(brand_row, text="Бренд по GTIN:", font=("Arial", 12, "bold")).pack(side="left")
-        self.brand_value_label = ctk.CTkLabel(brand_row, text="-", anchor="w", font=("Arial", 12, "bold"))
-        self.brand_value_label.pack(side="left", fill="x", expand=True, padx=(6, 0))
-        ctk.CTkLabel(
-            csv_body,
-            text="Подробности загрузки и ошибок отображаются в логе.",
-            anchor="w",
-            justify="left",
-            wraplength=300,
-        ).pack(fill="x", padx=10, pady=(4, 10))
 
         self.log_section = ctk.CTkFrame(self, corner_radius=10)
         self.log_section.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
@@ -1550,15 +1516,13 @@ class App(ctk.CTk):
             pass
         self._refresh_runtime_status()
 
-    def _make_main_section(self, parent, number, title):
+    def _make_main_section(self, parent, title):
         section = ctk.CTkFrame(parent, corner_radius=10)
         header = ctk.CTkFrame(section, fg_color="transparent")
-        header.pack(fill="x", padx=10, pady=(8, 3))
+        header.pack(fill="x", padx=10, pady=(7, 3))
         ctk.CTkLabel(
-            header, text=number, width=26, height=26, corner_radius=13,
-            fg_color="#2f80ed", text_color="#ffffff", font=("Arial", 12, "bold")
+            header, text=title, font=("Arial", 14, "bold")
         ).pack(side="left")
-        ctk.CTkLabel(header, text=title, font=("Arial", 14, "bold")).pack(side="left", padx=8)
         body = ctk.CTkFrame(section, fg_color="transparent")
         body.pack(fill="both", expand=True)
         section.body = body
@@ -1775,9 +1739,11 @@ class App(ctk.CTk):
             self.status_rows_label.configure(text=f"Строк: {rows}")
             self.status_template_label.configure(text=f"Шаблон: {template}")
             self.status_printer_label.configure(text=f"Принтер: {printer}")
-            self.csv_summary_label.configure(text="CSV загружен" if csv_path else "CSV не выбран")
-            self.csv_rows_count_label.configure(text=f"Найдено строк: {rows}")
-            self.csv_available_label.configure(text=f"Доступно к печати: {rows}")
+            self.csv_summary_label.configure(
+                text=f"CSV: строк — {rows}" if csv_path else "CSV: —"
+            )
+            self.csv_available_label.configure(text=f"к печати: {rows}")
+            self.csv_skipped_label.configure(text="ошибок: —")
             self._schedule_path_label_refresh()
         except Exception:
             pass
@@ -6224,7 +6190,7 @@ class App(ctk.CTk):
             val = "-"
         try:
             if hasattr(self, "brand_value_label"):
-                self.brand_value_label.configure(text=val)
+                self.brand_value_label.configure(text=f"бренд: {val}")
         except Exception:
             pass
 
@@ -6459,7 +6425,7 @@ class App(ctk.CTk):
         except Exception:
             pass
         try:
-            self.csv_label.configure(text=f"CSV: {_os.path.basename(self.csv_path)}")
+            self.csv_label.configure(text=_os.path.basename(self.csv_path))
         except Exception:
             pass
         try:
