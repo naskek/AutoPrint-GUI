@@ -72,6 +72,7 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         app._get_exp_days = Mock(return_value=None)
         app._mark_part_entry = Mock()
         app._bool_var = Mock(return_value=False)
+        app.skip_sticker_var = False
         app.format_combo = Mock()
         app.format_combo.get.return_value = "Auto"
         app.part_entry = Mock()
