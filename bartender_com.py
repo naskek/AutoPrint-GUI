@@ -1,9 +1,17 @@
 # -*- coding: utf-8 -*-
 
+import os
+
 try:
     from win32com.client import Dispatch
 except ImportError:
     Dispatch = None
+
+
+BT_DO_NOT_SAVE_CHANGES = 1
+BT_COLORS_24BIT = 4
+BT_PRINT_SUCCESS = 0
+PREVIEW_BACKGROUND_WHITE = 0xFFFFFF
 
 
 class BT:
@@ -23,7 +31,7 @@ class BT:
         if self.app:
             try:
                 self.logger.log("Завершение BarTender COM...")
-                self.app.Quit(1)  # 1 = btDoNotSaveChanges
+                self.app.Quit(BT_DO_NOT_SAVE_CHANGES)
             except Exception as e:
                 self.logger.err(f"Не удалось корректно закрыть BarTender: {e}")
             finally:
@@ -75,9 +83,79 @@ class BT:
         self.logger.log(f"Подстановка полей: всего={len(payload)}, успешно={count}")
         return count > 0
 
-    def export_preview(self, fmt, path):
+    def _log_preview_messages(self, messages):
         try:
-            fmt.ExportToFile(path, "PNG", 1, 300, 0)  # ColorDepth=1 (B&W), Resolution=300
+            coll = getattr(messages, "value", None) or messages
+            count = int(getattr(coll, "Count", 0) or 0)
+        except Exception:
+            return
+        for idx in range(1, count + 1):
+            try:
+                msg = coll.Item(idx)
+            except Exception:
+                try:
+                    msg = coll.GetMessage(idx)
+                except Exception:
+                    continue
+            try:
+                text = str(getattr(msg, "Message", "") or "").strip()
+            except Exception:
+                text = ""
+            if not text:
+                continue
+            try:
+                severity = str(getattr(msg, "Severity", "") or "").strip()
+            except Exception:
+                severity = ""
+            try:
+                type_text = str(getattr(msg, "TypeText", "") or "").strip()
+            except Exception:
+                type_text = ""
+            prefix = " / ".join(part for part in (type_text, severity) if part)
+            self.logger.log(
+                f"BT Preview Message: {prefix}: {text}" if prefix else f"BT Preview Message: {text}"
+            )
+
+    def export_preview(self, fmt, path):
+        """Экспортирует print preview через документированный ExportPrintPreviewToImage."""
+        directory = os.path.dirname(os.path.abspath(path))
+        file_name_template = os.path.basename(path)
+        try:
+            os.makedirs(directory, exist_ok=True)
+            import pythoncom
+            from win32com.client import VARIANT
+
+            messages = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_DISPATCH, None)
+        except Exception as e:
+            self.logger.err(f"Не удалось подготовить COM Messages для превью: {e}")
+            return False
+
+        try:
+            result = fmt.ExportPrintPreviewToImage(
+                directory,
+                file_name_template,
+                "PNG",
+                BT_COLORS_24BIT,
+                300,
+                PREVIEW_BACKGROUND_WHITE,
+                BT_DO_NOT_SAVE_CHANGES,
+                False,
+                False,
+                messages,
+            )
+            self._log_preview_messages(messages)
+            try:
+                result_code = int(result)
+            except Exception as e:
+                self.logger.err(
+                    f"Не удалось интерпретировать результат экспорта превью {result!r}: {e}"
+                )
+                return False
+            if result_code != BT_PRINT_SUCCESS:
+                self.logger.err(
+                    f"BarTender не сформировал print preview: BtPrintResult={result_code}"
+                )
+                return False
             return True
         except Exception as e:
             self.logger.err(f"Не удалось экспортировать превью в '{path}': {e}")
