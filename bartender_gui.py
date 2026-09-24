@@ -1303,31 +1303,87 @@ class App(ctk.CTk):
         )
         self.print_section.grid(row=2, column=0, sticky="nsew", pady=(7, 0))
         print_body = self.print_section.body
-        batch_head = ctk.CTkFrame(print_body, fg_color="transparent")
-        batch_head.pack(fill="x", padx=8, pady=6)
-        ctk.CTkLabel(batch_head, text="Пакет по (шт.):").pack(side="left", padx=(2, 6))
-        self.batch_entry = ctk.CTkEntry(batch_head, width=90)
+
+        mode_row = ctk.CTkFrame(print_body, fg_color="transparent")
+        mode_row.pack(fill="x", padx=8, pady=(6, 4))
+        ctk.CTkLabel(mode_row, text="Режим печати:").pack(side="left", padx=(2, 6))
+        self.print_selection_mode_var = tk.StringVar(
+            master=self, value=DEFAULT_PRINT_SELECTION_MODE
+        )
+        self._print_selection_mode = DEFAULT_PRINT_SELECTION_MODE
+        self.print_selection_mode_control = ctk.CTkSegmentedButton(
+            mode_row,
+            values=[PRINT_SELECTION_MODE_RANGE, PRINT_SELECTION_MODE_COUNT],
+            variable=self.print_selection_mode_var,
+            command=self._on_print_selection_mode_change,
+        )
+        self.print_selection_mode_control.pack(side="left", fill="x", expand=True)
+
+        fields_row = ctk.CTkFrame(print_body, fg_color="transparent")
+        fields_row.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkLabel(fields_row, text="С строки:").pack(side="left", padx=(2, 4))
+        self.index_entry = ctk.CTkEntry(fields_row, width=64)
+        self.index_entry.insert(0, "1")
+        self.index_entry.pack(side="left", padx=(0, 8))
+        self.print_selection_second_label = ctk.CTkLabel(fields_row, text="По строку:")
+        self.print_selection_second_label.pack(side="left", padx=(0, 4))
+        self.limit_entry = ctk.CTkEntry(fields_row, width=64)
+        self.limit_entry.pack(side="left")
+        self.index_entry.bind("<KeyRelease>", self._update_print_selection_summary)
+        self.index_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
+        self.limit_entry.bind("<KeyRelease>", self._update_print_selection_summary)
+        self.limit_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
+        try:
+            self._selection_entry_border_defaults = (
+                self.index_entry.cget("border_color"),
+                self.limit_entry.cget("border_color"),
+            )
+        except Exception:
+            self._selection_entry_border_defaults = (None, None)
+
+        batch_row = ctk.CTkFrame(print_body, fg_color="transparent")
+        batch_row.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkLabel(batch_row, text="Пакет по (шт.):").pack(side="left", padx=(2, 6))
+        self.batch_entry = ctk.CTkEntry(batch_row, width=90)
         self.batch_entry.insert(0, "0")
         self.batch_entry.pack(side="left")
         self.batch_entry.bind("<KeyRelease>", self._schedule_live_preview)
-        self.sticker_reprint_btn = ctk.CTkButton(
-            batch_head, text="Перепечатать стикер", width=145, command=self._open_sticker_reprint_dialog
+
+        self.print_selection_summary_label = ctk.CTkLabel(
+            print_body, text="—", anchor="w", text_color=("#65717c", "#aeb6bf")
         )
-        self.sticker_reprint_btn.pack(side="right")
+        self.print_selection_summary_label.pack(fill="x", padx=10, pady=(0, 5))
+
         actions = ctk.CTkFrame(print_body, fg_color="transparent")
-        actions.pack(fill="x", padx=8, pady=(0, 6))
+        actions.pack(fill="x", padx=8, pady=(0, 5))
         self.print_btn = ctk.CTkButton(
             actions, text="Печать", command=self._print_range_one_job_via_csv,
             height=38, fg_color="#198754", hover_color="#157347"
         )
-        self.print_btn.pack(side="left", fill="x", expand=True, padx=2)
-        self.preview_btn = ctk.CTkButton(actions, text="Предпросмотр", command=self._preview, height=38)
-        self.preview_btn.pack(side="left", fill="x", expand=True, padx=2)
+        self.print_btn.pack(side="left", fill="x", expand=True, padx=(2, 3))
         self.cancel_btn = ctk.CTkButton(
-            actions, text="Отмена печати", command=self._cancel_print, height=38,
-            fg_color="#dc3545", hover_color="#b02a37"
+            actions,
+            text="Отмена печати",
+            command=self._cancel_print,
+            height=38,
+            state="disabled",
+            fg_color=("#a9afb7", "#454a50"),
+            hover_color=("#8f969f", "#383c41"),
         )
-        self.cancel_btn.pack(side="left", fill="x", expand=True, padx=2)
+        self.cancel_btn.pack(side="left", fill="x", expand=True, padx=(3, 2))
+
+        secondary_actions = ctk.CTkFrame(print_body, fg_color="transparent")
+        secondary_actions.pack(fill="x", padx=8, pady=(0, 6))
+        self.sticker_reprint_btn = ctk.CTkButton(
+            secondary_actions,
+            text="Перепечатать стикер",
+            command=self._open_sticker_reprint_dialog,
+            height=32,
+            fg_color=("#7b8490", "#3d4248"),
+            hover_color=("#69717b", "#34383d"),
+        )
+        self.sticker_reprint_btn.pack(fill="x", padx=2)
+
         self.batch_btns_frame = ctk.CTkFrame(print_body, height=54)
         self.batch_btns_frame.pack(fill="x", padx=8, pady=(0, 8))
 
@@ -1348,50 +1404,8 @@ class App(ctk.CTk):
         self.preview_current_path = None
         self._preview_resize_busy = False
         self.preview_label.bind("<Configure>", self._on_preview_resize)
-        preview_nav = ctk.CTkFrame(preview_body, fg_color="transparent")
-        preview_nav.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
-        mode_row = ctk.CTkFrame(preview_nav, fg_color="transparent")
-        mode_row.pack(fill="x", pady=(0, 5))
-        ctk.CTkLabel(mode_row, text="Режим печати:").pack(side="left")
-        self.print_selection_mode_var = tk.StringVar(
-            master=self, value=DEFAULT_PRINT_SELECTION_MODE
-        )
-        self._print_selection_mode = DEFAULT_PRINT_SELECTION_MODE
-        self.print_selection_mode_control = ctk.CTkSegmentedButton(
-            mode_row,
-            values=[PRINT_SELECTION_MODE_RANGE, PRINT_SELECTION_MODE_COUNT],
-            variable=self.print_selection_mode_var,
-            command=self._on_print_selection_mode_change,
-        )
-        self.print_selection_mode_control.pack(side="left", padx=(6, 0))
-        fields_row = ctk.CTkFrame(preview_nav, fg_color="transparent")
-        fields_row.pack(fill="x")
-        ctk.CTkLabel(fields_row, text="С строки:").pack(side="left")
-        self.index_entry = ctk.CTkEntry(fields_row, width=70)
-        self.index_entry.insert(0, "1")
-        self.index_entry.pack(side="left", padx=(5, 12))
-        self.print_selection_second_label = ctk.CTkLabel(fields_row, text="По строку:")
-        self.print_selection_second_label.pack(side="left")
-        self.limit_entry = ctk.CTkEntry(fields_row, width=70)
-        self.limit_entry.pack(side="left", padx=(5, 12))
-        ctk.CTkLabel(fields_row, text="Масштаб: по размеру").pack(side="left", padx=6)
-        self.print_selection_summary_label = ctk.CTkLabel(
-            preview_nav, text="—", anchor="w", text_color=("#65717c", "#aeb6bf")
-        )
-        self.print_selection_summary_label.pack(fill="x", pady=(4, 0))
-        self.index_entry.bind("<KeyRelease>", self._update_print_selection_summary)
-        self.index_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
-        self.limit_entry.bind("<KeyRelease>", self._update_print_selection_summary)
-        self.limit_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
-        try:
-            self._selection_entry_border_defaults = (
-                self.index_entry.cget("border_color"),
-                self.limit_entry.cget("border_color"),
-            )
-        except Exception:
-            self._selection_entry_border_defaults = (None, None)
         self.preview_strip_frame = ctk.CTkFrame(preview_body, height=66)
-        self.preview_strip_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        self.preview_strip_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
         self.preview_strip_frame.grid_propagate(False)
         self.preview_mode_label = ctk.CTkLabel(
             self.preview_strip_frame, text="Текущая этикетка", anchor="w"
@@ -3511,6 +3525,13 @@ class App(ctk.CTk):
                     button.configure(state="normal" if available else "disabled")
             except Exception:
                 pass
+
+    def _set_print_active_ui(self, active):
+        """Enable cancellation only while a print operation is active."""
+        try:
+            self.cancel_btn.configure(state="normal" if active else "disabled")
+        except Exception:
+            pass
 
     def _initialize_catalog_runtime(self):
         result = initialize_catalog_runtime(BASE_DIR)
@@ -8462,6 +8483,7 @@ class App(ctk.CTk):
         tmp_csv_path = os.path.abspath(os.path.join(BASE_DIR, "tmp_batch.csv"))
         total_rolls = len(batches_full) if batches_full else len(batches)
         self._catalog_print_active += 1
+        self._set_print_active_ui(True)
         try:
             self._stickers_preprinted = False
             if target_batches is None and not self._bool_var(getattr(self, "skip_sticker_var", False)):
@@ -8747,6 +8769,7 @@ class App(ctk.CTk):
         finally:
             duration = max(0.0, time.time() - job_started_at)
             self._catalog_print_active = max(0, self._catalog_print_active - 1)
+            self._set_print_active_ui(self._catalog_print_active > 0)
 def main():
     if ensure_license_or_exit() is None:
         return 1
