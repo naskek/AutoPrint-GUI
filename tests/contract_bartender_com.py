@@ -159,6 +159,133 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         fmt.PrintOut.assert_called_once_with(False, False)
         fmt.Close.assert_called_once_with(1)
 
+    @patch("bartender_gui.resolve_sticker_template_path", return_value=r"C:\\labels\\sticker60x40.btw")
+    def test_marking_preview_uses_shared_payload_and_never_submits_print(self, _resolve_sticker):
+        app = object.__new__(bartender_gui.App)
+        app.cfg = {}
+        app.logger = self.logger
+        app.catalog_state = "ready"
+        app.csv_path = "input.csv"
+        app.csv_rows = [{"GTIN": "123", "DM": "code", "NAME": "Product"}]
+        app.product_map = {
+            "123": {
+                "BRAND": "Brand",
+                "CLIENT": "Catalog client",
+                "PACKAGING": "Jar",
+                "WEIGHT": "150",
+            }
+        }
+        app._bartender_available = Mock(return_value=True)
+        app._get_client_name = Mock(return_value="Manual client")
+        app._show_preview_path = Mock(return_value=True)
+        app._cleanup_preview_temp_dir = Mock()
+        app._preview_temp_dir = None
+
+        sample = {
+            "GTIN": "123",
+            "ShortName": "Short",
+            "DM": "code",
+            "NAME": "Product",
+            "PROD_DATE": "24.09.2026",
+            "EXP_DATE": "24.10.2026",
+            "PART_NUM": "42001",
+        }
+        context = {
+            "bidx": 1,
+            "start": 25,
+            "end": 74,
+            "total": 50,
+            "sample_row": sample,
+            "km_count": 50,
+            "total_rolls": 1,
+        }
+        app._resolve_sticker_preview_context = Mock(return_value=context)
+
+        bt = Mock()
+        fmt = Mock()
+        fmt.PrintSetup = SimpleNamespace()
+        bt.open_format.return_value = fmt
+        bt.apply_fields.return_value = True
+        app.bt = bt
+
+        expected_payload = app._build_sticker_payload(
+            1,
+            25,
+            74,
+            50,
+            sample_row=sample,
+            km_count=50,
+            total_rolls=1,
+            client_name="Manual client",
+        )
+
+        with tempfile.TemporaryDirectory() as root, patch(
+            "bartender_gui.tempfile.mkdtemp", return_value=root
+        ):
+            generated = os.path.join(root, "preview_1.png")
+
+            def export_preview(_fmt, template_path):
+                self.assertEqual(
+                    template_path,
+                    os.path.join(root, "preview_%PageNumber%.png"),
+                )
+                with open(generated, "wb") as handle:
+                    handle.write(b"preview")
+                return True
+
+            bt.export_preview.side_effect = export_preview
+            result = app._preview_marking_sticker(silent=True)
+
+        self.assertTrue(result)
+        bt.open_format.assert_called_once_with(r"C:\\labels\\sticker60x40.btw")
+        bt.set_common_print_flags.assert_called_once_with(fmt)
+        bt.apply_fields.assert_called_once_with(fmt, expected_payload)
+        bt.export_preview.assert_called_once()
+        app._show_preview_path.assert_called_once_with(
+            generated, preserve_on_error=True
+        )
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+        fmt.Close.assert_called_once_with(1)
+
+    def test_sticker_preview_context_matches_first_production_batch_semantics(self):
+        app = object.__new__(bartender_gui.App)
+        app.csv_rows = [
+            {"GTIN": "123", "DM": str(index)}
+            for index in range(1, 11)
+        ]
+        app.print_selection_mode_var = Mock()
+        app.print_selection_mode_var.get.return_value = bartender_gui.PRINT_SELECTION_MODE_RANGE
+        app.index_entry = Mock()
+        app.index_entry.get.return_value = "3"
+        app.limit_entry = Mock()
+        app.limit_entry.get.return_value = "8"
+        app.batch_entry = Mock()
+        app.batch_entry.get.return_value = "4"
+        enriched = {"GTIN": "123", "PART_NUM": "42001"}
+        app._enrich = Mock(return_value=enriched)
+
+        context = app._resolve_sticker_preview_context(silent=True)
+
+        self.assertEqual(
+            context,
+            {
+                "bidx": 1,
+                "start": 3,
+                "end": 6,
+                "total": 6,
+                "sample_row": enriched,
+                "km_count": 4,
+                "total_rolls": 2,
+            },
+        )
+        app._enrich.assert_called_once_with(
+            app.csv_rows[2],
+            3,
+            allow_empty_part=True,
+            silent_validation=True,
+        )
+
     @patch("win32com.client.VARIANT")
     def test_batch_success_submits_exactly_once(self, variant):
         messages = SimpleNamespace(value=SimpleNamespace(Count=0))
