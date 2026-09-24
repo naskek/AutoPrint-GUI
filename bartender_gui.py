@@ -25,6 +25,11 @@ from utils import (
     get_base_dir, load_config, save_config, enum_printers,
     parse_date_ru, only_digits
 )
+from template_storage import (
+    get_bundled_templates_dir,
+    get_user_templates_dir,
+    migrate_legacy_templates,
+)
 from data_processing import load_kontur_raw, enrich_row
 from catalog_compat import build_product_map
 from catalog_excel import (
@@ -53,7 +58,8 @@ from licensing import ensure_license_or_exit
 
 BASE_DIR = get_base_dir()
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
-TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+BUNDLED_TEMPLATES_DIR = get_bundled_templates_dir(BASE_DIR)
+TEMPLATES_DIR = get_user_templates_dir()
 
 APP_TITLE    = "AutoPrint V3.0"
 APP_VERSION = "3.0"
@@ -196,15 +202,22 @@ def quick_production_date(day_offset, today=None):
 
 
 def default_template_path(name: str) -> str:
-    """Возвращает путь к шаблону в templates/ или старом корне, если там остался файл."""
+    """Возвращает пользовательский, встроенный или legacy BTW в порядке приоритета."""
     candidates = [
         os.path.join(TEMPLATES_DIR, name),
-        os.path.join(BASE_DIR, name),  # обратная совместимость со старым расположением
+        os.path.join(BUNDLED_TEMPLATES_DIR, name),
+        os.path.join(BASE_DIR, "templates", name),
+        os.path.join(BASE_DIR, name),
     ]
+    seen = set()
     for p in candidates:
+        key = os.path.normcase(os.path.abspath(p))
+        if key in seen:
+            continue
+        seen.add(key)
         if os.path.isfile(p):
             return p
-    return os.path.join(TEMPLATES_DIR, name)
+    return os.path.join(BUNDLED_TEMPLATES_DIR, name)
 
 
 def sticker_template_candidates(cfg=None):
@@ -215,6 +228,7 @@ def sticker_template_candidates(cfg=None):
     candidates = [
         configured,
         os.path.join(TEMPLATES_DIR, STICKER_BTW_NAME),
+        os.path.join(BUNDLED_TEMPLATES_DIR, STICKER_BTW_NAME),
         os.path.join(BASE_DIR, STICKER_BTW_NAME),
     ]
     result = []
@@ -802,6 +816,23 @@ class App(ctk.CTk):
         self.show_log_var = tk.BooleanVar(master=self, value=True)
         self._apply_auto_scaling()
 
+        self._template_migration_events = []
+        if getattr(sys, "frozen", False):
+            try:
+                self._template_migration_events = migrate_legacy_templates(
+                    destination_dir=TEMPLATES_DIR,
+                    base_dir=BASE_DIR,
+                )
+            except Exception as exc:
+                self._template_migration_events = [
+                    {
+                        "status": "error",
+                        "source": "",
+                        "target": TEMPLATES_DIR,
+                        "error": str(exc),
+                    }
+                ]
+
         self.cfg = load_config()
         self.label_templates = self._load_label_templates_from_cfg()
         # статистика печати отключена
@@ -834,6 +865,7 @@ class App(ctk.CTk):
         self.product_map = {}
 
         self._build_ui()
+        self._log_template_migration()
         self._install_global_text_editing()
         self._build_menu()
         self._initialize_catalog_runtime()
@@ -2351,8 +2383,30 @@ class App(ctk.CTk):
                 pass
         ctk.CTkButton(win, text="Скопировать в буфер", command=_copy_stats).pack(pady=(4, 6))
 
+    def _log_template_migration(self):
+        logger = getattr(self, "logger", None)
+        if logger is None:
+            return
+        for event in getattr(self, "_template_migration_events", []) or []:
+            status = event.get("status")
+            source = event.get("source") or "-"
+            target = event.get("target") or "-"
+            if status == "error":
+                try:
+                    logger.err(
+                        f"[Шаблоны] Ошибка миграции {source} -> {target}: "
+                        f"{event.get('error') or 'unknown error'}"
+                    )
+                except Exception:
+                    pass
+            elif status in ("copied", "conflict-preserved"):
+                try:
+                    logger.log(f"[Шаблоны] Миграция {status}: {source} -> {target}")
+                except Exception:
+                    pass
+
     def _open_templates_dir(self):
-        """Открывает папку templates (создаёт, если нет)."""
+        """Открывает persistent-папку пользовательских шаблонов."""
         try:
             os.makedirs(TEMPLATES_DIR, exist_ok=True)
         except Exception:
@@ -2443,7 +2497,10 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(
             win,
-            text="Шаблоны сохраняются в папку templates. Товару назначается ID шаблона из этого списка.",
+            text=(
+                "Встроенные шаблоны поставляются с AutoPrint. "
+                "Импортированные BTW копируются в пользовательское хранилище AutoPrint."
+            ),
         ).pack(anchor="w", padx=12, pady=(12, 6))
 
         frame = ctk.CTkFrame(win)
@@ -2577,7 +2634,7 @@ class App(ctk.CTk):
                     target, file_name = self._copy_template_into_workspace(src, template_id)
                     file_entry.delete(0, "end")
                     file_entry.insert(0, file_name)
-                    status_label.configure(text=f"Импортировано в templates: {os.path.basename(target)}")
+                    status_label.configure(text=f"Импортировано в AutoPrint: {os.path.basename(target)}")
                 except Exception as e:
                     mb.showerror("Шаблон", f"Не удалось импортировать BTW:\n{e}")
 
@@ -3199,7 +3256,8 @@ class App(ctk.CTk):
         os.makedirs(TEMPLATES_DIR, exist_ok=True)
         target = os.path.join(TEMPLATES_DIR, file_name)
         import shutil as _shutil
-        _shutil.copy2(src_path, target)
+        if os.path.normcase(os.path.abspath(src_path)) != os.path.normcase(os.path.abspath(target)):
+            _shutil.copy2(src_path, target)
         return target, file_name
 
     def _template_part_mode(self, template_id: str) -> str:
