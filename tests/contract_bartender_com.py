@@ -242,42 +242,98 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
         fmt.PrintOut.assert_not_called()
 
     @patch("win32com.client.VARIANT")
-    def test_large_6000_row_batch_stages_locally_and_submits_once(self, variant):
+    def test_large_6000_row_orchestrator_uses_one_database_batch_submit(self, variant):
         messages = SimpleNamespace(value=SimpleNamespace(Count=0))
         variant.return_value = messages
 
         app = object.__new__(bartender_gui.App)
         app.logger = Mock()
         app.cfg = {}
-        app.REQ_COLS = ["ShortName", "ShortGTIN", "DM", "NUM"]
-        app._bt_print = Mock(return_value=True)
-
-        rows = [
-            {
-                "ShortName": "TEST",
-                "ShortGTIN": "123",
-                "DM": f"DM-{idx}",
-                "NUM": str(idx),
-            }
+        app.REQ_COLS = [
+            "ShortName",
+            "ShortGTIN",
+            "EXP_DATE",
+            "PROD_DATE",
+            "PART_NUM",
+            "DM",
+            "NUM",
+        ]
+        app.csv_path = "synthetic-6000.csv"
+        app.csv_rows = [
+            {"DM": f"DM-{idx}", "GTIN": "123", "NAME": "TEST"}
             for idx in range(1, 6001)
         ]
+        app.format_combo = Mock()
+        app.format_combo.get.return_value = "Auto"
+        app.skip_sticker_var = True
+        app.calib_var = False
+        app.cancel_requested = False
+        app._catalog_print_active = 0
 
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "tmp_batch.csv")
-            written = app._write_tmp_batch_csv(rows, path, add_calib=False)
-            self.assertEqual(written, path)
-            with open(path, "r", encoding="utf-8-sig") as handle:
-                self.assertEqual(sum(1 for _ in handle), 6001)
+        app._require_print_capabilities = Mock(return_value=True)
+        app._resolve_print_selection_for_action = Mock(
+            return_value=(1, 6000, 6000)
+        )
+        app._get_printer = Mock(return_value="Printer")
+        app._get_batch_size = Mock(return_value=6000)
+        app._bool_var = Mock(side_effect=lambda value: bool(value))
+        app._pause_wait = Mock()
+        app._should_stop = Mock(return_value=False)
+        app._set_progress = Mock()
+        app._render_batch_buttons = Mock()
+        app._can_fast_enrich = Mock(return_value=True)
+        app.update_idletasks = Mock()
+        app.update = Mock()
+        app._enrich = Mock(
+            return_value={
+                "ShortName": "TEST",
+                "ShortGTIN": "123",
+                "EXP_DATE": "",
+                "PROD_DATE": "",
+                "PART_NUM": "",
+                "DM": "DM-1",
+                "NUM": "1",
+                "_FORMAT": "16x16",
+            }
+        )
+        app._apply_format_ui = Mock()
+        app._get_btw_for_format = Mock(return_value="test.btw")
+        app._template_batch_report = Mock(return_value={"can_batch": True})
+        app._template_part_mode = Mock(return_value="blank")
+        app._rebind_template_db = Mock(return_value=True)
+        app._check_template_db = Mock(return_value=True)
+        app._dialog_flag = Mock(return_value=False)
+        app._print_rows_direct = Mock()
+        app._mark_csv_printed = Mock()
 
         fmt = Mock()
         fmt.PrintSetup = SimpleNamespace()
         fmt.Print.return_value = 0
+        app.bt = SimpleNamespace(open_format=Mock(return_value=fmt))
 
-        result = app._bt_batch_print(fmt, "Printer", "job-6000", 1, False)
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            bartender_gui, "BASE_DIR", tmp
+        ):
+            app._print_range_one_job_via_csv(target_batches=[(0, 6000)])
 
-        self.assertEqual(result, bartender_gui.BT_BATCH_SUBMITTED)
-        fmt.Print.assert_called_once_with("job-6000", False, 30000, messages)
-        app._bt_print.assert_not_called()
+            staged = os.path.join(tmp, "tmp_batch.csv")
+            self.assertTrue(os.path.isfile(staged))
+            with open(staged, "r", encoding="utf-8-sig") as handle:
+                self.assertEqual(sum(1 for _ in handle), 6001)
+
+        app._print_rows_direct.assert_not_called()
+        app._rebind_template_db.assert_called_once()
+        app._check_template_db.assert_called_once()
+        self.assertTrue(fmt.UseDatabase)
+        self.assertFalse(fmt.SelectRecordsAtPrint)
+        self.assertEqual(fmt.RecordRange, "1-6000")
+        fmt.Print.assert_called_once_with(
+            "AutoPrint 16x16 1-6000",
+            False,
+            30000,
+            messages,
+        )
+        fmt.Close.assert_called_once_with(1)
 
     @patch("win32com.client.VARIANT", side_effect=RuntimeError("VARIANT unavailable"))
     def test_pre_submit_messages_setup_failure_stops_without_printout_fallback(self, _variant):
