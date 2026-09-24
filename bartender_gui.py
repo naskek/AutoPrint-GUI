@@ -120,6 +120,7 @@ def application_icon_path() -> str:
     )
     return os.path.join(bundle_root, APP_ICON_RELATIVE_PATH)
 DEFAULT_PRINT_SELECTION_MODE = PRINT_SELECTION_MODE_RANGE
+DEFAULT_TSC_CALIBRATION_ENABLED = True
 
 
 def version_identity_text(version=None):
@@ -978,7 +979,7 @@ class App(ctk.CTk):
         self.show_dialog_chk = ctk.CTkCheckBox(chk_col, text="Показывать диалог печати BarTender", variable=self.show_dialog_var)
         self.show_dialog_chk.pack(anchor="w", pady=(0, 4))
 
-        self.calib_var = ctk.BooleanVar(value=False)
+        self.calib_var = ctk.BooleanVar(value=DEFAULT_TSC_CALIBRATION_ENABLED)
         self.calib_chk = ctk.CTkCheckBox(chk_col, text="Калибровка TSC: 6 этикеток 'X' перед печатью", variable=self.calib_var)
         self.calib_chk.pack(anchor="w", pady=(0, 4))
 
@@ -1276,7 +1277,7 @@ class App(ctk.CTk):
         self.show_dialog_var = ctk.BooleanVar(value=self.default_show_dialog)
         self.show_dialog_chk = ctk.CTkCheckBox(params, text="Показывать диалог печати BarTender", variable=self.show_dialog_var)
         self.show_dialog_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=4)
-        self.calib_var = ctk.BooleanVar(value=False)
+        self.calib_var = ctk.BooleanVar(value=DEFAULT_TSC_CALIBRATION_ENABLED)
         self.calib_chk = ctk.CTkCheckBox(params, text="Калибровка TSC: 6 этикеток 'X'", variable=self.calib_var)
         self.calib_chk.grid(row=5, column=0, columnspan=2, sticky="w", padx=10, pady=4)
         self.skip_sticker_var = ctk.BooleanVar(value=False)
