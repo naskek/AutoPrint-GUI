@@ -118,9 +118,10 @@ jobs:
           Get-FileHash $installer -Algorithm SHA256
 
       - name: Upload installer artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v6
         with:
           name: AutoPrint-Windows-Installer
           path: dist/installer/AutoPrint_Setup_*.exe
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
