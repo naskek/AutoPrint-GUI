@@ -188,15 +188,3 @@ jobs:
           }
 
           Write-Host "Public updater release verified: $tag"
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: AutoPrint-Windows-Installer-release
-          # The BarTenderGUI-named file is a temporary compatibility alias for old updaters.
-          # Do not remove it until support for AutoPrint 3.2.1 and earlier is intentionally dropped.
-          path: |
-            dist/installer/AutoPrint_Setup_*.exe
-            dist/installer/BarTenderGUI_Setup_*.exe
-          if-no-files-found: error
-          retention-days: 30
