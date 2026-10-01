@@ -40,6 +40,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('if (-not $digest.StartsWith("sha256:"))', self.workflow)
         self.assertIn("$publishedHash -ne $env:INSTALLER_SHA256", self.workflow)
 
+    def test_release_does_not_duplicate_published_installers_as_actions_artifact(self):
+        self.assertNotIn("actions/upload-artifact", self.workflow)
+        self.assertNotIn("AutoPrint-Windows-Installer-release", self.workflow)
+        self.assertNotIn("retention-days: 30", self.workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
