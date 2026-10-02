@@ -72,6 +72,34 @@ class AutoPrintApp(bartender_gui.App):
         self.after(100, self._drain_update_ui_queue)
         self._schedule_startup_update_check()
 
+    def _apply_format_ui(self, fmt: str, *, selected_fmt: str | None = None) -> None:
+        """Apply resolved printer choice without letting Auto preview lock part input."""
+        resolved_fmt = (fmt or "").strip()
+        if selected_fmt is None:
+            selected_fmt = resolved_fmt
+            try:
+                selected_fmt = (self.format_combo.get() or "").strip() or resolved_fmt
+            except Exception:
+                pass
+        selected_fmt = (selected_fmt or "").strip()
+
+        try:
+            if not selected_fmt or selected_fmt == "Auto":
+                self.part_entry.configure(state="normal")
+            elif self._template_requires_manual_part(selected_fmt):
+                self.part_entry.configure(state="normal")
+            else:
+                self.part_entry.configure(state="disabled")
+                self.part_entry.delete(0, "end")
+        except Exception:
+            pass
+        self._set_default_printer_for_format(resolved_fmt)
+
+    def _on_format_change(self, value):
+        self._apply_format_ui(value, selected_fmt=value)
+        self._refresh_runtime_status()
+        self._schedule_live_preview()
+
     def _schedule_startup_update_check(self) -> bool:
         if not startup_update_check_enabled():
             return False
