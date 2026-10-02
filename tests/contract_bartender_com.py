@@ -62,44 +62,26 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
             ],
         )
 
-    @patch("win32com.client.VARIANT")
-    def test_preview_uses_documented_export_api_and_never_prints(self, variant):
-        messages = SimpleNamespace(value=SimpleNamespace(Count=0))
-        variant.return_value = messages
+    def test_preview_restores_v324_template_export_and_never_prints(self):
         bt = bartender_com.BT(self.logger)
         fmt = Mock()
-        fmt.ExportPrintPreviewRangeToImage.return_value = 0
 
         with tempfile.TemporaryDirectory() as root:
-            path = os.path.join(root, "preview_%PageNumber%.png")
-            result = bt.export_preview(fmt, path)
+            requested = os.path.join(root, "preview_%PageNumber%.png")
+            expected = os.path.join(root, "preview_1.png")
+            result = bt.export_preview(fmt, requested)
 
         self.assertTrue(result)
-        fmt.ExportPrintPreviewRangeToImage.assert_called_once_with(
-            bartender_com.PREVIEW_PAGE_RANGE,
-            root,
-            "preview_%PageNumber%.png",
-            "PNG",
-            bartender_com.BT_COLORS_24BIT,
-            300,
-            bartender_com.PREVIEW_BACKGROUND_WHITE,
-            bartender_com.BT_DO_NOT_SAVE_CHANGES,
-            False,
-            False,
-            messages,
-        )
+        fmt.ExportToFile.assert_called_once_with(expected, "PNG", 1, 300, 0)
+        fmt.ExportPrintPreviewToImage.assert_not_called()
+        fmt.ExportPrintPreviewRangeToImage.assert_not_called()
         fmt.Print.assert_not_called()
         fmt.PrintOut.assert_not_called()
-        fmt.ExportPrintPreviewToImage.assert_not_called()
-        fmt.ExportToFile.assert_not_called()
 
-    @patch("win32com.client.VARIANT")
-    def test_preview_failure_does_not_fallback_to_print_or_template_export(self, variant):
-        messages = SimpleNamespace(value=SimpleNamespace(Count=0))
-        variant.return_value = messages
+    def test_preview_export_failure_never_submits_print(self):
         bt = bartender_com.BT(self.logger)
         fmt = Mock()
-        fmt.ExportPrintPreviewRangeToImage.return_value = 2
+        fmt.ExportToFile.side_effect = RuntimeError("export failed")
 
         with tempfile.TemporaryDirectory() as root:
             result = bt.export_preview(
@@ -107,11 +89,11 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
             )
 
         self.assertFalse(result)
-        fmt.ExportPrintPreviewRangeToImage.assert_called_once()
+        fmt.ExportToFile.assert_called_once()
         fmt.ExportPrintPreviewToImage.assert_not_called()
+        fmt.ExportPrintPreviewRangeToImage.assert_not_called()
         fmt.Print.assert_not_called()
         fmt.PrintOut.assert_not_called()
-        fmt.ExportToFile.assert_not_called()
 
     @patch("bartender_gui.resolve_sticker_template_path", return_value=r"C:\\labels\\sticker60x40.btw")
     def test_manual_part_num_reaches_sticker_named_data_source(self, _resolve_sticker):
