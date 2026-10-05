@@ -409,7 +409,8 @@ class AutoPrintApp(bartender_gui.App):
         try:
             threading.Thread(
                 target=lambda r=release: self._download_update_worker(r),
-                name="autoprint-update-download", daemon=True
+                name="autoprint-update-download",
+                daemon=True,
             ).start()
         except Exception as exc:
             self._update_download_failed(exc)
