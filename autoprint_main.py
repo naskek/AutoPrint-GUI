@@ -27,7 +27,11 @@ PART_ENTRY_PLACEHOLDER = "Номер партии вручную"
 def valid_part_entry_value(value: str) -> bool:
     """Allow CustomTkinter's visual placeholder while keeping user input numeric."""
     text = str(value or "")
-    return text == PART_ENTRY_PLACEHOLDER or text == "" or text.isdigit()
+    return (
+        text == PART_ENTRY_PLACEHOLDER
+        or text == ""
+        or (text.isascii() and text.isdigit())
+    )
 
 
 def format_download_progress(
