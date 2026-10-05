@@ -21,6 +21,17 @@ bartender_gui.APP_TITLE = f"AutoPrint V{APP_VERSION}"
 
 STARTUP_UPDATE_DELAY_MS = 1500
 MEBIBYTE = 1024 * 1024
+PART_ENTRY_PLACEHOLDER = "Номер партии вручную"
+
+
+def valid_part_entry_value(value: str) -> bool:
+    """Allow CustomTkinter's visual placeholder while keeping user input numeric."""
+    text = str(value or "")
+    return (
+        text == PART_ENTRY_PLACEHOLDER
+        or text == ""
+        or (text.isascii() and text.isdigit())
+    )
 
 
 def format_download_progress(
@@ -69,8 +80,21 @@ class AutoPrintApp(bartender_gui.App):
         self._pending_update_release = None
         self._active_update_release = None
         super().__init__()
+        self._configure_part_entry_validation()
         self.after(100, self._drain_update_ui_queue)
         self._schedule_startup_update_check()
+
+    def _configure_part_entry_validation(self) -> None:
+        """Keep CTk placeholder rendering compatible with digit-only part input."""
+        validator = (self.register(valid_part_entry_value), "%P")
+        self.part_entry.configure(validate="key", validatecommand=validator)
+
+    def _enable_part_entry(self) -> None:
+        """Enable part input and repair a placeholder leaked by disabled CTkEntry state."""
+        self.part_entry.configure(state="normal")
+        if (self.part_entry.get() or "") == PART_ENTRY_PLACEHOLDER:
+            self.part_entry.delete(0, "end")
+            self.part_entry.configure(placeholder_text=PART_ENTRY_PLACEHOLDER)
 
     def _apply_format_ui(self, fmt: str, *, selected_fmt: str | None = None) -> None:
         """Apply resolved printer choice without letting Auto preview lock part input."""
@@ -85,9 +109,9 @@ class AutoPrintApp(bartender_gui.App):
 
         try:
             if not selected_fmt or selected_fmt == "Auto":
-                self.part_entry.configure(state="normal")
+                self._enable_part_entry()
             elif self._template_requires_manual_part(selected_fmt):
-                self.part_entry.configure(state="normal")
+                self._enable_part_entry()
             else:
                 self.part_entry.configure(state="disabled")
                 self.part_entry.delete(0, "end")
