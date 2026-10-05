@@ -89,6 +89,13 @@ class AutoPrintApp(bartender_gui.App):
         validator = (self.register(valid_part_entry_value), "%P")
         self.part_entry.configure(validate="key", validatecommand=validator)
 
+    def _enable_part_entry(self) -> None:
+        """Enable part input and repair a placeholder leaked by disabled CTkEntry state."""
+        self.part_entry.configure(state="normal")
+        if (self.part_entry.get() or "") == PART_ENTRY_PLACEHOLDER:
+            self.part_entry.delete(0, "end")
+            self.part_entry.configure(placeholder_text=PART_ENTRY_PLACEHOLDER)
+
     def _apply_format_ui(self, fmt: str, *, selected_fmt: str | None = None) -> None:
         """Apply resolved printer choice without letting Auto preview lock part input."""
         resolved_fmt = (fmt or "").strip()
@@ -102,9 +109,9 @@ class AutoPrintApp(bartender_gui.App):
 
         try:
             if not selected_fmt or selected_fmt == "Auto":
-                self.part_entry.configure(state="normal")
+                self._enable_part_entry()
             elif self._template_requires_manual_part(selected_fmt):
-                self.part_entry.configure(state="normal")
+                self._enable_part_entry()
             else:
                 self.part_entry.configure(state="disabled")
                 self.part_entry.delete(0, "end")
