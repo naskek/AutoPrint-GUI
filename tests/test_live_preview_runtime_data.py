@@ -37,7 +37,7 @@ class LivePreviewRuntimeDataTests(unittest.TestCase):
         }
 
     def test_database_backed_preview_uses_one_row_temp_source(self):
-        text_file = SimpleNamespace(FileName=r"C:\\production\\tmp_batch.csv")
+        text_file = SimpleNamespace(FileName=r"C:\production\tmp_batch.csv")
         database = SimpleNamespace(
             Type=bartender_com.BT_TEXT_FILE_DATABASE,
             TextFile=text_file,
@@ -77,7 +77,7 @@ class LivePreviewRuntimeDataTests(unittest.TestCase):
             )
             self.assertNotEqual(
                 os.path.normcase(captured["bound_path"]),
-                os.path.normcase(r"C:\\production\\tmp_batch.csv"),
+                os.path.normcase(r"C:\production\tmp_batch.csv"),
             )
 
         self.assertEqual(
@@ -99,10 +99,10 @@ class LivePreviewRuntimeDataTests(unittest.TestCase):
         fmt.PrintOut.assert_not_called()
         self.assertIsNone(self.bt._preview_fields)
 
-    def test_non_text_database_is_not_rebound(self):
+    def test_unrelated_text_database_is_not_rebound(self):
         database = SimpleNamespace(
-            Type=3,
-            TextFile=SimpleNamespace(FileName=r"C:\\data\\source.xlsx"),
+            Type=bartender_com.BT_TEXT_FILE_DATABASE,
+            TextFile=SimpleNamespace(FileName=r"C:\data\lookup.tsv"),
         )
         fmt = Mock()
         fmt.NamedSubStrings = []
@@ -115,7 +115,27 @@ class LivePreviewRuntimeDataTests(unittest.TestCase):
             requested = os.path.join(root, "preview_%PageNumber%.png")
             self.assertTrue(self.bt.export_preview(fmt, requested))
 
-        self.assertEqual(database.TextFile.FileName, r"C:\\data\\source.xlsx")
+        self.assertEqual(database.TextFile.FileName, r"C:\data\lookup.tsv")
+        self.assertFalse(fmt.PrintSetup.UseDatabase)
+        fmt.ExportToFile.assert_called_once()
+
+    def test_non_text_database_is_not_rebound(self):
+        database = SimpleNamespace(
+            Type=3,
+            TextFile=SimpleNamespace(FileName=r"C:\data\source.xlsx"),
+        )
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = _Databases(database)
+        fmt.PrintSetup = SimpleNamespace(UseDatabase=False)
+
+        self.bt.apply_fields(fmt, self._runtime_row())
+
+        with tempfile.TemporaryDirectory() as root:
+            requested = os.path.join(root, "preview_%PageNumber%.png")
+            self.assertTrue(self.bt.export_preview(fmt, requested))
+
+        self.assertEqual(database.TextFile.FileName, r"C:\data\source.xlsx")
         self.assertFalse(fmt.PrintSetup.UseDatabase)
         fmt.ExportToFile.assert_called_once()
 
@@ -127,7 +147,7 @@ class LivePreviewRuntimeDataTests(unittest.TestCase):
             Formats=SimpleNamespace(Open=Mock(return_value=opened))
         )
 
-        result = self.bt.open_format(r"C:\\labels\\16x16.btw")
+        result = self.bt.open_format(r"C:\labels\16x16.btw")
 
         self.assertIs(result, opened)
         self.assertIsNone(self.bt._preview_fields)
