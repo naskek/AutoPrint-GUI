@@ -18,6 +18,29 @@ class PartEntryStateTests(unittest.TestCase):
         app._schedule_live_preview = Mock()
         return app
 
+    def test_part_validator_accepts_placeholder_empty_and_digits_only(self):
+        self.assertTrue(
+            autoprint_main.valid_part_entry_value(
+                autoprint_main.PART_ENTRY_PLACEHOLDER
+            )
+        )
+        self.assertTrue(autoprint_main.valid_part_entry_value(""))
+        self.assertTrue(autoprint_main.valid_part_entry_value("123456"))
+        self.assertFalse(autoprint_main.valid_part_entry_value("123A"))
+        self.assertFalse(autoprint_main.valid_part_entry_value("Номер"))
+
+    def test_part_validation_installs_ctk_compatible_validator(self):
+        app = self._make_app()
+        app.register = Mock(return_value="part-validator")
+
+        app._configure_part_entry_validation()
+
+        app.register.assert_called_once_with(autoprint_main.valid_part_entry_value)
+        app.part_entry.configure.assert_called_once_with(
+            validate="key",
+            validatecommand=("part-validator", "%P"),
+        )
+
     def test_auto_mode_resolved_blank_template_keeps_part_entry_editable(self):
         app = self._make_app("Auto")
 
