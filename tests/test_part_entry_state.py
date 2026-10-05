@@ -28,6 +28,7 @@ class PartEntryStateTests(unittest.TestCase):
         self.assertTrue(autoprint_main.valid_part_entry_value("123456"))
         self.assertFalse(autoprint_main.valid_part_entry_value("123A"))
         self.assertFalse(autoprint_main.valid_part_entry_value("Номер"))
+        self.assertFalse(autoprint_main.valid_part_entry_value("１２３"))
 
     def test_part_validation_installs_ctk_compatible_validator(self):
         app = self._make_app()
