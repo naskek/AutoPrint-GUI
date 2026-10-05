@@ -42,8 +42,33 @@ class PartEntryStateTests(unittest.TestCase):
             validatecommand=("part-validator", "%P"),
         )
 
+    def test_reenable_repairs_placeholder_that_became_real_value(self):
+        app = self._make_app()
+        app.part_entry.get.return_value = autoprint_main.PART_ENTRY_PLACEHOLDER
+
+        app._enable_part_entry()
+
+        self.assertEqual(
+            app.part_entry.configure.call_args_list,
+            [
+                call(state="normal"),
+                call(placeholder_text=autoprint_main.PART_ENTRY_PLACEHOLDER),
+            ],
+        )
+        app.part_entry.delete.assert_called_once_with(0, "end")
+
+    def test_reenable_preserves_real_numeric_part_value(self):
+        app = self._make_app()
+        app.part_entry.get.return_value = "12345"
+
+        app._enable_part_entry()
+
+        app.part_entry.configure.assert_called_once_with(state="normal")
+        app.part_entry.delete.assert_not_called()
+
     def test_auto_mode_resolved_blank_template_keeps_part_entry_editable(self):
         app = self._make_app("Auto")
+        app.part_entry.get.return_value = ""
 
         app._apply_format_ui("16x16")
 
@@ -53,6 +78,7 @@ class PartEntryStateTests(unittest.TestCase):
 
     def test_auto_mode_stays_editable_across_blank_and_manual_resolved_templates(self):
         app = self._make_app("Auto")
+        app.part_entry.get.return_value = ""
 
         app._apply_format_ui("16x16")
         app._apply_format_ui("30x20")
@@ -80,6 +106,7 @@ class PartEntryStateTests(unittest.TestCase):
 
     def test_explicit_manual_template_keeps_part_entry_editable(self):
         app = self._make_app("Auto")
+        app.part_entry.get.return_value = ""
 
         app._on_format_change("30x20")
 
