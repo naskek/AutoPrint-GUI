@@ -14,6 +14,7 @@ BT_COLORS_24BIT = 4
 BT_PRINT_SUCCESS = 0
 PREVIEW_BACKGROUND_WHITE = 0xFFFFFF
 BT_TEXT_FILE_DATABASE = 0
+PRODUCTION_BATCH_SOURCE_BASENAME = "tmp_batch.csv"
 PREVIEW_DATA_FIELDS = (
     "ShortName",
     "ShortGTIN",
@@ -153,6 +154,10 @@ class BT:
             )
         return path
 
+    @staticmethod
+    def _source_basename(path):
+        return str(path or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+
     def _bind_preview_text_databases(self, fmt, preview_data_path):
         try:
             databases = fmt.Databases
@@ -166,6 +171,9 @@ class BT:
             try:
                 database = databases.GetDatabase(index)
                 if int(database.Type) != BT_TEXT_FILE_DATABASE:
+                    continue
+                current_path = database.TextFile.FileName
+                if self._source_basename(current_path) != PRODUCTION_BATCH_SOURCE_BASENAME:
                     continue
                 database.TextFile.FileName = preview_data_path
                 bound += 1
