@@ -150,6 +150,11 @@ class PrinterStatusTests(unittest.TestCase):
         self.assertEqual(result.state, printer_status.STATE_UNAVAILABLE)
         self.assertIn("queue missing", result.detail)
 
+    def test_arbitrary_port_name_with_com_prefix_is_not_treated_as_local(self):
+        self.assertIsNone(
+            printer_status._local_connection_kind("COMMERCE-TSC")
+        )
+
     def test_ip_named_port_falls_back_to_raw_9100(self):
         endpoint = printer_status._endpoint_from_port_name("IP_192.168.1.50")
 
