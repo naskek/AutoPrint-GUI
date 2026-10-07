@@ -1501,7 +1501,7 @@ class App(ctk.CTk):
 
         self.printer_monitor_section = self._make_main_section(
             self.right_column_frame,
-            "Физические принтеры",
+            "Доступность принтеров",
         )
         self.printer_monitor_section.grid(
             row=1, column=0, sticky="nsew", pady=(8, 0)
@@ -3523,35 +3523,30 @@ class App(ctk.CTk):
             sorted(health_items, key=lambda item: item.printer_name.casefold())
         ):
             if health.state == STATE_AVAILABLE:
-                state_text = "Доступен"
                 color = "#4CAF50"
             elif health.state == STATE_UNAVAILABLE:
-                state_text = "Недоступен"
                 color = "#EF5350"
             else:
-                state_text = "Неизвестно"
                 color = "#9E9E9E"
 
             try:
                 row = ctk.CTkFrame(frame, fg_color="transparent")
-                row.grid(row=row_index, column=0, sticky="ew", padx=2, pady=2)
-                row.grid_columnconfigure(0, weight=1)
+                row.grid(row=row_index, column=0, sticky="ew", padx=2, pady=1)
+                row.grid_columnconfigure(1, weight=1)
                 ctk.CTkLabel(
                     row,
-                    text=f"● {health.printer_name} — {state_text}",
-                    anchor="w",
-                    justify="left",
+                    text="●",
+                    width=18,
+                    anchor="center",
                     text_color=color,
-                ).grid(row=0, column=0, sticky="ew", padx=2)
+                    font=("Arial", 16, "bold"),
+                ).grid(row=0, column=0, sticky="w", padx=(2, 3), pady=1)
                 ctk.CTkLabel(
                     row,
-                    text=health.detail,
+                    text=health.printer_name,
                     anchor="w",
                     justify="left",
-                    wraplength=300,
-                    text_color="#9E9E9E",
-                    font=("Arial", 11),
-                ).grid(row=1, column=0, sticky="ew", padx=(18, 2), pady=(0, 2))
+                ).grid(row=0, column=1, sticky="ew", padx=(0, 2), pady=1)
             except Exception:
                 continue
 
