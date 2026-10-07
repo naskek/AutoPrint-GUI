@@ -5,6 +5,7 @@ from functools import lru_cache
 import ipaddress
 import json
 import os
+import re
 import socket
 import subprocess
 from typing import Optional
@@ -65,16 +66,13 @@ _BLOCKING_STATUS_FLAGS = (
     (PRINTER_STATUS_SERVER_UNKNOWN, "статус print server неизвестен"),
 )
 
-_LOCAL_PORT_PREFIXES = (
-    "LPT",
-    "COM",
+_LOCAL_NAMED_PORTS = {
     "FILE:",
     "PORTPROMPT:",
     "NUL:",
     "XPSPORT:",
     "SHRFAX:",
-    "LOCALPORT",
-)
+}
 
 
 @dataclass(frozen=True)
@@ -111,9 +109,11 @@ def _first_port_name(value: str) -> str:
 
 def _local_connection_kind(port_name: str) -> Optional[str]:
     upper = str(port_name or "").strip().upper()
-    if upper.startswith("USB"):
+    if re.fullmatch(r"USB\\d+:?", upper):
         return CONNECTION_USB
-    if any(upper.startswith(prefix) for prefix in _LOCAL_PORT_PREFIXES):
+    if re.fullmatch(r"(?:LPT|COM)\\d+:?", upper):
+        return CONNECTION_LOCAL
+    if upper in _LOCAL_NAMED_PORTS:
         return CONNECTION_LOCAL
     return None
 
