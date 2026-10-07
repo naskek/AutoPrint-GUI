@@ -109,9 +109,9 @@ def _first_port_name(value: str) -> str:
 
 def _local_connection_kind(port_name: str) -> Optional[str]:
     upper = str(port_name or "").strip().upper()
-    if re.fullmatch(r"USB\\d+:?", upper):
+    if re.fullmatch(r"USB\d+:?", upper):
         return CONNECTION_USB
-    if re.fullmatch(r"(?:LPT|COM)\\d+:?", upper):
+    if re.fullmatch(r"(?:LPT|COM)\d+:?", upper):
         return CONNECTION_LOCAL
     if upper in _LOCAL_NAMED_PORTS:
         return CONNECTION_LOCAL
