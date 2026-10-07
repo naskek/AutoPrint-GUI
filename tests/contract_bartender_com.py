@@ -119,6 +119,7 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
             }
         }
         app._template_part_mode = Mock(return_value="manual")
+        app._ensure_printer_available_for_print = Mock(return_value=True)
 
         bt = bartender_com.BT(self.logger)
         fmt = Mock()
