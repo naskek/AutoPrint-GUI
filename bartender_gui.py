@@ -3567,10 +3567,18 @@ class App(ctk.CTk):
             state["_printer_health_after_id"] = None
 
     def _ensure_printer_available_for_print(self, printer_name, action="Печать"):
-        health = check_printer(
-            printer_name,
-            timeout=PRINTER_HEALTH_TIMEOUT_SEC,
-        )
+        try:
+            health = check_printer(
+                printer_name,
+                timeout=PRINTER_HEALTH_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            health = PrinterHealth(
+                printer_name=str(printer_name or ""),
+                state=STATE_UNKNOWN,
+                connection="unknown",
+                detail=f"ошибка проверки: {exc}",
+            )
         self._apply_printer_health(health)
 
         if health.state == STATE_UNAVAILABLE:
@@ -8734,8 +8742,13 @@ class App(ctk.CTk):
         prn = self._get_printer()
         if not prn:
             return
-        if not self._ensure_printer_available_for_print(prn, "Печать"):
-            return
+        try:
+            selected_fmt = (self.format_combo.get() or "").strip()
+        except Exception:
+            selected_fmt = ""
+        if selected_fmt and selected_fmt != "Auto":
+            if not self._ensure_printer_available_for_print(prn, "Печать"):
+                return
 
         copies = 1
         batch_size = self._get_batch_size() or total
