@@ -7275,6 +7275,8 @@ class App(ctk.CTk):
         if not prn:
             self.logger.err("Стикер: принтер не найден.")
             return
+        if not self._ensure_printer_available_for_print(prn, "Печать стикера"):
+            return
         sticker_path = resolve_sticker_template_path(self.cfg)
         if not sticker_path:
             self.logger.err(
@@ -8732,6 +8734,8 @@ class App(ctk.CTk):
         prn = self._get_printer()
         if not prn:
             return
+        if not self._ensure_printer_available_for_print(prn, "Печать"):
+            return
 
         copies = 1
         batch_size = self._get_batch_size() or total
@@ -8878,6 +8882,14 @@ class App(ctk.CTk):
                         last_fmt = fmt_name
                     except Exception:
                         pass
+
+                    if not prn:
+                        raise Exception("Принтер не выбран.")
+                    if not self._ensure_printer_available_for_print(
+                        prn,
+                        f"Пакет {bidx}",
+                    ):
+                        break
 
                     btw = self._get_btw_for_format(fmt_name)
                     if not btw:
