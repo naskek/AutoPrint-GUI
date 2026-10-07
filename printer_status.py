@@ -46,6 +46,7 @@ PRINTER_STATUS_SERVER_UNKNOWN = 0x00800000
 
 # Winspool.h PRINTER_ATTRIBUTE_* values used by the health check.
 PRINTER_ATTRIBUTE_NETWORK = 0x00000010
+PRINTER_ATTRIBUTE_FAX = 0x00004000
 PRINTER_ATTRIBUTE_WORK_OFFLINE = 0x00000400
 
 _BLOCKING_STATUS_FLAGS = (
@@ -67,6 +68,35 @@ _BLOCKING_STATUS_FLAGS = (
 )
 
 _LOCAL_NAMED_PORTS = {
+    "FILE:",
+    "PORTPROMPT:",
+    "NUL:",
+    "XPSPORT:",
+    "SHRFAX:",
+}
+
+# Windows does not expose one generic "virtual printer" attribute. Keep the
+# monitor conservative: explicitly exclude common document/fax/remote virtual
+# queues, but keep unknown vendor ports so real label printers are not hidden.
+_VIRTUAL_QUEUE_MARKERS = (
+    "microsoft print to pdf",
+    "microsoft xps document writer",
+    "onenote",
+    "fax",
+    "rustdesk printer",
+    "anydesk printer",
+    "adobe pdf",
+    "pdfcreator",
+    "cutepdf",
+    "bullzip",
+    "foxit pdf",
+    "nitro pdf",
+    "dopdf",
+    "pdf-xchange",
+    "snagit",
+)
+
+_VIRTUAL_PORTS = {
     "FILE:",
     "PORTPROMPT:",
     "NUL:",
@@ -116,6 +146,60 @@ def _local_connection_kind(port_name: str) -> Optional[str]:
     if upper in _LOCAL_NAMED_PORTS:
         return CONNECTION_LOCAL
     return None
+
+
+def _looks_virtual_queue(
+    printer_name: str = "",
+    driver_name: str = "",
+    port_name: str = "",
+    attributes: int = 0,
+) -> bool:
+    if int(attributes or 0) & PRINTER_ATTRIBUTE_FAX:
+        return True
+
+    combined = f"{printer_name} {driver_name}".casefold()
+    if any(marker in combined for marker in _VIRTUAL_QUEUE_MARKERS):
+        return True
+
+    port_upper = _first_port_name(port_name).upper()
+    return port_upper in _VIRTUAL_PORTS
+
+
+def is_physical_printer(printer_name: str) -> bool:
+    """Best-effort filter for the all-printers monitor.
+
+    Known virtual queues are excluded by queue/driver/port metadata. If a queue
+    cannot be opened, keep it in the monitor unless its name is explicitly
+    virtual: an unreachable physical printer is exactly what the monitor must
+    continue to show.
+    """
+    printer_name = str(printer_name or "").strip()
+    if not printer_name or printer_name == "(нет принтеров)":
+        return False
+    if _looks_virtual_queue(printer_name=printer_name):
+        return False
+    if win32print is None:
+        return True
+
+    handle = None
+    try:
+        handle = win32print.OpenPrinter(printer_name)
+        info = win32print.GetPrinter(handle, 2) or {}
+    except Exception:
+        return True
+    finally:
+        if handle is not None:
+            try:
+                win32print.ClosePrinter(handle)
+            except Exception:
+                pass
+
+    return not _looks_virtual_queue(
+        printer_name=printer_name,
+        driver_name=str(info.get("pDriverName") or ""),
+        port_name=str(info.get("pPortName") or ""),
+        attributes=int(info.get("Attributes") or 0),
+    )
 
 
 def _endpoint_from_port_name(port_name: str) -> Optional[TcpEndpoint]:
