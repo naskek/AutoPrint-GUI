@@ -321,7 +321,7 @@ def check_printer(printer_name: str, timeout: float = 0.75) -> PrinterHealth:
     if reasons:
         if not local_kind and (
             server_name
-            or printer_name.startswith("\\")
+            or printer_name.startswith("\\\\")
             or (attributes & PRINTER_ATTRIBUTE_NETWORK)
         ):
             connection = CONNECTION_SHARED
@@ -348,7 +348,7 @@ def check_printer(printer_name: str, timeout: float = 0.75) -> PrinterHealth:
             port_name=port_name,
         )
 
-    if server_name or printer_name.startswith("\\"):
+    if server_name or printer_name.startswith("\\\\"):
         return _available(
             printer_name,
             "удалённая очередь Windows доступна",
