@@ -11,6 +11,46 @@ class PrinterStatusTests(unittest.TestCase):
         api.GetPrinter.return_value = dict(info)
         return api
 
+    def test_connection_label_for_tcp_usb_and_wsd(self):
+        tcp = printer_status.PrinterHealth(
+            printer_name="TSC TCP",
+            state=printer_status.STATE_AVAILABLE,
+            connection=printer_status.CONNECTION_TCP,
+            detail="",
+            port_name="192.168.1.39",
+            host="192.168.1.39",
+            tcp_port=9100,
+        )
+        usb = printer_status.PrinterHealth(
+            printer_name="TSC USB",
+            state=printer_status.STATE_AVAILABLE,
+            connection=printer_status.CONNECTION_USB,
+            detail="",
+            port_name="USB001",
+        )
+        wsd = printer_status.PrinterHealth(
+            printer_name="HP",
+            state=printer_status.STATE_UNKNOWN,
+            connection=printer_status.CONNECTION_NETWORK,
+            detail="",
+            port_name="WSD-1234",
+        )
+
+        self.assertEqual(printer_status.connection_label(tcp), "TCP/IP")
+        self.assertEqual(printer_status.connection_label(usb), "USB")
+        self.assertEqual(printer_status.connection_label(wsd), "WSD/сеть")
+
+    def test_connection_label_infers_ip_named_port_when_health_is_unavailable(self):
+        health = printer_status.PrinterHealth(
+            printer_name="TSC offline",
+            state=printer_status.STATE_UNAVAILABLE,
+            connection=printer_status.CONNECTION_UNKNOWN,
+            detail="принтер offline",
+            port_name="IP_192.168.1.50",
+        )
+
+        self.assertEqual(printer_status.connection_label(health), "TCP/IP")
+
     def test_blocking_status_reports_offline_and_work_offline(self):
         reasons = printer_status.blocking_status_reasons(
             printer_status.PRINTER_STATUS_OFFLINE,
