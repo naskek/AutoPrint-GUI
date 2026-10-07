@@ -17,7 +17,6 @@ class PrinterHealthUiTests(unittest.TestCase):
         app.logger = Mock()
         app.prn_combo = Mock()
         app.prn_combo.get.return_value = selected_printer
-        app.printer_health_label = Mock()
         app._printer_health_last = None
         return app
 
@@ -47,7 +46,7 @@ class PrinterHealthUiTests(unittest.TestCase):
         )
         showerror.assert_called_once()
         self.assertIn("Печать не отправлена", showerror.call_args.args[1])
-        app.printer_health_label.configure.assert_called_once()
+        self.assertEqual(app._printer_health_last.state, STATE_UNAVAILABLE)
 
     @patch("bartender_gui.mb.showerror")
     @patch("bartender_gui.check_printer")
