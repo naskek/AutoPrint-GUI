@@ -155,6 +155,30 @@ class PrinterStatusTests(unittest.TestCase):
             printer_status._local_connection_kind("COMMERCE-TSC")
         )
 
+    def test_tcp_port_resolver_uses_configured_host_and_port(self):
+        completed = Mock(
+            returncode=0,
+            stdout='{"Host":"printer.example","Port":515,"Protocol":2}',
+        )
+        printer_status.resolve_tcp_endpoint.cache_clear()
+        try:
+            with patch.object(printer_status.os, "name", "nt"), patch.object(
+                printer_status.subprocess,
+                "run",
+                return_value=completed,
+            ) as run:
+                endpoint = printer_status.resolve_tcp_endpoint("Production-Port")
+
+            self.assertEqual(
+                endpoint,
+                printer_status.TcpEndpoint("printer.example", 515),
+            )
+            command = run.call_args.args[0][-1]
+            self.assertIn("Win32_TCPIPPrinterPort", command)
+            self.assertIn("Production-Port", command)
+        finally:
+            printer_status.resolve_tcp_endpoint.cache_clear()
+
     def test_ip_named_port_falls_back_to_raw_9100(self):
         endpoint = printer_status._endpoint_from_port_name("IP_192.168.1.50")
 
