@@ -188,5 +188,62 @@ class PrinterStatusTests(unittest.TestCase):
         )
 
 
+    def test_microsoft_print_to_pdf_is_excluded_from_physical_monitor(self):
+        api = Mock()
+        with patch.object(printer_status, "win32print", api):
+            result = printer_status.is_physical_printer("Microsoft Print to PDF")
+
+        self.assertFalse(result)
+        api.OpenPrinter.assert_not_called()
+
+    def test_rustdesk_virtual_printer_is_excluded_from_physical_monitor(self):
+        api = Mock()
+        with patch.object(printer_status, "win32print", api):
+            result = printer_status.is_physical_printer("RustDesk Printer")
+
+        self.assertFalse(result)
+        api.OpenPrinter.assert_not_called()
+
+    def test_usb_label_printer_is_kept_in_physical_monitor(self):
+        api = self._win32print(
+            {
+                "pPortName": "USB001",
+                "pDriverName": "TSC TE310",
+                "Attributes": 0,
+            }
+        )
+        with patch.object(printer_status, "win32print", api):
+            result = printer_status.is_physical_printer("TSC TE310")
+
+        self.assertTrue(result)
+        api.ClosePrinter.assert_called_once()
+
+    def test_unknown_vendor_port_is_kept_to_avoid_hiding_physical_printer(self):
+        api = self._win32print(
+            {
+                "pPortName": "TSC_VENDOR_PORT",
+                "pDriverName": "TSC TE310",
+                "Attributes": 0,
+            }
+        )
+        with patch.object(printer_status, "win32print", api):
+            result = printer_status.is_physical_printer("TSC TE310 - 2")
+
+        self.assertTrue(result)
+
+    def test_fax_attribute_is_excluded_from_physical_monitor(self):
+        api = self._win32print(
+            {
+                "pPortName": "CustomFaxPort",
+                "pDriverName": "Vendor Fax Driver",
+                "Attributes": printer_status.PRINTER_ATTRIBUTE_FAX,
+            }
+        )
+        with patch.object(printer_status, "win32print", api):
+            result = printer_status.is_physical_printer("Office Fax")
+
+        self.assertFalse(result)
+
+
 if __name__ == "__main__":
     unittest.main()
