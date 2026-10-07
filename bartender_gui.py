@@ -61,6 +61,7 @@ from printer_status import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
     check_printer,
+    connection_label,
     is_physical_printer,
 )
 
@@ -1483,21 +1484,7 @@ class App(ctk.CTk):
             state="readonly",
             command=self._on_printer_change,
         )
-        self.prn_combo.grid(row=2, column=1, sticky="ew", padx=10, pady=(5, 5))
-        ctk.CTkLabel(source_body, text="Состояние:", anchor="w").grid(
-            row=3, column=0, sticky="nw", padx=10, pady=(5, 10)
-        )
-        self.printer_health_label = ctk.CTkLabel(
-            source_body,
-            text="● Проверка…",
-            anchor="w",
-            justify="left",
-            wraplength=300,
-            text_color="#9E9E9E",
-        )
-        self.printer_health_label.grid(
-            row=3, column=1, sticky="ew", padx=10, pady=(5, 10)
-        )
+        self.prn_combo.grid(row=2, column=1, sticky="ew", padx=10, pady=(5, 10))
 
         self.printer_monitor_section = self._make_main_section(
             self.right_column_frame,
@@ -3477,22 +3464,7 @@ class App(ctk.CTk):
             current = ""
         if current and health.printer_name and current != health.printer_name:
             return
-
-        if health.state == STATE_AVAILABLE:
-            text = f"● Доступен — {health.detail}"
-            color = "#4CAF50"
-        elif health.state == STATE_UNAVAILABLE:
-            text = f"● Недоступен — {health.detail}"
-            color = "#EF5350"
-        else:
-            text = f"● Неизвестно — {health.detail}"
-            color = "#9E9E9E"
-
         self._printer_health_last = health
-        try:
-            self.printer_health_label.configure(text=text, text_color=color)
-        except Exception:
-            pass
 
     def _apply_printer_monitor(self, health_items):
         health_items = list(health_items or [])
@@ -3546,7 +3518,15 @@ class App(ctk.CTk):
                     text=health.printer_name,
                     anchor="w",
                     justify="left",
-                ).grid(row=0, column=1, sticky="ew", padx=(0, 2), pady=1)
+                ).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=1)
+                ctk.CTkLabel(
+                    row,
+                    text=connection_label(health),
+                    width=92,
+                    anchor="e",
+                    text_color="#9E9E9E",
+                    font=("Arial", 11),
+                ).grid(row=0, column=2, sticky="e", padx=(4, 2), pady=1)
             except Exception:
                 continue
 
