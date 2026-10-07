@@ -139,9 +139,9 @@ def _endpoint_from_port_name(port_name: str) -> Optional[TcpEndpoint]:
 def resolve_tcp_endpoint(port_name: str) -> Optional[TcpEndpoint]:
     """Resolve a Windows printer port to its configured TCP endpoint.
 
-    Get-PrinterPort is used because arbitrary Standard TCP/IP port names do not
-    have to contain the printer IP address. The fallback only handles port names
-    that are themselves an IP address (or IP_/TCP_ prefixed).
+    Win32_TCPIPPrinterPort is used because arbitrary Standard TCP/IP port names
+    do not have to contain the printer IP address. The fallback only handles port
+    names that are themselves an IP address (or IP_/TCP_ prefixed).
     """
     port_name = _first_port_name(port_name)
     if not port_name:
@@ -154,10 +154,11 @@ def resolve_tcp_endpoint(port_name: str) -> Optional[TcpEndpoint]:
     escaped = port_name.replace("'", "''")
     script = (
         "$ErrorActionPreference='Stop';"
-        f"$p=Get-PrinterPort -Name '{escaped}' | Select-Object -First 1;"
+        "$p=Get-CimInstance -ClassName Win32_TCPIPPrinterPort | "
+        f"Where-Object {{ $_.Name -eq '{escaped}' }} | Select-Object -First 1;"
         "if ($null -eq $p) { exit 2 };"
         "[pscustomobject]@{"
-        "Host=[string]$p.PrinterHostAddress;"
+        "Host=[string]$p.HostAddress;"
         "Port=[int]$p.PortNumber;"
         "Protocol=[int]$p.Protocol"
         "} | ConvertTo-Json -Compress"
