@@ -122,6 +122,27 @@ class PrinterHealth:
     tcp_port: Optional[int] = None
 
 
+def connection_label(health: PrinterHealth) -> str:
+    """Return a compact transport/port label for the printer monitor."""
+    if health.connection == CONNECTION_TCP:
+        return "TCP/IP"
+    if health.connection == CONNECTION_USB:
+        return "USB"
+    if health.connection == CONNECTION_SHARED:
+        return "Сетевая очередь"
+    if health.connection == CONNECTION_NETWORK:
+        return "WSD/сеть" if health.port_name.upper().startswith("WSD-") else "Сеть"
+    if health.connection == CONNECTION_LOCAL:
+        return "Локальный порт"
+
+    port_name = str(health.port_name or "").strip()
+    if _endpoint_from_port_name(port_name) is not None:
+        return "TCP/IP"
+    if port_name.upper().startswith("WSD-"):
+        return "WSD/сеть"
+    return "Неизвестно"
+
+
 def blocking_status_reasons(status: int, attributes: int = 0) -> tuple[str, ...]:
     reasons = [
         label
