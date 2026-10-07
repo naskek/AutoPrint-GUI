@@ -101,8 +101,9 @@ class PrinterHealthUiTests(unittest.TestCase):
         app.csv_path = "input.csv"
         app.csv_rows = [{"DM": "code"}]
         app.format_combo = Mock()
-        app.format_combo.get.return_value = "Auto"
+        app.format_combo.get.return_value = "16x16"
         app.part_entry = Mock()
+        app._template_requires_manual_part = Mock(return_value=False)
         app._resolve_print_selection_for_action = Mock(return_value=(1, 1, 1))
         app._get_printer = Mock(return_value="Main Printer")
         app._ensure_printer_available_for_print = Mock(return_value=False)
