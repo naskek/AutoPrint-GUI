@@ -55,6 +55,13 @@ from services.crpt_settings import load_crpt_settings, set_runtime_overrides
 from services.crpt_token_manager import get_token_manager, CrptTokenError
 from services import crpt_auth
 from licensing import ensure_license_or_exit
+from printer_status import (
+    PrinterHealth,
+    STATE_AVAILABLE,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    check_printer,
+)
 
 BASE_DIR = get_base_dir()
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
@@ -107,6 +114,8 @@ PATH_RESIZE_DEBOUNCE_MS = 80
 CSV_SCROLLBAR_RESIZE_DEBOUNCE_MS = 120
 PREVIEW_RESIZE_DEBOUNCE_MS = 160
 LIVE_PREVIEW_DEBOUNCE_MS = 400
+PRINTER_HEALTH_INTERVAL_MS = 5000
+PRINTER_HEALTH_TIMEOUT_SEC = 0.75
 TOP_LEVEL_MENU_ORDER = ("Каталог", "Шаблоны", "Работа с кодами")
 CODES_MENU_ORDER = ("Проверка кодов", "Отчёт о вводе в оборот")
 PRINT_SELECTION_MODE_RANGE = "Диапазон"
@@ -862,6 +871,10 @@ class App(ctk.CTk):
         self._live_preview_requested = False
         self._live_preview_generation = 0
         self._preview_temp_dir = None
+        self._printer_health_after_id = None
+        self._printer_health_poll_after_id = None
+        self._printer_health_generation = 0
+        self._printer_health_last = None
         self.product_map = {}
 
         self._build_ui()
@@ -1466,9 +1479,23 @@ class App(ctk.CTk):
             source_body,
             values=["(нет принтеров)"],
             state="readonly",
-            command=lambda _value: self._refresh_runtime_status(),
+            command=self._on_printer_change,
         )
-        self.prn_combo.grid(row=2, column=1, sticky="ew", padx=10, pady=(5, 10))
+        self.prn_combo.grid(row=2, column=1, sticky="ew", padx=10, pady=(5, 5))
+        ctk.CTkLabel(source_body, text="Состояние:", anchor="w").grid(
+            row=3, column=0, sticky="nw", padx=10, pady=(5, 10)
+        )
+        self.printer_health_label = ctk.CTkLabel(
+            source_body,
+            text="● Проверка…",
+            anchor="w",
+            justify="left",
+            wraplength=300,
+            text_color="#9E9E9E",
+        )
+        self.printer_health_label.grid(
+            row=3, column=1, sticky="ew", padx=10, pady=(5, 10)
+        )
         self.btw16_entry = ctk.CTkEntry(source_body)
         self.btw30_entry = ctk.CTkEntry(source_body)
 
@@ -3199,6 +3226,10 @@ class App(ctk.CTk):
             except Exception:
                 pass
         state["_live_preview_after_id"] = None
+        state["_printer_health_generation"] = int(
+            state.get("_printer_health_generation", 0)
+        ) + 1
+        self._cancel_printer_health_callbacks()
         self._cleanup_preview_temp_dir()
         self._close_date_popover()
         version_closer = getattr(type(self), "_close_version_dialog", None)
@@ -3403,6 +3434,168 @@ class App(ctk.CTk):
     def _template_requires_manual_part(self, template_id: str) -> bool:
         return self._template_part_mode(template_id) == "manual"
 
+    def _on_printer_change(self, _value=None):
+        self._refresh_runtime_status()
+        self._schedule_printer_health_check(immediate=True)
+
+    def _apply_printer_health(self, health: PrinterHealth):
+        if health is None:
+            return
+        try:
+            current = (self.prn_combo.get() or "").strip()
+        except Exception:
+            current = ""
+        if current and health.printer_name and current != health.printer_name:
+            return
+
+        if health.state == STATE_AVAILABLE:
+            text = f"● Доступен — {health.detail}"
+            color = "#4CAF50"
+        elif health.state == STATE_UNAVAILABLE:
+            text = f"● Недоступен — {health.detail}"
+            color = "#EF5350"
+        else:
+            text = f"● Неизвестно — {health.detail}"
+            color = "#9E9E9E"
+
+        self._printer_health_last = health
+        try:
+            self.printer_health_label.configure(text=text, text_color=color)
+        except Exception:
+            pass
+
+    def _cancel_printer_health_callbacks(self):
+        state = self.__dict__
+        for key in ("_printer_health_after_id", "_printer_health_poll_after_id"):
+            pending = state.get(key)
+            if pending is not None:
+                try:
+                    object.__getattribute__(self, "after_cancel")(pending)
+                except Exception:
+                    pass
+            state[key] = None
+
+    def _schedule_printer_health_check(self, immediate=False):
+        state = self.__dict__
+        if state.get("_shutdown_started", False):
+            return
+
+        generation = int(state.get("_printer_health_generation", 0)) + 1
+        state["_printer_health_generation"] = generation
+        self._cancel_printer_health_callbacks()
+
+        def launch():
+            state["_printer_health_after_id"] = None
+            if generation != state.get("_printer_health_generation", 0):
+                return
+            if state.get("_shutdown_started", False):
+                return
+            try:
+                printer_name = (self.prn_combo.get() or "").strip()
+            except Exception:
+                printer_name = ""
+
+            if not printer_name or printer_name == "(нет принтеров)":
+                self._apply_printer_health(
+                    PrinterHealth(
+                        printer_name=printer_name,
+                        state=STATE_UNKNOWN,
+                        connection="unknown",
+                        detail="принтер не выбран",
+                    )
+                )
+                return
+
+            result_holder = {}
+
+            def worker():
+                try:
+                    result_holder["health"] = check_printer(
+                        printer_name,
+                        timeout=PRINTER_HEALTH_TIMEOUT_SEC,
+                    )
+                except Exception as exc:
+                    result_holder["health"] = PrinterHealth(
+                        printer_name=printer_name,
+                        state=STATE_UNKNOWN,
+                        connection="unknown",
+                        detail=f"ошибка проверки: {exc}",
+                    )
+
+            thread = threading.Thread(
+                target=worker,
+                name="AutoPrintPrinterHealth",
+                daemon=True,
+            )
+            thread.start()
+
+            def poll():
+                state["_printer_health_poll_after_id"] = None
+                if generation != state.get("_printer_health_generation", 0):
+                    return
+                if state.get("_shutdown_started", False):
+                    return
+                if thread.is_alive():
+                    try:
+                        after = object.__getattribute__(self, "after")
+                        state["_printer_health_poll_after_id"] = after(100, poll)
+                    except Exception:
+                        state["_printer_health_poll_after_id"] = None
+                    return
+
+                health = result_holder.get("health")
+                if health is not None:
+                    self._apply_printer_health(health)
+                try:
+                    after = object.__getattribute__(self, "after")
+                    state["_printer_health_after_id"] = after(
+                        PRINTER_HEALTH_INTERVAL_MS,
+                        lambda: self._schedule_printer_health_check(immediate=True),
+                    )
+                except Exception:
+                    state["_printer_health_after_id"] = None
+
+            poll()
+
+        try:
+            after = object.__getattribute__(self, "after")
+            state["_printer_health_after_id"] = after(
+                0 if immediate else PRINTER_HEALTH_INTERVAL_MS,
+                launch,
+            )
+        except Exception:
+            state["_printer_health_after_id"] = None
+
+    def _ensure_printer_available_for_print(self, printer_name, action="Печать"):
+        health = check_printer(
+            printer_name,
+            timeout=PRINTER_HEALTH_TIMEOUT_SEC,
+        )
+        self._apply_printer_health(health)
+
+        if health.state == STATE_UNAVAILABLE:
+            message = (
+                f"{action}: принтер '{printer_name}' недоступен.\n"
+                f"{health.detail}\n\n"
+                "Печать не отправлена."
+            )
+            try:
+                self.logger.err(message.replace("\n", " "))
+            except Exception:
+                pass
+            mb.showerror("Принтер недоступен", message)
+            return False
+
+        if health.state == STATE_UNKNOWN:
+            try:
+                self.logger.log(
+                    f"{action}: состояние принтера '{printer_name}' не удалось "
+                    f"подтвердить ({health.detail}); печать продолжается."
+                )
+            except Exception:
+                pass
+        return True
+
     def _get_printer_values(self):
         try:
             values = list(self.prn_combo.cget("values") or [])
@@ -3458,6 +3651,7 @@ class App(ctk.CTk):
         if not target:
             target = self._pick_printer_by_keywords(("TSC310", "TSC 310", "TSC TE310", "TE310"))
         self.prn_combo.set(target or items[0])
+        self._schedule_printer_health_check(immediate=True)
 
     def _set_default_printer_for_format(self, fmt: str):
         """Выбирает принтер по умолчанию для формата, если он есть в списке."""
@@ -3468,7 +3662,10 @@ class App(ctk.CTk):
         target = self._match_printer_value(pref)
         if target:
             try:
+                previous = self.prn_combo.get()
                 self.prn_combo.set(target)
+                if target != previous:
+                    self._schedule_printer_health_check(immediate=True)
             except Exception:
                 pass
             return
@@ -3476,7 +3673,10 @@ class App(ctk.CTk):
         target = self._pick_printer_by_keywords(preferred)
         if target:
             try:
+                previous = self.prn_combo.get()
                 self.prn_combo.set(target)
+                if target != previous:
+                    self._schedule_printer_health_check(immediate=True)
             except Exception:
                 pass
 
