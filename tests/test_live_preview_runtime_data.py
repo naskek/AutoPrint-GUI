@@ -141,6 +141,68 @@ class LivePreviewRuntimeDataTests(unittest.TestCase):
         self.assertFalse(fmt.PrintSetup.UseDatabase)
         fmt.ExportToFile.assert_called_once()
 
+    def test_database_lookup_error_aborts_export_instead_of_showing_stale_mark(self):
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = Mock(Count=1)
+        fmt.Databases.GetDatabase.side_effect = RuntimeError(
+            "Невозможно найти базу данных 12345678."
+        )
+        self.bt.apply_fields(fmt, self._runtime_row())
+
+        with tempfile.TemporaryDirectory() as root:
+            self.assertFalse(
+                self.bt.export_preview(fmt, os.path.join(root, "preview_1.png"))
+            )
+
+        fmt.Databases.GetDatabase.assert_called_once_with(1)
+        fmt.ExportToFile.assert_not_called()
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+        self.assertIsNone(self.bt._preview_fields)
+        self.assertTrue(
+            any(
+                "Databases.GetDatabase" in str(call.args)
+                for call in self.logger.err.call_args_list
+            )
+        )
+
+    def test_database_path_set_error_aborts_export_and_identifies_stage(self):
+        class RejectFileName:
+            @property
+            def FileName(self):
+                return r"C:\production\tmp_batch.csv"
+
+            @FileName.setter
+            def FileName(self, path):
+                raise RuntimeError("COM rejected path")
+
+        database = SimpleNamespace(
+            Type=bartender_com.BT_TEXT_FILE_DATABASE,
+            TextFile=RejectFileName(),
+        )
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = _Databases(database)
+        fmt.PrintSetup = SimpleNamespace(UseDatabase=False)
+        self.bt.apply_fields(fmt, self._runtime_row())
+
+        with tempfile.TemporaryDirectory() as root:
+            self.assertFalse(
+                self.bt.export_preview(fmt, os.path.join(root, "preview_1.png"))
+            )
+
+        fmt.ExportToFile.assert_not_called()
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+        self.assertFalse(fmt.PrintSetup.UseDatabase)
+        self.assertTrue(
+            any(
+                "TextFile.FileName (запись)" in str(call.args)
+                for call in self.logger.err.call_args_list
+            )
+        )
+
     def test_opening_new_format_clears_stale_preview_row(self):
         self.bt._preview_fields = self._runtime_row()
         opened = Mock()
