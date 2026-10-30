@@ -24,7 +24,7 @@ def parse_dm93(raw: str, expected_gtin: str = "") -> tuple[str, str, str]:
     if expected_gtin and gtin != expected_gtin:
         raise ValueError("GTIN does not match the source column")
     digits = [int(c) for c in gtin]
-    total = sum(d * (3 if (13 - idx) % 2 == 0 else 1) for idx, d in enumerate(digits[:13]))
+    total = sum(d * (3 if idx % 2 == 0 else 1) for idx, d in enumerate(digits[:13]))
     check = (10 - total % 10) % 10
     if check != digits[13]:
         raise ValueError("invalid GTIN check digit")
