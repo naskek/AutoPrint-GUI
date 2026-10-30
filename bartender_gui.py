@@ -780,6 +780,9 @@ class App(ctk.CTk):
                     self.logger.err(f"Не удалось записать tmp_batch.csv: {e}")
             except Exception:
                 pass
+            # Never proceed with an old batch file after a failed write:
+            # it may contain previously printed unique marking codes.
+            raise RuntimeError("Не удалось записать текущий tmp_batch.csv; печать остановлена.") from e
         return path
 
 
