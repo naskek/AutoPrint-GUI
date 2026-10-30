@@ -168,39 +168,28 @@ class BT:
 
         bound = 0
         for index in range(1, count + 1):
-            stage = "Databases.GetDatabase"
             try:
                 database = databases.GetDatabase(index)
-                stage = "Database.Type"
                 if int(database.Type) != BT_TEXT_FILE_DATABASE:
                     continue
-                stage = "TextFile.FileName (чтение)"
-                text_file = database.TextFile
-                current_path = text_file.FileName
+                current_path = database.TextFile.FileName
                 if self._source_basename(current_path) != PRODUCTION_BATCH_SOURCE_BASENAME:
                     continue
-                stage = "TextFile.FileName (запись)"
-                text_file.FileName = preview_data_path
+                database.TextFile.FileName = preview_data_path
                 bound += 1
             except Exception as e:
-                raise RuntimeError(
-                    f"Preview DB: ошибка БД #{index}, этап {stage}: {e}"
-                ) from e
+                self.logger.err(
+                    f"Preview DB: не удалось перепривязать текстовую БД #{index}: {e}"
+                )
 
         if bound:
             try:
                 fmt.PrintSetup.UseDatabase = True
             except Exception as e:
-                raise RuntimeError(
-                    f"Preview DB: не удалось включить PrintSetup.UseDatabase: {e}"
-                ) from e
+                self.logger.err(f"Preview DB: не удалось включить UseDatabase: {e}")
+                return 0
             self.logger.log(
                 f"Preview DB: временный источник подключён ({bound}): {preview_data_path}"
-            )
-        elif count:
-            self.logger.log(
-                f"Preview DB: источник {PRODUCTION_BATCH_SOURCE_BASENAME} "
-                f"не обнаружен среди {count} подключений; перепривязка не выполнена."
             )
         return bound
 
