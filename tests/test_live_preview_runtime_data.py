@@ -30,7 +30,7 @@ class LivePreviewRuntimeDataTests(unittest.TestCase):
             "EXP_DATE": "12.10.2026",
             "PROD_DATE": "05.10.2026",
             "PART_NUM": "12345",
-            "DM": "010460123456789021ABC",
+            "DM": '010460123456789021ABC"DEF,GHIJK\x1d93Q1!a',
             "NUM": "7",
             "_FORMAT": "16x16",
             "IGNORED": "not part of production batch contract",
@@ -90,6 +90,8 @@ class LivePreviewRuntimeDataTests(unittest.TestCase):
         self.assertEqual(row["PROD_DATE"], "05.10.2026")
         self.assertEqual(row["PART_NUM"], "12345")
         self.assertEqual(row["NUM"], "7")
+        self.assertEqual(row["DM"], self._runtime_row()["DM"])
+        self.assertEqual(row["DM"].count("\x1d"), 1)
         self.assertNotIn("IGNORED", row)
         self.assertTrue(fmt.PrintSetup.UseDatabase)
         fmt.ExportToFile.assert_called_once_with(
