@@ -76,6 +76,19 @@ class GS1BatchSafetyTests(unittest.TestCase):
             self.assertEqual([r["DM"] for r in data], values)
             self.assertEqual([r["NUM"] for r in data], ["1", "2"])
 
+    def test_failed_tmp_batch_write_never_returns_stale_path(self):
+        self.app.REQ_COLS = list(bartender_gui.DEFAULT_REQ_COLS)
+        self.app._bool_var = Mock(return_value=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            self.app.cfg = {"legacy_tmp_dir": str(Path(tmp) / "unused")}
+            # Open-for-write fails because tmp is an existing directory.
+            with self.assertRaisesRegex(RuntimeError, "печать остановлена"):
+                self.app._write_tmp_batch_csv(
+                    [{"DM": synthetic_dm("123456789ABCD")}],
+                    path=tmp,
+                    add_calib=False,
+                )
+
     def test_database_dm_never_eligible_for_direct_fallback(self):
         self.assertTrue(self.app._requires_database_dm(
             {"db_fields": ["DM", "ShortName"], "named_fields": ["NUM"]}
