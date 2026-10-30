@@ -58,10 +58,12 @@ def inspect_btw(path: Path) -> int:
                 return 2
         return 0
     finally:
-        if fmt is not None:
-            fmt.Close(1)  # btDoNotSaveChanges
-        if app is not None:
-            app.Quit(1)  # btDoNotSaveChanges
+        try:
+            if fmt is not None:
+                fmt.Close(1)  # btDoNotSaveChanges
+        finally:
+            if app is not None:
+                app.Quit(1)  # btDoNotSaveChanges
         if sha256(path) != original:
             raise RuntimeError("BTW CHANGED unexpectedly: abort verification")
         print("BTW SHA256 unchanged; NO Print/PrintOut called")
