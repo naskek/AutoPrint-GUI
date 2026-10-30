@@ -19,13 +19,13 @@ def sha256(path: Path) -> str:
 
 
 def inspect_btw(path: Path) -> int:
-    from win32com.client import Dispatch
+    from win32com.client import DispatchEx
 
     original = sha256(path)
     app = None
     fmt = None
     try:
-        app = Dispatch("BarTender.Application")
+        app = DispatchEx("BarTender.Application")
         app.Visible = False
         fmt = app.Formats.Open(str(path), False, "")
         for kind, label in ((0, "NamedSubStrings"), (1, "Database Fields"), (2, "Template Fields")):
