@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import csv
 import os
 
 try:
@@ -12,12 +13,24 @@ BT_DO_NOT_SAVE_CHANGES = 1
 BT_COLORS_24BIT = 4
 BT_PRINT_SUCCESS = 0
 PREVIEW_BACKGROUND_WHITE = 0xFFFFFF
+BT_TEXT_FILE_DATABASE = 0
+PRODUCTION_BATCH_SOURCE_BASENAME = "tmp_batch.csv"
+PREVIEW_DATA_FIELDS = (
+    "ShortName",
+    "ShortGTIN",
+    "EXP_DATE",
+    "PROD_DATE",
+    "PART_NUM",
+    "DM",
+    "NUM",
+)
 
 
 class BT:
     def __init__(self, logger):
         self.logger = logger
         self.app = None
+        self._preview_fields = None
 
     def start(self):
         if not Dispatch:
@@ -38,6 +51,7 @@ class BT:
                 self.app = None
 
     def open_format(self, path):
+        self._preview_fields = None
         self.logger.log(f"Открытие шаблона: {path}")
         fmt = self.app.Formats.Open(path, False, "")
         try:
@@ -56,6 +70,12 @@ class BT:
 
     def apply_fields(self, fmt, data: dict):
         """Подставляет значения в NamedSubStrings шаблона."""
+        self._preview_fields = {
+            key: value
+            for key, value in data.items()
+            if not str(key).startswith("_")
+        }
+
         names = set()
         try:
             names = {s.Name for s in fmt.NamedSubStrings}
@@ -116,14 +136,76 @@ class BT:
                 f"BT Preview Message: {prefix}: {text}" if prefix else f"BT Preview Message: {text}"
             )
 
+    def _write_preview_data_file(self, directory):
+        fields = self._preview_fields or {}
+        path = os.path.join(directory, "preview_data.csv")
+        with open(path, "w", encoding="utf-8-sig", newline="") as stream:
+            writer = csv.DictWriter(
+                stream,
+                fieldnames=PREVIEW_DATA_FIELDS,
+                delimiter="\t",
+            )
+            writer.writeheader()
+            writer.writerow(
+                {
+                    key: (fields.get(key, "") or "")
+                    for key in PREVIEW_DATA_FIELDS
+                }
+            )
+        return path
+
+    @staticmethod
+    def _source_basename(path):
+        return str(path or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+    def _bind_preview_text_databases(self, fmt, preview_data_path):
+        try:
+            databases = fmt.Databases
+            count = int(databases.Count or 0)
+        except Exception as e:
+            self.logger.log(f"Preview DB: Databases недоступен: {e}")
+            return 0
+
+        bound = 0
+        for index in range(1, count + 1):
+            try:
+                database = databases.GetDatabase(index)
+                if int(database.Type) != BT_TEXT_FILE_DATABASE:
+                    continue
+                current_path = database.TextFile.FileName
+                if self._source_basename(current_path) != PRODUCTION_BATCH_SOURCE_BASENAME:
+                    continue
+                database.TextFile.FileName = preview_data_path
+                bound += 1
+            except Exception as e:
+                self.logger.err(
+                    f"Preview DB: не удалось перепривязать текстовую БД #{index}: {e}"
+                )
+
+        if bound:
+            try:
+                fmt.PrintSetup.UseDatabase = True
+            except Exception as e:
+                self.logger.err(f"Preview DB: не удалось включить UseDatabase: {e}")
+                return 0
+            self.logger.log(
+                f"Preview DB: временный источник подключён ({bound}): {preview_data_path}"
+            )
+        return bound
+
     def export_preview(self, fmt, path):
         """Экспортирует изображение шаблона как в production v3.2.4."""
         output_path = str(path).replace("%PageNumber%", "1")
         directory = os.path.dirname(os.path.abspath(output_path))
         try:
             os.makedirs(directory, exist_ok=True)
+            if self._preview_fields:
+                preview_data_path = self._write_preview_data_file(directory)
+                self._bind_preview_text_databases(fmt, preview_data_path)
             fmt.ExportToFile(output_path, "PNG", 1, 300, 0)
             return True
         except Exception as e:
             self.logger.err(f"Не удалось экспортировать превью в '{output_path}': {e}")
             return False
+        finally:
+            self._preview_fields = None
