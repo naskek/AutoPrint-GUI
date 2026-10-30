@@ -5665,6 +5665,51 @@ class App(ctk.CTk):
                 out[key] = v
         return out
 
+    @staticmethod
+    def _requires_database_dm(batch_report) -> bool:
+        """Database-backed DM must never fall back to named-source printing."""
+        report = batch_report or {}
+        return "DM" in set(report.get("db_fields") or []) or "DM" in set(
+            report.get("template_fields") or []
+        )
+
+    def _verify_dm_batch_database(self, fmt, expected_path: str) -> bool:
+        """Fail closed unless the documented COM Databases collection proves binding."""
+        expected = os.path.normcase(os.path.abspath(expected_path))
+        try:
+            databases = fmt.Databases
+            count = int(databases.Count or 0)
+        except Exception as exc:
+            self.logger.err(f"DM batch: нельзя проверить Databases: {exc}")
+            return False
+        for index in range(1, count + 1):
+            try:
+                db = databases.GetDatabase(index)
+                if int(db.Type) != 0:  # btTextFile
+                    continue
+                paths = []
+                try:
+                    paths.append(str(db.FileName or ""))
+                except Exception:
+                    pass
+                try:
+                    paths.append(str(db.TextFile.FileName or ""))
+                except Exception:
+                    pass
+                if any(
+                    path and os.path.normcase(os.path.abspath(path)) == expected
+                    for path in paths
+                ):
+                    return True
+            except Exception as exc:
+                self.logger.err(f"DM batch: ошибка проверки Databases[{index}]: {exc}")
+                return False
+        self.logger.err(
+            "DM batch: ни одно текстовое подключение BarTender не указывает "
+            f"на текущий tmp_batch.csv ({expected})."
+        )
+        return False
+
     def _check_template_db(self, fmt, expected_path: str):
         """
         Проверяет, привязан ли шаблон BarTender к ожидаемому tmp_batch.csv.
@@ -8715,6 +8760,22 @@ class App(ctk.CTk):
                             )
                         except Exception:
                             pass
+
+                    # A database-bound marking code cannot be represented by
+                    # NamedSubStrings if its text database was not verified.
+                    if self._requires_database_dm(batch_report):
+                        if can_use_tmp_batch:
+                            can_use_tmp_batch = self._verify_dm_batch_database(
+                                fmt, tmp_csv_path
+                            )
+                        if not can_use_tmp_batch:
+                            self.logger.err(
+                                f"Пакет {bidx}: печать кодов маркировки остановлена: "
+                                "нет подтверждённой связи DB-поля DM с tmp_batch.csv. "
+                                "Прямая подстановка запрещена, чтобы не напечатать "
+                                "повторные или шаблонные марки."
+                            )
+                            break
 
                     self._pause_wait()
                     if self._should_stop():
