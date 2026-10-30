@@ -40,7 +40,7 @@ class GS1BatchSafetyTests(unittest.TestCase):
     def test_parser_rejects_missing_or_moved_gs_and_wrong_gtin(self):
         raw = synthetic_dm("123456789ABCD")
         with self.assertRaisesRegex(ValueError, "boundary"):
-            parse_dm93(raw.replace(GS, "", 1))
+            parse_dm93(raw.replace(GS, "X", 1))
         with self.assertRaisesRegex(ValueError, "GTIN does not match"):
             parse_dm93(raw, "04640430910776")
         with self.assertRaisesRegex(ValueError, "check digit"):
