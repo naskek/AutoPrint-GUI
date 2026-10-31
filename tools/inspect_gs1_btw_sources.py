@@ -94,7 +94,6 @@ def inspect_btw(path: Path) -> int:
             except Exception as exc:
                 print(f"DB[{database_name}].{label}: ERROR {exc}")
         return 0
-        return 0
     finally:
         try:
             if fmt is not None:
