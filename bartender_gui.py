@@ -47,6 +47,7 @@ from catalog_store import (
     get_catalog_db_path,
 )
 from bartender_com import BT
+from gs1_batch_contract import verify_dm_batch_database
 from crpt_client import (
     crpt_check_statuses_sync, parse_codes, normalize_code,
     crpt_check_connection_sync
@@ -780,6 +781,9 @@ class App(ctk.CTk):
                     self.logger.err(f"Не удалось записать tmp_batch.csv: {e}")
             except Exception:
                 pass
+            # Never proceed with an old batch file after a failed write:
+            # it may contain previously printed unique marking codes.
+            raise RuntimeError("Не удалось записать текущий tmp_batch.csv; печать остановлена.") from e
         return path
 
 
@@ -5665,6 +5669,23 @@ class App(ctk.CTk):
                 out[key] = v
         return out
 
+    @staticmethod
+    def _requires_database_dm(batch_report) -> bool:
+        """Never use a direct per-row fallback for DB-backed or GS1 DM."""
+        report = batch_report or {}
+        if "DM" in set(report.get("db_fields") or []) or "DM" in set(
+            report.get("template_fields") or []
+        ):
+            return True
+        # These three sources are computed by BarTender VBScript from the
+        # current database record, not by SetNamedSubStringValue.
+        names = set(report.get("named_fields") or [])
+        return bool({"GS1_GTIN", "GS1_SERIAL", "GS1_CRYPTO"} & names)
+
+    def _verify_dm_batch_database(self, fmt, expected_path: str, expected_rows=None) -> bool:
+        """Use the same lightweight GS1 preflight as the no-GUI COM inspector."""
+        return verify_dm_batch_database(fmt, expected_path, self.logger, expected_rows)
+
     def _check_template_db(self, fmt, expected_path: str):
         """
         Проверяет, привязан ли шаблон BarTender к ожидаемому tmp_batch.csv.
@@ -8690,11 +8711,14 @@ class App(ctk.CTk):
                             fmt,
                             part_mode=self._template_part_mode(fmt_name),
                         )
-                    except Exception:
-                        batch_report = {
-                            "can_batch": False,
-                            "batch_message": "Не удалось проанализировать шаблон для пакетной печати.",
-                        }
+                    except Exception as exc:
+                        # An unreadable template is not proof that a database
+                        # marking code may safely use direct NamedSubStrings.
+                        self.logger.err(
+                            f"Пакет {bidx}: анализ шаблона завершился ошибкой: {exc}. "
+                            "Печать остановлена до отправки задания."
+                        )
+                        break
 
                     can_use_tmp_batch = False
                     if batch_report.get("can_batch"):
@@ -8715,6 +8739,22 @@ class App(ctk.CTk):
                             )
                         except Exception:
                             pass
+
+                    # A database-bound marking code cannot be represented by
+                    # NamedSubStrings if its text database was not verified.
+                    if self._requires_database_dm(batch_report):
+                        if can_use_tmp_batch:
+                            can_use_tmp_batch = self._verify_dm_batch_database(
+                                fmt, tmp_csv_path, enriched
+                            )
+                        if not can_use_tmp_batch:
+                            self.logger.err(
+                                f"Пакет {bidx}: печать кодов маркировки остановлена: "
+                                "не подтверждена схема базы tmp_batch/DM или текущий CSV. "
+                                "Прямая подстановка запрещена, чтобы не напечатать "
+                                "повторные или шаблонные марки."
+                            )
+                            break
 
                     self._pause_wait()
                     if self._should_stop():
