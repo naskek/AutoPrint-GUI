@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import bartender_gui
 from tools.gs1_dm_audit import GS, audit, parse_dm93
+from tools.inspect_gs1_btw_sources import database_configuration_hints
 
 
 def synthetic_dm(serial, verifier="ABCD"):
@@ -21,6 +22,21 @@ class _Databases:
 
     def GetDatabase(self, index):
         return self.items[index - 1]
+
+
+class ConfigurationInspectionTests(unittest.TestCase):
+    def test_read_only_xml_hints_exclude_secret_credentials(self):
+        xml = (
+            '<Configuration password="secret-123">'
+            '<RecordSet Name="tmp_batch"/>'
+            '<FileName>C:/Data/tmp_batch.csv</FileName>'
+            '<Password>secret-123</Password>'
+            '</Configuration>'
+        )
+        hints = database_configuration_hints(xml)
+        self.assertIn(("name", "tmp_batch"), hints)
+        self.assertIn(("filename", "C:/Data/tmp_batch.csv"), hints)
+        self.assertNotIn("secret-123", repr(hints))
 
 
 class GS1BatchSafetyTests(unittest.TestCase):
