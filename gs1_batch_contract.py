@@ -26,8 +26,6 @@ def verify_dm_batch_database(fmt, expected_path: str, logger, expected_rows=None
     runtime print output. The exact source-to-symbol check remains a smoke
     gate; do not silently fall back to NamedSubStrings.
     """
-    import xml.etree.ElementTree as ET
-
     expected = os.path.normcase(os.path.abspath(expected_path))
     try:
         with open(expected_path, "r", encoding="utf-8-sig", newline="") as stream:
