@@ -120,6 +120,23 @@ class GS1BatchSafetyTests(unittest.TestCase):
             self.assertEqual((total, valid, invalid, calibration), (9, 2, 1, 6))
             self.assertTrue(any(line == 10 for line, _ in errors))
 
+    def test_duplicate_real_dm_is_rejected_without_leaking_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tmp_batch.csv"
+            raw = synthetic_dm("123456789ABCD")
+            with path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(
+                    stream, fieldnames=list(bartender_gui.DEFAULT_REQ_COLS),
+                    delimiter="\t"
+                )
+                writer.writeheader()
+                writer.writerow({"DM": raw, "NUM": "1"})
+                writer.writerow({"DM": raw, "NUM": "2"})
+            total, valid, invalid, calibration, errors, _ = audit(path)
+            self.assertEqual((total, valid, invalid, calibration), (2, 1, 1, 0))
+            self.assertEqual(errors, [(3, "duplicate DM (first seen at line 2)")])
+            self.assertNotIn(raw, repr(errors))
+
     def test_seventh_calibration_row_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "tmp_batch.csv"
