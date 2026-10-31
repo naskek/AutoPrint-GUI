@@ -81,7 +81,26 @@ def inspect_btw(path: Path) -> int:
         try:
             db = databases.GetDatabase(database_name)
         except Exception as exc:
-            print(f"GetDatabase({database_name!r}): ERROR {exc}")
+            print(f"GetDatabase({database_name!r}): UNAVAILABLE {exc}")
+            # An unavailable COM Database object does not disprove the live
+            # schema: on production BarTender 2022 R5 both access modes fail,
+            # while the same document prints variable records correctly.
+            try:
+                hints = database_configuration_hints(databases.Configuration)
+                recordset_ok = any(
+                    key == "name" and name.casefold() == "tmp_batch"
+                    for key, name in hints
+                )
+                fields = str(fmt.UsedNames(1, ";") or "").casefold().split(";")
+                field_ok = "tmp_batch.tmp_batch.dm" in fields
+            except Exception as inspect_exc:
+                print(f"Schema inspection: ERROR {inspect_exc}")
+                return 2
+            if recordset_ok and field_ok:
+                print("PASS: GS1 DM database schema; actual CSV path not proven by COM")
+                print("PRINT / PDF / PHYSICAL output still requires separate smoke")
+                return 0
+            print("FAIL: tmp_batch/DM database field not confirmed")
             return 2
         for label, accessor in (
             ("Name", lambda: db.Name),
