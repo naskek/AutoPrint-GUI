@@ -5681,7 +5681,7 @@ class App(ctk.CTk):
         names = set(report.get("named_fields") or [])
         return bool({"GS1_GTIN", "GS1_SERIAL", "GS1_CRYPTO"} & names)
 
-    def _verify_dm_batch_database(self, fmt, expected_path: str) -> bool:
+    def _verify_dm_batch_database(self, fmt, expected_path: str, expected_rows=None) -> bool:
         """Check the GS1 batch contract without relying on GetDatabase().
 
         BarTender 2022 R5 on the production machine exposes Databases.Count,
@@ -5705,6 +5705,15 @@ class App(ctk.CTk):
                     self.logger.err("DM batch: текущий CSV не содержит единственного поля DM.")
                     return False
                 data_rows = list(reader)
+            if expected_rows is not None:
+                source_dm = [(row.get("DM") or "") for row in expected_rows]
+                csv_dm = [(row.get("DM") or "") for row in data_rows]
+                if csv_dm != source_dm:
+                    self.logger.err(
+                        "DM batch: содержимое текущего CSV отличается "
+                        "от сформированного пакета; печать остановлена."
+                    )
+                    return False
             if not data_rows:
                 self.logger.err("DM batch: текущий CSV не содержит записей.")
                 return False
@@ -8847,7 +8856,7 @@ class App(ctk.CTk):
                     if self._requires_database_dm(batch_report):
                         if can_use_tmp_batch:
                             can_use_tmp_batch = self._verify_dm_batch_database(
-                                fmt, tmp_csv_path
+                                fmt, tmp_csv_path, enriched
                             )
                         if not can_use_tmp_batch:
                             self.logger.err(
