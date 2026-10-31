@@ -8783,18 +8783,14 @@ class App(ctk.CTk):
                             fmt,
                             part_mode=self._template_part_mode(fmt_name),
                         )
-                    except Exception:
-                        # Unknown template analysis must not bypass the no-direct
-                        # rule for the GS1 scripts used by our marking labels.
-                        try:
-                            named_fields = [s.Name for s in fmt.NamedSubStrings]
-                        except Exception:
-                            named_fields = []
-                        batch_report = {
-                            "can_batch": False,
-                            "named_fields": named_fields,
-                            "batch_message": "Не удалось проанализировать шаблон для пакетной печати.",
-                        }
+                    except Exception as exc:
+                        # An unreadable template is not proof that a database
+                        # marking code may safely use direct NamedSubStrings.
+                        self.logger.err(
+                            f"Пакет {bidx}: анализ шаблона завершился ошибкой: {exc}. "
+                            "Печать остановлена до отправки задания."
+                        )
+                        break
 
                     can_use_tmp_batch = False
                     if batch_report.get("can_batch"):
