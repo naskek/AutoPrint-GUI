@@ -6,6 +6,10 @@ import csv
 from pathlib import Path
 
 GS = "\x1d"
+BATCH_FIELDS = (
+    "ShortName", "ShortGTIN", "EXP_DATE", "PROD_DATE",
+    "PART_NUM", "DM", "NUM",
+)
 
 
 def parse_dm93(raw: str, expected_gtin: str = "") -> tuple[str, str, str]:
@@ -31,6 +35,23 @@ def parse_dm93(raw: str, expected_gtin: str = "") -> tuple[str, str, str]:
     return gtin, serial, verifier
 
 
+def _is_calibration_row(header: list[str], row: list[str]) -> bool:
+    """Accept only the exact calibration fixture emitted by _write_tmp_batch_csv.
+
+    Just DM == "X" is not sufficient: malformed genuine marking codes
+    must never be silently classified as calibration.
+    """
+    if not set(BATCH_FIELDS).issubset(header) or len(row) != len(header):
+        return False
+    values = dict(zip(header, row))
+    return all(
+        values[field] == (
+            "1" if field == "NUM" else "000" if field == "ShortGTIN" else "X"
+        )
+        for field in BATCH_FIELDS
+    )
+
+
 def iter_source_rows(path: Path):
     with path.open("r", encoding="utf-8-sig", newline="") as stream:
         reader = csv.reader(stream, delimiter="\t", quotechar='"')
@@ -40,32 +61,54 @@ def iter_source_rows(path: Path):
         if "DM" in first and ("ShortName" in first or "GTIN" in first):
             key = first.index("DM")
             gtin_idx = first.index("GTIN") if "GTIN" in first else None
+            header = first
         else:
             key = 0
             gtin_idx = 1
-            yield 1, first[key], first[gtin_idx] if len(first) > 1 else ""
+            header = []
+            yield 1, first[key], first[gtin_idx] if len(first) > 1 else "", False
         for line_number, row in enumerate(reader, start=2):
             if not row or all(not part for part in row):
                 continue
-            yield line_number, row[key] if key < len(row) else "", (
-                row[gtin_idx] if gtin_idx is not None and gtin_idx < len(row) else ""
+            yield (
+                line_number,
+                row[key] if key < len(row) else "",
+                row[gtin_idx] if gtin_idx is not None and gtin_idx < len(row) else "",
+                _is_calibration_row(header, row),
             )
 
 
 def audit(path: Path):
     total = 0
+    valid = 0
+    invalid = 0
+    calibration = 0
     errors = []
     previews = []
-    for line, dm, gtin in iter_source_rows(path):
+    for line, dm, gtin, is_calibration in iter_source_rows(path):
         total += 1
+        if is_calibration:
+            if total <= 6 and calibration == total - 1:
+                calibration += 1
+            else:
+                invalid += 1
+                if len(errors) < 10:
+                    errors.append((line, "unexpected calibration row outside the first six"))
+            continue
         try:
             fields = parse_dm93(dm, gtin)
+            valid += 1
             if len(previews) < 2:
                 previews.append((line, fields[0]))
         except ValueError as exc:
+            invalid += 1
             if len(errors) < 10:
                 errors.append((line, str(exc)))
-    return total, errors, previews
+    if calibration not in (0, 6):
+        invalid += calibration
+        if len(errors) < 10:
+            errors.append((2, f"incomplete calibration block ({calibration}/6)"))
+    return total, valid, invalid, calibration, errors, previews
 
 
 def main() -> int:
@@ -74,15 +117,18 @@ def main() -> int:
     )
     parser.add_argument("csv", type=Path)
     args = parser.parse_args()
-    total, errors, previews = audit(args.csv)
-    print(f"rows={total}; first_two_gtin={previews}; errors_shown={len(errors)}")
+    total, valid, invalid, calibration, errors, previews = audit(args.csv)
+    print(
+        f"rows={total}; valid_dm={valid}; calibration={calibration}; "
+        f"invalid={invalid}; first_two_gtin={previews}; errors_shown={len(errors)}"
+    )
     for line, reason in errors:
         print(f"line {line}: {reason}")
     if not total:
         print("No rows found")
         return 1
-    if errors:
-        print("FAIL: at least one marking code is structurally invalid")
+    if invalid:
+        print("FAIL: at least one non-calibration marking code is invalid")
         return 1
     print("PASS: source data structure valid; GS1 symbol and printer NOT verified")
     return 0
