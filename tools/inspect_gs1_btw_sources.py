@@ -75,21 +75,25 @@ def inspect_btw(path: Path) -> int:
                 print("Configuration: empty/non-text response")
         except Exception as exc:
             print(f"Configuration: ERROR {exc}")
-        for index in range(1, count + 1):
+        # The production document's configured database name is "tmp_batch".
+        # Seagull recommends name lookup: integer indices are not stable.
+        database_name = "tmp_batch"
+        try:
+            db = databases.GetDatabase(database_name)
+        except Exception as exc:
+            print(f"GetDatabase({database_name!r}): ERROR {exc}")
+            return 2
+        for label, accessor in (
+            ("Name", lambda: db.Name),
+            ("Type", lambda: db.Type),
+            ("FileName", lambda: db.FileName),
+            ("TextFile.FileName", lambda: db.TextFile.FileName),
+        ):
             try:
-                db = databases.GetDatabase(index)
-                print(f"DB[{index}].Name={db.Name!s} Type={db.Type!s}")
-                for label, accessor in (
-                    ("Database.FileName", lambda: db.FileName),
-                    ("TextFile.FileName", lambda: db.TextFile.FileName),
-                ):
-                    try:
-                        print(f"DB[{index}].{label}={accessor()!s}")
-                    except Exception as exc:
-                        print(f"DB[{index}].{label}: ERROR {exc}")
+                print(f"DB[{database_name}].{label}={accessor()!s}")
             except Exception as exc:
-                print(f"DB[{index}].GetDatabase: ERROR {exc}")
-                return 2
+                print(f"DB[{database_name}].{label}: ERROR {exc}")
+        return 0
         return 0
     finally:
         try:
