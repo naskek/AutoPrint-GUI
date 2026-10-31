@@ -5699,9 +5699,39 @@ class App(ctk.CTk):
         expected = os.path.normcase(os.path.abspath(expected_path))
         try:
             with open(expected_path, "r", encoding="utf-8-sig", newline="") as stream:
-                header = next(csv.reader(stream, delimiter="\t"), [])
-            if not header or len(header) != len(set(header)) or "DM" not in header:
-                self.logger.err("DM batch: текущий CSV не содержит единственного поля DM.")
+                reader = csv.DictReader(stream, delimiter="\t")
+                header = reader.fieldnames or []
+                if not header or len(header) != len(set(header)) or "DM" not in header:
+                    self.logger.err("DM batch: текущий CSV не содержит единственного поля DM.")
+                    return False
+                data_rows = list(reader)
+            if not data_rows:
+                self.logger.err("DM batch: текущий CSV не содержит записей.")
+                return False
+            seen = set()
+            for index, row in enumerate(data_rows):
+                dm = row.get("DM") or ""
+                if dm == "X":
+                    # Only the original six calibration fixtures can use X.
+                    if index >= 6 or not all(
+                        row.get(key) == (
+                            "1" if key == "NUM" else "000" if key == "ShortGTIN" else "X"
+                        )
+                        for key in DEFAULT_REQ_COLS
+                    ):
+                        self.logger.err(
+                            f"DM batch: некорректная калибровочная запись {index + 1}."
+                        )
+                        return False
+                elif not dm or dm in seen:
+                    self.logger.err(
+                        f"DM batch: пустой или повторный код в строке {index + 1}."
+                    )
+                    return False
+                else:
+                    seen.add(dm)
+            if not seen:
+                self.logger.err("DM batch: нет ни одного действительного кода маркировки.")
                 return False
         except (OSError, UnicodeError, csv.Error) as exc:
             self.logger.err(f"DM batch: не удалось прочитать текущий CSV: {exc}")
@@ -5709,8 +5739,8 @@ class App(ctk.CTk):
 
         try:
             dbs = fmt.Databases
-            if int(dbs.Count or 0) < 1:
-                self.logger.err("DM batch: шаблон не имеет подключенной базы данных.")
+            if int(dbs.Count or 0) != 1:
+                self.logger.err("DM batch: ожидалось одно подключение tmp_batch.")
                 return False
             used = {name.casefold() for name in self._template_used_names(fmt, 1)}
             if "tmp_batch.tmp_batch.dm" not in used:
@@ -5739,8 +5769,8 @@ class App(ctk.CTk):
             if "tmp_batch" not in db_names:
                 self.logger.err("DM batch: recordset tmp_batch отсутствует в конфигурации.")
                 return False
-            if file_paths and not any(
-                os.path.normcase(os.path.abspath(path)) == expected
+            if file_paths and any(
+                os.path.normcase(os.path.abspath(path)) != expected
                 for path in file_paths
             ):
                 self.logger.err(
