@@ -5670,48 +5670,93 @@ class App(ctk.CTk):
 
     @staticmethod
     def _requires_database_dm(batch_report) -> bool:
-        """Database-backed DM must never fall back to named-source printing."""
+        """Never use a direct per-row fallback for DB-backed or GS1 DM."""
         report = batch_report or {}
-        return "DM" in set(report.get("db_fields") or []) or "DM" in set(
+        if "DM" in set(report.get("db_fields") or []) or "DM" in set(
             report.get("template_fields") or []
-        )
+        ):
+            return True
+        # These three sources are computed by BarTender VBScript from the
+        # current database record, not by SetNamedSubStringValue.
+        names = set(report.get("named_fields") or [])
+        return bool({"GS1_GTIN", "GS1_SERIAL", "GS1_CRYPTO"} & names)
 
     def _verify_dm_batch_database(self, fmt, expected_path: str) -> bool:
-        """Fail closed unless the documented COM Databases collection proves binding."""
+        """Check the GS1 batch contract without relying on GetDatabase().
+
+        BarTender 2022 R5 on the production machine exposes Databases.Count,
+        Databases.Configuration and UsedNames, but GetDatabase(1) *and*
+        GetDatabase("tmp_batch") raise COM error 12345678 even when the
+        database-backed print completes. Configuration identifies the recordset;
+        if it includes an explicit file path, it must match this batch CSV.
+
+        This validates the schema and available binding evidence, not the
+        runtime print output. The exact source-to-symbol check remains a smoke
+        gate; do not silently fall back to NamedSubStrings.
+        """
+        import xml.etree.ElementTree as ET
+
         expected = os.path.normcase(os.path.abspath(expected_path))
         try:
-            databases = fmt.Databases
-            count = int(databases.Count or 0)
-        except Exception as exc:
-            self.logger.err(f"DM batch: нельзя проверить Databases: {exc}")
-            return False
-        for index in range(1, count + 1):
-            try:
-                db = databases.GetDatabase(index)
-                if int(db.Type) != 0:  # btTextFile
-                    continue
-                paths = []
-                try:
-                    paths.append(str(db.FileName or ""))
-                except Exception:
-                    pass
-                try:
-                    paths.append(str(db.TextFile.FileName or ""))
-                except Exception:
-                    pass
-                if any(
-                    path and os.path.normcase(os.path.abspath(path)) == expected
-                    for path in paths
-                ):
-                    return True
-            except Exception as exc:
-                self.logger.err(f"DM batch: ошибка проверки Databases[{index}]: {exc}")
+            with open(expected_path, "r", encoding="utf-8-sig", newline="") as stream:
+                header = next(csv.reader(stream, delimiter="\t"), [])
+            if not header or len(header) != len(set(header)) or "DM" not in header:
+                self.logger.err("DM batch: текущий CSV не содержит единственного поля DM.")
                 return False
-        self.logger.err(
-            "DM batch: ни одно текстовое подключение BarTender не указывает "
-            f"на текущий tmp_batch.csv ({expected})."
-        )
-        return False
+        except (OSError, UnicodeError, csv.Error) as exc:
+            self.logger.err(f"DM batch: не удалось прочитать текущий CSV: {exc}")
+            return False
+
+        try:
+            dbs = fmt.Databases
+            if int(dbs.Count or 0) < 1:
+                self.logger.err("DM batch: шаблон не имеет подключенной базы данных.")
+                return False
+            used = {name.casefold() for name in self._template_used_names(fmt, 1)}
+            if "tmp_batch.tmp_batch.dm" not in used:
+                self.logger.err("DM batch: нет привязки tmp_batch.tmp_batch.DM в UsedNames.")
+                return False
+            config = dbs.Configuration
+            if not isinstance(config, str) or not config.strip():
+                self.logger.err("DM batch: конфигурация базы недоступна.")
+                return False
+            root = ET.fromstring(config)
+            db_names = set()
+            file_paths = []
+            for node in root.iter():
+                key = str(node.tag).rsplit("}", 1)[-1].casefold()
+                value = (node.text or "").strip()
+                if key == "name" and value:
+                    db_names.add(value.casefold())
+                elif key == "filename" and value:
+                    file_paths.append(value)
+                for attr, attr_value in node.attrib.items():
+                    attr_key = str(attr).rsplit("}", 1)[-1].casefold()
+                    if attr_key == "name" and attr_value.strip():
+                        db_names.add(attr_value.strip().casefold())
+                    elif attr_key == "filename" and attr_value.strip():
+                        file_paths.append(attr_value.strip())
+            if "tmp_batch" not in db_names:
+                self.logger.err("DM batch: recordset tmp_batch отсутствует в конфигурации.")
+                return False
+            if file_paths and not any(
+                os.path.normcase(os.path.abspath(path)) == expected
+                for path in file_paths
+            ):
+                self.logger.err(
+                    "DM batch: указанный в конфигурации путь БД не совпадает "
+                    "с текущим tmp_batch.csv; печать остановлена."
+                )
+                return False
+            if not file_paths:
+                self.logger.log(
+                    "DM batch: схема tmp_batch/DM подтверждена, но путь файла "
+                    "не предоставлен BarTender COM; требуется контрольный PDF smoke."
+                )
+            return True
+        except Exception as exc:
+            self.logger.err(f"DM batch: ошибка проверки конфигурации: {exc}")
+            return False
 
     def _check_template_db(self, fmt, expected_path: str):
         """
@@ -8739,8 +8784,15 @@ class App(ctk.CTk):
                             part_mode=self._template_part_mode(fmt_name),
                         )
                     except Exception:
+                        # Unknown template analysis must not bypass the no-direct
+                        # rule for the GS1 scripts used by our marking labels.
+                        try:
+                            named_fields = [s.Name for s in fmt.NamedSubStrings]
+                        except Exception:
+                            named_fields = []
                         batch_report = {
                             "can_batch": False,
+                            "named_fields": named_fields,
                             "batch_message": "Не удалось проанализировать шаблон для пакетной печати.",
                         }
 
@@ -8774,7 +8826,7 @@ class App(ctk.CTk):
                         if not can_use_tmp_batch:
                             self.logger.err(
                                 f"Пакет {bidx}: печать кодов маркировки остановлена: "
-                                "нет подтверждённой связи DB-поля DM с tmp_batch.csv. "
+                                "не подтверждена схема базы tmp_batch/DM или текущий CSV. "
                                 "Прямая подстановка запрещена, чтобы не напечатать "
                                 "повторные или шаблонные марки."
                             )
