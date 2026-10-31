@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -16,6 +17,26 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def database_configuration_hints(xml_text: str):
+    """Extract only connection names and file names; never print raw XML.
+
+    The configuration may contain credentials, so all other fields are omitted.
+    """
+    root = ET.fromstring(xml_text)
+    hints = []
+    approved = {"name", "filename", "recordsetname", "databasename"}
+    for element in root.iter():
+        name = str(element.tag).split("}")[-1].lower()
+        if name in approved and element.text and element.text.strip():
+            hints.append((name, element.text.strip()[:180]))
+        for attr, value in element.attrib.items():
+            key = str(attr).split("}")[-1].lower()
+            if key in approved and value.strip():
+                hints.append((key, value.strip()[:180]))
+    # Preserve order and avoid potentially huge output.
+    return list(dict.fromkeys(hints))[:20]
 
 
 def inspect_btw(path: Path) -> int:
@@ -41,6 +62,19 @@ def inspect_btw(path: Path) -> int:
             print(f"Databases: ERROR {exc}")
             return 2
         print(f"Databases.Count={count}")
+        # Seagull documents this read-only XML property as the way to
+        # discover recordset/database names without dereferencing a Database.
+        try:
+            raw_config = databases.Configuration
+            if isinstance(raw_config, str) and raw_config.strip():
+                for key, value in database_configuration_hints(raw_config):
+                    print(f"Configuration.{key}: {value}")
+                if not database_configuration_hints(raw_config):
+                    print("Configuration: XML available but no name/file hints")
+            else:
+                print("Configuration: empty/non-text response")
+        except Exception as exc:
+            print(f"Configuration: ERROR {exc}")
         for index in range(1, count + 1):
             try:
                 db = databases.GetDatabase(index)
