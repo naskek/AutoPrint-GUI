@@ -79,7 +79,7 @@ class GS1BatchSafetyTests(unittest.TestCase):
     def _write_batch_fixture(path, calibration_rows=6, extra_dm=None):
         fields = list(bartender_gui.DEFAULT_REQ_COLS)
         with path.open("w", encoding="utf-8-sig", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=fields, delimiter="\\t")
+            writer = csv.DictWriter(file, fieldnames=fields, delimiter="\t")
             writer.writeheader()
             dummy = {
                 name: ("1" if name == "NUM" else "000" if name == "ShortGTIN" else "X")
