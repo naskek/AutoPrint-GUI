@@ -85,6 +85,7 @@ def audit(path: Path):
     calibration = 0
     errors = []
     previews = []
+    seen_dm = {}
     for line, dm, gtin, is_calibration in iter_source_rows(path):
         total += 1
         if is_calibration:
@@ -97,6 +98,11 @@ def audit(path: Path):
             continue
         try:
             fields = parse_dm93(dm, gtin)
+            if dm in seen_dm:
+                raise ValueError(
+                    f"duplicate DM (first seen at line {seen_dm[dm]})"
+                )
+            seen_dm[dm] = line
             valid += 1
             if len(previews) < 2:
                 previews.append((line, fields[0]))
