@@ -186,33 +186,94 @@ class GS1BatchSafetyTests(unittest.TestCase):
             {"db_fields": ["ShortName"], "named_fields": ["DM"]}
         ))
 
-    def test_verified_text_database_path_required_before_dm_batch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = str(Path(tmp) / "tmp_batch.csv")
-            db = SimpleNamespace(
-                Type=0, FileName=path,
-                TextFile=SimpleNamespace(FileName=path),
-            )
-            fmt = SimpleNamespace(Databases=_Databases(db))
-            self.assertTrue(self.app._verify_dm_batch_database(fmt, path))
-            self.assertFalse(self.app._verify_dm_batch_database(
-                fmt, str(Path(tmp) / "stale.csv")
-            ))
-            self.assertFalse(self.app._verify_dm_batch_database(
-                SimpleNamespace(Databases=_Databases()), path
-            ))
-
-    def test_com_database_inspection_error_fails_closed(self):
-        class BrokenDatabases:
+    def _configured_format(self, config, *, refs="tmp_batch.tmp_batch.DM"):
+        class BrokenGetDatabase:
             Count = 1
+            Configuration = config
 
             def GetDatabase(self, index):
                 raise RuntimeError("Невозможно найти базу данных 12345678.")
 
-        fmt = SimpleNamespace(Databases=BrokenDatabases())
-        self.assertFalse(self.app._verify_dm_batch_database(
-            fmt, "tmp_batch.csv"
-        ))
+        return SimpleNamespace(
+            Databases=BrokenGetDatabase(),
+            UsedNames=lambda kind, sep: refs if kind == 1 else "",
+        )
+
+    def test_production_barcode_binding_works_without_getdatabase(self):
+        # The real BarTender 2022 R5 installation printed ten labels with
+        # precisely this COM capability shape: Count and Configuration work,
+        # while GetDatabase(1) and GetDatabase('tmp_batch') both fail.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tmp_batch.csv"
+            self._write_batch_fixture(path, calibration_rows=0)
+            config = (
+                '<Configuration><Database Name="@1"/>'
+                '<RecordSet Name="tmp_batch"/>'
+                '<Field Name="[tmp_batch].[tmp_batch].[DM]"/>'
+                '</Configuration>'
+            )
+            fmt = self._configured_format(config)
+            self.assertTrue(self.app._verify_dm_batch_database(fmt, str(path)))
+            self.app.logger.log.assert_called_once()
+            self.assertIn("PDF smoke", self.app.logger.log.call_args.args[0])
+
+    def test_explicit_config_path_must_match_current_csv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tmp_batch.csv"
+            self._write_batch_fixture(path, calibration_rows=0)
+            config_ok = (
+                '<Configuration><RecordSet Name="tmp_batch"/>'
+                f'<FileName>{path}</FileName></Configuration>'
+            )
+            self.assertTrue(self.app._verify_dm_batch_database(
+                self._configured_format(config_ok), str(path)
+            ))
+            config_stale = (
+                '<Configuration><RecordSet Name="tmp_batch"/>'
+                f'<FileName>{Path(tmp) / "stale.csv"}</FileName></Configuration>'
+            )
+            self.assertFalse(self.app._verify_dm_batch_database(
+                self._configured_format(config_stale), str(path)
+            ))
+
+    def test_gs1_batch_blocks_missing_or_wrong_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tmp_batch.csv"
+            self._write_batch_fixture(path, calibration_rows=0)
+            fmt = self._configured_format(
+                '<Configuration><RecordSet Name="tmp_batch"/></Configuration>',
+                refs="another_db.other.DM",
+            )
+            self.assertFalse(self.app._verify_dm_batch_database(fmt, str(path)))
+            fmt = self._configured_format(
+                '<Configuration><RecordSet Name="other"/></Configuration>'
+            )
+            self.assertFalse(self.app._verify_dm_batch_database(fmt, str(path)))
+            fmt = self._configured_format("<not-valid")
+            self.assertFalse(self.app._verify_dm_batch_database(fmt, str(path)))
+
+            # Missing file and malformed header must not submit a job.
+            fmt = self._configured_format(
+                '<Configuration><RecordSet Name="tmp_batch"/></Configuration>'
+            )
+            self.assertFalse(self.app._verify_dm_batch_database(
+                fmt, str(Path(tmp) / "missing.csv")
+            ))
+            path.write_text("ShortName\tNUM\nA\t1\n", encoding="utf-8-sig")
+            self.assertFalse(self.app._verify_dm_batch_database(fmt, str(path)))
+
+    def test_gs1_named_sources_prevent_direct_fallback(self):
+        for name in ("GS1_GTIN", "GS1_SERIAL", "GS1_CRYPTO"):
+            self.assertTrue(self.app._requires_database_dm({
+                "named_fields": [name],
+                "db_fields": [],
+                "template_fields": [],
+            }))
+        self.assertFalse(self.app._requires_database_dm({
+            "named_fields": ["ShortName", "PART_NUM", "DM"],
+            "db_fields": [],
+            "template_fields": [],
+        }))
 
 
 if __name__ == "__main__":
