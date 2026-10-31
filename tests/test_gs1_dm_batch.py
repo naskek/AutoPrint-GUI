@@ -70,10 +70,63 @@ class GS1BatchSafetyTests(unittest.TestCase):
                 w = csv.writer(file, delimiter="\t")
                 for value in values:
                     w.writerow([value, "04640430910775", "Synthetic test"])
-            count, errors, previews = audit(path)
-            self.assertEqual(count, 2)
+            count, valid, invalid, calibration, errors, previews = audit(path)
+            self.assertEqual((count, valid, invalid, calibration), (2, 2, 0, 0))
             self.assertFalse(errors)
             self.assertEqual(len(previews), 2)
+
+    @staticmethod
+    def _write_batch_fixture(path, calibration_rows=6, extra_dm=None):
+        fields = list(bartender_gui.DEFAULT_REQ_COLS)
+        with path.open("w", encoding="utf-8-sig", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=fields, delimiter="\\t")
+            writer.writeheader()
+            dummy = {
+                name: ("1" if name == "NUM" else "000" if name == "ShortGTIN" else "X")
+                for name in fields
+            }
+            for _ in range(calibration_rows):
+                writer.writerow(dummy)
+            for idx, dm in enumerate(
+                [synthetic_dm('a1"b2,c3!d4e5'), synthetic_dm("123456789ABCD", "WXYZ")]
+                + ([extra_dm] if extra_dm is not None else []),
+                start=1,
+            ):
+                writer.writerow({"ShortName": "TEST", "ShortGTIN": "0775", "DM": dm, "NUM": str(idx)})
+
+    def test_exact_six_calibration_rows_are_reported_but_do_not_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tmp_batch.csv"
+            self._write_batch_fixture(path)
+            total, valid, invalid, calibration, errors, previews = audit(path)
+            self.assertEqual((total, valid, invalid, calibration), (8, 2, 0, 6))
+            self.assertFalse(errors)
+            self.assertEqual([line for line, _ in previews], [8, 9])
+
+    def test_five_calibration_rows_are_not_silently_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tmp_batch.csv"
+            self._write_batch_fixture(path, calibration_rows=5)
+            total, valid, invalid, calibration, errors, _ = audit(path)
+            self.assertEqual((total, valid, calibration), (7, 2, 5))
+            self.assertGreater(invalid, 0)
+            self.assertTrue(any("incomplete calibration" in reason for _, reason in errors))
+
+    def test_invalid_real_dm_is_not_treated_as_calibration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tmp_batch.csv"
+            self._write_batch_fixture(path, extra_dm="X")
+            total, valid, invalid, calibration, errors, _ = audit(path)
+            self.assertEqual((total, valid, invalid, calibration), (9, 2, 1, 6))
+            self.assertTrue(any(line == 10 for line, _ in errors))
+
+    def test_seventh_calibration_row_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tmp_batch.csv"
+            self._write_batch_fixture(path, calibration_rows=7)
+            _, valid, invalid, calibration, errors, _ = audit(path)
+            self.assertEqual((valid, invalid, calibration), (2, 1, 6))
+            self.assertTrue(any("unexpected calibration" in reason for _, reason in errors))
 
     def test_production_tmp_batch_roundtrip_preserves_original_dm(self):
         values = [synthetic_dm('a1"b2,c3!d4e5'), synthetic_dm("123456789ABCD", "WXYZ")]
