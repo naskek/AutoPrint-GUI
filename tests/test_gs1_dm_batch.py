@@ -262,6 +262,51 @@ class GS1BatchSafetyTests(unittest.TestCase):
             path.write_text("ShortName\tNUM\nA\t1\n", encoding="utf-8-sig")
             self.assertFalse(self.app._verify_dm_batch_database(fmt, str(path)))
 
+    def test_pre_submit_batch_uses_exact_dm_sequence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tmp_batch.csv"
+            self._write_batch_fixture(path, calibration_rows=0)
+            config = '<Configuration><RecordSet Name="tmp_batch"/></Configuration>'
+            fmt = self._configured_format(config)
+            with path.open("r", encoding="utf-8-sig", newline="") as stream:
+                data = list(csv.DictReader(stream, delimiter="\t"))
+            self.assertTrue(self.app._verify_dm_batch_database(fmt, str(path), data))
+            reversed_rows = list(reversed(data))
+            self.assertFalse(
+                self.app._verify_dm_batch_database(fmt, str(path), reversed_rows)
+            )
+
+    def test_duplicate_dm_is_blocked_before_print(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tmp_batch.csv"
+            dm = synthetic_dm("123456789ABCD")
+            with path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(
+                    stream, fieldnames=bartender_gui.DEFAULT_REQ_COLS, delimiter="\t"
+                )
+                writer.writeheader()
+                writer.writerow({"DM": dm, "NUM": "1"})
+                writer.writerow({"DM": dm, "NUM": "2"})
+            fmt = self._configured_format(
+                '<Configuration><RecordSet Name="tmp_batch"/></Configuration>'
+            )
+            self.assertFalse(self.app._verify_dm_batch_database(fmt, str(path)))
+            self.assertNotIn(dm, str(self.app.logger.err.call_args.args[0]))
+
+    def test_malformed_calibration_row_is_blocked_before_print(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tmp_batch.csv"
+            self._write_batch_fixture(path, calibration_rows=6)
+            text = path.read_text(encoding="utf-8-sig")
+            path.write_text(
+                text.replace("X\t000\tX\tX\tX\tX\t1", "X\t000\tX\tX\tX\tX\t2", 1),
+                encoding="utf-8-sig",
+            )
+            fmt = self._configured_format(
+                '<Configuration><RecordSet Name="tmp_batch"/></Configuration>'
+            )
+            self.assertFalse(self.app._verify_dm_batch_database(fmt, str(path)))
+
     def test_gs1_named_sources_prevent_direct_fallback(self):
         for name in ("GS1_GTIN", "GS1_SERIAL", "GS1_CRYPTO"):
             self.assertTrue(self.app._requires_database_dm({
