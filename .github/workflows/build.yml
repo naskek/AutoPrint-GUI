@@ -12,6 +12,7 @@ permissions:
 jobs:
   unit-regression-tests:
     runs-on: windows-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -41,6 +42,7 @@ jobs:
 
   bartender-com-contract:
     runs-on: windows-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -70,6 +72,7 @@ jobs:
   build-windows:
     needs: [unit-regression-tests, bartender-com-contract]
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
