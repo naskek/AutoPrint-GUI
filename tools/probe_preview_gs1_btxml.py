@@ -151,6 +151,29 @@ def validate_response(response: object) -> list[str]:
     return summaries
 
 
+
+def summarize_com_messages(byref_messages: object) -> list[str]:
+    """Read only documented Message.Number/Severity, never Message text."""
+    try:
+        collection = getattr(byref_messages, "value", None)
+        if collection is None:
+            return []
+        count = min(10, max(0, int(collection.Count or 0)))
+    except Exception:
+        return []
+    result = []
+    for index in range(1, count + 1):
+        try:
+            message = collection.GetMessage(index)
+            number = str(message.Number)[:32]
+            severity = str(message.Severity)[:16]
+        except Exception:
+            result.append(f"message {index}: metadata unavailable")
+        else:
+            result.append(f"Number={number} Severity={severity}")
+    return result
+
+
 def probe(source_btw: Path, source_csv: Path) -> int:
     import pythoncom
     from win32com.client import DispatchEx, VARIANT
@@ -190,8 +213,9 @@ def probe(source_btw: Path, source_csv: Path) -> int:
                     )
                     response = app.XMLScript(xml, BT_XML_SCRIPT_STRING, messages)
                     summaries = validate_response(response)
+                    summaries += summarize_com_messages(messages)
                     if summaries:
-                        print("BTXML messages:", "; ".join(summaries[:10]))
+                        print("BTXML/COM message metadata:", "; ".join(summaries[:20]))
                     images = list(image_dir.glob("*.png"))
                     if len(images) != 1 or images[0].stat().st_size == 0:
                         raise RuntimeError(
