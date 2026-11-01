@@ -129,16 +129,16 @@ def inspect(path: Path) -> int:
             print("NO PRINT / NO PRINTOUT / NO EXPORT / NO DATA MODIFICATION")
             return 0 if report["db_dm_used"] else 2
         finally:
-            if fmt is not None:
-                try:
+            try:
+                if fmt is not None:
                     fmt.Close(1)
+            finally:
+                try:
+                    if app is not None:
+                        app.Quit(1)
                 finally:
-                    fmt = None
-            if app is not None:
-                app.Quit(1)
-                app = None
-            if digest(path) != original_hash or digest(isolated_btw) != copy_hash:
-                raise RuntimeError("BTW copy/original changed; inspection invalid")
+                    if digest(path) != original_hash or digest(isolated_btw) != copy_hash:
+                        raise RuntimeError("BTW copy/original changed; inspection invalid")
 
 
 def main() -> int:
