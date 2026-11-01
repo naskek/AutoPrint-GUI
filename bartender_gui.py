@@ -1255,11 +1255,19 @@ class App(ctk.CTk):
         self.prod_date_entry.bind("<KeyRelease>", self._format_prod_date)
         self.prod_date_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
         ctk.CTkLabel(params, text="Номер партии:", anchor="w").grid(row=1, column=0, sticky="w", padx=10, pady=5)
-        self.part_entry = ctk.CTkEntry(params, placeholder_text="Номер партии вручную")
-        self.part_entry.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
+        part_input_box = ctk.CTkFrame(params, fg_color="transparent")
+        part_input_box.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
+        self.part_entry = ctk.CTkEntry(part_input_box, placeholder_text="Номер партии вручную")
+        self.part_entry.pack(fill="x")
+        self.part_usage_hint = ctk.CTkLabel(
+            part_input_box, text="", anchor="w", justify="left",
+            wraplength=260, font=("Arial", 11), height=16,
+        )
+        # Show a hint only when the resolved template ignores PART_NUM.
         vcmd_part = (self.register(lambda s: re.fullmatch(r"[0-9]*", s or "") is not None), "%P")
         self.part_entry.configure(validate="key", validatecommand=vcmd_part)
         self.part_entry.bind("<KeyRelease>", lambda _e: self._mark_part_entry(False))
+        self.part_entry.bind("<KeyRelease>", lambda _e: self._update_part_usage_hint(), add="+")
         self.part_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
         try:
             self.part_entry_border_default = self.part_entry.cget("border_color")
@@ -3492,6 +3500,47 @@ class App(ctk.CTk):
                     return v
         return None
 
+    def _update_part_usage_hint(self, resolved_fmt: str | None = None) -> None:
+        """Explain when the active label template will discard PART_NUM.
+
+        Auto mode stays editable, but users should not assume the entered
+        value will be printed. This follows actual template part_mode,
+        never NamedSubStrings or inferred barcode data.
+        """
+        if resolved_fmt and resolved_fmt != "Auto":
+            self._part_hint_resolved_fmt = self._normalize_template_id(resolved_fmt)
+        hint = getattr(self, "part_usage_hint", None)
+        if hint is None:
+            return
+        try:
+            selected = (self.format_combo.get() or "").strip()
+            active = (
+                self._normalize_template_id(selected)
+                if selected and selected != "Auto"
+                else getattr(self, "_part_hint_resolved_fmt", "")
+            )
+            if not active or self._template_part_mode(active) == "manual":
+                hint.pack_forget()
+                return
+
+            entered = (self.part_entry.get() or "").strip()
+            if entered and (not selected or selected == "Auto"):
+                hint.configure(
+                    text=f"⚠ Шаблон «{active}»: введённый номер партии не попадёт на этикетку.",
+                    text_color=("#a05c00", "#ffc15c"),
+                )
+            else:
+                hint.configure(
+                    text=f"Шаблон «{active}»: номер партии отключён.",
+                    text_color=("#666666", "#aaaaaa"),
+                )
+            if hint.winfo_manager() != "pack":
+                hint.pack(anchor="w", pady=(3, 0))
+        except Exception:
+            # Optional hint must never interfere with the existing GUI,
+            # validation or print submission path.
+            pass
+
     def _apply_format_ui(self, fmt: str, *, selected_fmt: str | None = None):
         """Use operator-selected format for part input, resolved format for printer."""
         resolved_fmt = (fmt or "").strip()
@@ -3514,6 +3563,7 @@ class App(ctk.CTk):
         except Exception:
             pass
         self._set_default_printer_for_format(resolved_fmt)
+        self._update_part_usage_hint(resolved_fmt)
 
     def _on_format_change(self, value):
         # The callback value is authoritative even before the combo updates.
@@ -7539,6 +7589,7 @@ class App(ctk.CTk):
         manual = (self.part_entry.get() or "").strip()
         template_id = self._normalize_template_id(enr.get("_FORMAT"))
         part_mode = self._template_part_mode(template_id)
+        self._update_part_usage_hint(template_id)
         if part_mode == "manual":
             if not manual and not allow_empty_part:
                 self._mark_part_entry(True)
