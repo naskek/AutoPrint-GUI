@@ -259,6 +259,30 @@ class PrinterStatusTests(unittest.TestCase):
         self.assertEqual(second.host, "192.168.1.50")
         self.assertEqual(run.call_count, 2)
 
+    def test_windows_missing_tcp_port_metadata_does_not_guess_raw_9100(self):
+        api = self._win32print(
+            {
+                "pPortName": "IP_192.168.1.50",
+                "Status": 0,
+                "Attributes": 0,
+                "pServerName": "",
+            }
+        )
+        missing_cim_record = Mock(returncode=2, stdout="")
+        with patch.object(printer_status.os, "name", "nt"), patch.object(
+            printer_status, "win32print", api
+        ), patch.object(
+            printer_status.subprocess, "run", return_value=missing_cim_record
+        ), patch.object(
+            printer_status, "probe_tcp_endpoint"
+        ) as probe:
+            health = printer_status.check_printer("LPR configured printer")
+
+        self.assertEqual(health.state, printer_status.STATE_UNKNOWN)
+        self.assertEqual(printer_status.connection_label(health), "TCP/IP")
+        probe.assert_not_called()
+        api.ClosePrinter.assert_called_once()
+
     def test_ip_named_port_falls_back_to_raw_9100(self):
         endpoint = printer_status._endpoint_from_port_name("IP_192.168.1.50")
 
