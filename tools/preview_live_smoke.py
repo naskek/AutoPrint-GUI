@@ -53,8 +53,8 @@ def smoke(template: Path, source_csv: Path) -> int:
                 fmt = bt.open_format(str(template))
                 bt.set_common_print_flags(fmt)
                 bt.apply_fields(fmt, {
-                    "ShortName": row.get("NAME") or "TEST",
-                    "ShortGTIN": str(row.get("GTIN") or "")[-3:],
+                    "ShortName": row.get("ShortName") or row.get("NAME") or "TEST",
+                    "ShortGTIN": row.get("ShortGTIN") or str(row.get("GTIN") or "")[-3:],
                     "EXP_DATE": ("01.05.2027" if i == 1 else "02.05.2027"),
                     "PROD_DATE": prod_date,
                     "PART_NUM": part,
