@@ -8200,13 +8200,24 @@ class App(ctk.CTk):
             out_template = os.path.join(preview_dir, "preview_%PageNumber%.png")
 
             fmt = self.bt.open_format(btw)
-            self.bt.set_common_print_flags(fmt)
-            fmt.PrintSetup.IdenticalCopiesOfLabel = 1
-            ok = self.bt.apply_fields(fmt, enr)
-            if not ok:
-                self.logger.err("Не удалось подставить значения (проверь имена полей в BTW).")
+            if self.bt.supports_gs1_btxml_preview(fmt):
+                # Database-backed GS1 BTW: render an isolated one-row
+                # print preview so its DB/VBScript/AI 01-21-93 pipeline runs.
+                # No Print/PrintOut and no mutation of the operator BTW.
+                rendered = self.bt.export_gs1_btxml_preview(
+                    btw, enr, out_template
+                )
+            else:
+                # Preserve verified v3.2.4 template-image preview for other
+                # BTW formats and the existing named-source behavior.
+                self.bt.set_common_print_flags(fmt)
+                fmt.PrintSetup.IdenticalCopiesOfLabel = 1
+                ok = self.bt.apply_fields(fmt, enr)
+                if not ok:
+                    self.logger.err("Не удалось подставить значения (проверь имена полей в BTW).")
+                rendered = self.bt.export_preview(fmt, out_template)
 
-            if not self.bt.export_preview(fmt, out_template):
+            if not rendered:
                 self.logger.err("Не удалось сформировать превью.")
                 return False
 

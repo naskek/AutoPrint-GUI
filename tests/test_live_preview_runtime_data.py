@@ -1,0 +1,285 @@
+import csv
+import os
+import tempfile
+import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import bartender_com
+from tools.preview_live_smoke import assert_named_only_is_safe
+
+
+class _Databases:
+    def __init__(self, *items):
+        self._items = list(items)
+        self.Count = len(self._items)
+
+    def GetDatabase(self, index):
+        return self._items[index - 1]
+
+
+class LivePreviewRuntimeDataTests(unittest.TestCase):
+    def setUp(self):
+        self.logger = Mock()
+        self.bt = bartender_com.BT(self.logger)
+
+    @staticmethod
+    def _runtime_row():
+        return {
+            "ShortName": "Хрен столовый",
+            "ShortGTIN": "04601234567890",
+            "EXP_DATE": "12.10.2026",
+            "PROD_DATE": "05.10.2026",
+            "PART_NUM": "12345",
+            "DM": "010460123456789021ABC",
+            "NUM": "7",
+            "_FORMAT": "16x16",
+            "IGNORED": "not part of production batch contract",
+        }
+
+    def test_database_backed_preview_uses_one_row_temp_source(self):
+        text_file = SimpleNamespace(FileName=r"C:\production\tmp_batch.csv")
+        database = SimpleNamespace(
+            Type=bartender_com.BT_TEXT_FILE_DATABASE,
+            TextFile=text_file,
+        )
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = _Databases(database)
+        fmt.PrintSetup = SimpleNamespace(UseDatabase=False)
+        fmt.Print = Mock()
+        fmt.PrintOut = Mock()
+
+        self.bt.apply_fields(fmt, self._runtime_row())
+
+        captured = {}
+
+        def export(output_path, file_type, colors, resolution, save_options):
+            captured["output_path"] = output_path
+            captured["bound_path"] = database.TextFile.FileName
+            with open(database.TextFile.FileName, "r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream, delimiter="\t")
+                captured["fieldnames"] = reader.fieldnames
+                captured["rows"] = list(reader)
+
+        fmt.ExportToFile.side_effect = export
+
+        with tempfile.TemporaryDirectory() as root:
+            requested = os.path.join(root, "preview_%PageNumber%.png")
+            self.assertTrue(self.bt.export_preview(fmt, requested))
+
+            self.assertEqual(
+                os.path.dirname(captured["bound_path"]),
+                os.path.abspath(root),
+            )
+            self.assertEqual(
+                os.path.basename(captured["bound_path"]),
+                "preview_data.csv",
+            )
+            self.assertNotEqual(
+                os.path.normcase(captured["bound_path"]),
+                os.path.normcase(r"C:\production\tmp_batch.csv"),
+            )
+
+        self.assertEqual(
+            captured["fieldnames"],
+            list(bartender_com.PREVIEW_DATA_FIELDS),
+        )
+        self.assertEqual(len(captured["rows"]), 1)
+        row = captured["rows"][0]
+        self.assertEqual(row["ShortName"], "Хрен столовый")
+        self.assertEqual(row["PROD_DATE"], "05.10.2026")
+        self.assertEqual(row["PART_NUM"], "12345")
+        self.assertEqual(row["NUM"], "7")
+        self.assertNotIn("IGNORED", row)
+        self.assertTrue(fmt.PrintSetup.UseDatabase)
+        fmt.ExportToFile.assert_called_once_with(
+            captured["output_path"], "PNG", 1, 300, 0
+        )
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+        self.assertIsNone(self.bt._preview_fields)
+
+    def test_unrelated_text_database_is_not_rebound(self):
+        database = SimpleNamespace(
+            Type=bartender_com.BT_TEXT_FILE_DATABASE,
+            TextFile=SimpleNamespace(FileName=r"C:\data\lookup.tsv"),
+        )
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = _Databases(database)
+        fmt.PrintSetup = SimpleNamespace(UseDatabase=False)
+
+        self.bt.apply_fields(fmt, self._runtime_row())
+
+        with tempfile.TemporaryDirectory() as root:
+            requested = os.path.join(root, "preview_%PageNumber%.png")
+            self.assertTrue(self.bt.export_preview(fmt, requested))
+
+        self.assertEqual(database.TextFile.FileName, r"C:\data\lookup.tsv")
+        self.assertFalse(fmt.PrintSetup.UseDatabase)
+        fmt.ExportToFile.assert_called_once()
+
+    def test_non_text_database_is_not_rebound(self):
+        database = SimpleNamespace(
+            Type=3,
+            TextFile=SimpleNamespace(FileName=r"C:\data\source.xlsx"),
+        )
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = _Databases(database)
+        fmt.PrintSetup = SimpleNamespace(UseDatabase=False)
+
+        self.bt.apply_fields(fmt, self._runtime_row())
+
+        with tempfile.TemporaryDirectory() as root:
+            requested = os.path.join(root, "preview_%PageNumber%.png")
+            self.assertTrue(self.bt.export_preview(fmt, requested))
+
+        self.assertEqual(database.TextFile.FileName, r"C:\data\source.xlsx")
+        self.assertFalse(fmt.PrintSetup.UseDatabase)
+        fmt.ExportToFile.assert_called_once()
+
+    def test_database_connection_name_from_xml_is_used_instead_of_recordset_name(self):
+        class NamedDatabases:
+            Count = 1
+            Configuration = (
+                '<DatabaseSetup><DatabaseConnections>'
+                '<DatabaseConnection Name="@1" Type="TextFile" />'
+                '</DatabaseConnections><RecordSets>'
+                '<RecordSet Name="tmp_batch" Connection="@1" />'
+                '</RecordSets></DatabaseSetup>'
+            )
+
+            def __init__(self):
+                self.calls = []
+                self.database = SimpleNamespace(
+                    Type=bartender_com.BT_TEXT_FILE_DATABASE,
+                    TextFile=SimpleNamespace(FileName=r"C:\\data\\tmp_batch.csv"),
+                )
+
+            def GetDatabase(self, identifier):
+                self.calls.append(identifier)
+                if identifier != "@1":
+                    raise RuntimeError("Wrong recordset or numeric COM index")
+                return self.database
+
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = NamedDatabases()
+        fmt.PrintSetup = SimpleNamespace(UseDatabase=False)
+        self.bt.apply_fields(fmt, self._runtime_row())
+        with tempfile.TemporaryDirectory() as root:
+            self.assertTrue(self.bt.export_preview(fmt, os.path.join(root, "preview.png")))
+        self.assertEqual(fmt.Databases.calls, ["@1"])
+        self.assertTrue(fmt.PrintSetup.UseDatabase)
+        fmt.ExportToFile.assert_called_once()
+
+    def test_xml_recordset_name_is_never_used_as_database_connection(self):
+        class MisconfiguredDatabases:
+            Count = 1
+            Configuration = (
+                '<DatabaseSetup><DatabaseConnections>'
+                '<DatabaseConnection Name="@1" Type="TextFile" />'
+                '</DatabaseConnections><RecordSets>'
+                '<RecordSet Name="another" Connection="@1" />'
+                '</RecordSets></DatabaseSetup>'
+            )
+            def GetDatabase(self, identifier):
+                raise AssertionError("No known tmp_batch connection")
+
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = MisconfiguredDatabases()
+        self.bt.apply_fields(fmt, self._runtime_row())
+        with tempfile.TemporaryDirectory() as root:
+            self.assertFalse(self.bt.export_preview(fmt, os.path.join(root, "preview.png")))
+        fmt.ExportToFile.assert_not_called()
+
+    def test_real_bartender_12345678_failure_never_exports_stale_preview(self):
+        class UnsupportedDatabases:
+            Count = 1
+
+            def GetDatabase(self, index):
+                raise RuntimeError("Невозможно найти базу данных 12345678.")
+
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = UnsupportedDatabases()
+        fmt.Print = Mock()
+        fmt.PrintOut = Mock()
+        self.bt.apply_fields(fmt, self._runtime_row())
+
+        with tempfile.TemporaryDirectory() as root:
+            requested = os.path.join(root, "preview_%PageNumber%.png")
+            self.assertFalse(self.bt.export_preview(fmt, requested))
+            self.assertFalse(os.path.exists(os.path.join(root, "preview_1.png")))
+
+        fmt.ExportToFile.assert_not_called()
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+        self.logger.err.assert_called_once()
+        self.assertIn("экспорт отменён", str(self.logger.err.call_args.args[0]))
+        self.assertIsNone(self.bt._preview_fields)
+
+    def test_failed_database_path_change_is_not_masked_by_export(self):
+        class BrokenTextFile:
+            FileName = r"C:\\production\\tmp_batch.csv"
+
+            def __setattr__(self, key, value):
+                if key == "FileName":
+                    raise RuntimeError("read-only BarTender binding")
+                super().__setattr__(key, value)
+
+        database = SimpleNamespace(
+            Type=bartender_com.BT_TEXT_FILE_DATABASE,
+            TextFile=BrokenTextFile(),
+        )
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = _Databases(database)
+        fmt.Print = Mock()
+        fmt.PrintOut = Mock()
+        self.bt.apply_fields(fmt, self._runtime_row())
+        with tempfile.TemporaryDirectory() as root:
+            self.assertFalse(self.bt.export_preview(fmt, os.path.join(root, "one.png")))
+        fmt.ExportToFile.assert_not_called()
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+
+    def test_opening_new_format_clears_stale_preview_row(self):
+        self.bt._preview_fields = self._runtime_row()
+        opened = Mock()
+        opened.NamedSubStrings = []
+        self.bt.app = SimpleNamespace(
+            Formats=SimpleNamespace(Open=Mock(return_value=opened))
+        )
+
+        result = self.bt.open_format(r"C:\labels\16x16.btw")
+
+        self.assertIs(result, opened)
+        self.assertIsNone(self.bt._preview_fields)
+
+
+
+class NamedOnlyGs1FailClosedTests(unittest.TestCase):
+    def test_gs1_vbscript_sources_block_raw_dm_diagnostic(self):
+        names = {
+            "ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM", "NUM",
+            "GS1_GTIN", "GS1_SERIAL", "GS1_CRYPTO",
+        }
+        with self.assertRaisesRegex(RuntimeError, "INVALID for GS1/VBScript"):
+            assert_named_only_is_safe(names)
+
+    def test_plain_named_only_template_can_be_inspected(self):
+        names = {"ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM", "NUM"}
+        self.assertIsNone(assert_named_only_is_safe(names))
+
+    def test_missing_named_source_fails_conservatively(self):
+        names = {"ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM"}
+        with self.assertRaisesRegex(RuntimeError, "missing"):
+            assert_named_only_is_safe(names)
+
+
+if __name__ == "__main__":
+    unittest.main()
