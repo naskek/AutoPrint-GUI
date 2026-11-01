@@ -38,7 +38,8 @@ class PartUsageHintTests(unittest.TestCase):
         app = self.make_app(value="555")
         bartender_gui.App._update_part_usage_hint(app, "16x16")
         txt = app.part_usage_hint.configure.call_args.kwargs["text"]
-        self.assertIn("555" not in txt and "не попадёт на этикетку", txt)
+        self.assertNotIn("555", txt)
+        self.assertIn("не попадёт на этикетку", txt)
         self.assertIn("16x16", txt)
         self.assertEqual(app.part_entry.get.call_count, 1)
 
