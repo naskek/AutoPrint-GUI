@@ -163,6 +163,36 @@ class PrinterStatusTests(unittest.TestCase):
         self.assertEqual(result.state, printer_status.STATE_UNKNOWN)
         self.assertEqual(result.connection, printer_status.CONNECTION_NETWORK)
 
+    def test_server_unknown_is_not_treated_as_confirmed_offline(self):
+        api = self._win32print({
+            "pPortName": "WSD-Printer",
+            "Status": printer_status.PRINTER_STATUS_SERVER_UNKNOWN,
+            "Attributes": printer_status.PRINTER_ATTRIBUTE_NETWORK,
+            "pServerName": "",
+        })
+        with patch.object(printer_status, "win32print", api), patch.object(
+            printer_status, "resolve_tcp_endpoint"
+        ) as resolve, patch.object(
+            printer_status, "probe_tcp_endpoint"
+        ) as probe:
+            health = printer_status.check_printer("WSD Label")
+        self.assertEqual(health.state, printer_status.STATE_UNKNOWN)
+        self.assertEqual(health.connection, printer_status.CONNECTION_NETWORK)
+        resolve.assert_not_called()
+        probe.assert_not_called()
+
+    def test_server_unknown_with_real_offline_flag_still_blocks(self):
+        api = self._win32print({
+            "pPortName": "WSD-Printer",
+            "Status": (printer_status.PRINTER_STATUS_SERVER_UNKNOWN |
+                       printer_status.PRINTER_STATUS_OFFLINE),
+            "Attributes": 0,
+            "pServerName": "",
+        })
+        with patch.object(printer_status, "win32print", api):
+            health = printer_status.check_printer("WSD Label")
+        self.assertEqual(health.state, printer_status.STATE_UNAVAILABLE)
+
     def test_unc_shared_queue_is_classified_without_tcp_probe(self):
         api = self._win32print(
             {
@@ -200,24 +230,34 @@ class PrinterStatusTests(unittest.TestCase):
             returncode=0,
             stdout='{"Host":"printer.example","Port":515,"Protocol":2}',
         )
-        printer_status.resolve_tcp_endpoint.cache_clear()
-        try:
-            with patch.object(printer_status.os, "name", "nt"), patch.object(
-                printer_status.subprocess,
-                "run",
-                return_value=completed,
-            ) as run:
-                endpoint = printer_status.resolve_tcp_endpoint("Production-Port")
+        with patch.object(printer_status.os, "name", "nt"), patch.object(
+            printer_status.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            endpoint = printer_status.resolve_tcp_endpoint("Production-Port")
 
-            self.assertEqual(
-                endpoint,
-                printer_status.TcpEndpoint("printer.example", 515),
-            )
-            command = run.call_args.args[0][-1]
-            self.assertIn("Win32_TCPIPPrinterPort", command)
-            self.assertIn("Production-Port", command)
-        finally:
-            printer_status.resolve_tcp_endpoint.cache_clear()
+        self.assertEqual(
+            endpoint,
+            printer_status.TcpEndpoint("printer.example", 515),
+        )
+        command = run.call_args.args[0][-1]
+        self.assertIn("Win32_TCPIPPrinterPort", command)
+        self.assertIn("Production-Port", command)
+
+    def test_tcp_endpoint_reconfiguration_is_not_cached(self):
+        configured = [
+            Mock(returncode=0, stdout='{"Host":"192.168.1.39","Port":9100,"Protocol":1}'),
+            Mock(returncode=0, stdout='{"Host":"192.168.1.50","Port":9100,"Protocol":1}'),
+        ]
+        with patch.object(printer_status.os, "name", "nt"), patch.object(
+            printer_status.subprocess, "run", side_effect=configured
+        ) as run:
+            first = printer_status.resolve_tcp_endpoint("TSC-Port")
+            second = printer_status.resolve_tcp_endpoint("TSC-Port")
+        self.assertEqual(first.host, "192.168.1.39")
+        self.assertEqual(second.host, "192.168.1.50")
+        self.assertEqual(run.call_count, 2)
 
     def test_ip_named_port_falls_back_to_raw_9100(self):
         endpoint = printer_status._endpoint_from_port_name("IP_192.168.1.50")
