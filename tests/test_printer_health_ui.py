@@ -4,8 +4,10 @@ from unittest.mock import Mock, patch
 import bartender_gui
 from printer_status import (
     CONNECTION_NETWORK,
+    CONNECTION_USB,
     CONNECTION_TCP,
     PrinterHealth,
+    STATE_AVAILABLE,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
@@ -118,6 +120,112 @@ class PrinterHealthUiTests(unittest.TestCase):
         )
         app._preprint_stickers_for_all_batches.assert_not_called()
         app._set_print_active_ui.assert_not_called()
+
+
+
+class PrinterMonitorStableWidgetsTests(unittest.TestCase):
+    """A health poll must not destroy and repaint the whole printer panel."""
+
+    def setUp(self):
+        self.app = object.__new__(bartender_gui.App)
+        self.app.__dict__["printer_monitor_frame"] = Mock()
+        self.app.__dict__["printer_monitor_empty_label"] = Mock()
+        self.app.__dict__["_printer_monitor_empty_visible"] = True
+        self.app.__dict__["_printer_monitor_rows"] = {}
+        self.make_row = patch("bartender_gui.ctk.CTkFrame")
+        self.make_label = patch("bartender_gui.ctk.CTkLabel")
+        self.frame_factory = self.make_row.start()
+        self.label_factory = self.make_label.start()
+        self.addCleanup(self.make_row.stop)
+        self.addCleanup(self.make_label.stop)
+        self.frame_factory.side_effect = lambda *a, **kw: Mock()
+        self.label_factory.side_effect = lambda *a, **kw: Mock()
+
+    def health(self, name="TSC Network", state=STATE_UNAVAILABLE,
+               connection=CONNECTION_TCP):
+        return PrinterHealth(
+            printer_name=name,
+            state=state,
+            connection=connection,
+            detail="offline" if state == STATE_UNAVAILABLE else "",
+        )
+
+    def test_identical_polls_do_not_recreate_rows_or_reconfigure_labels(self):
+        health = [
+            self.health("TSC Network"),
+            self.health("USB", STATE_AVAILABLE, CONNECTION_USB),
+        ]
+        self.app._apply_printer_monitor(health)
+        widgets = dict(self.app._printer_monitor_rows)
+        self.assertEqual(len(widgets), 2)
+        self.assertEqual(self.frame_factory.call_count, 2)
+        self.assertEqual(self.label_factory.call_count, 6)
+        self.app.printer_monitor_empty_label.grid_remove.assert_called_once()
+        for item in widgets.values():
+            item["led"].configure.reset_mock()
+            item["protocol"].configure.reset_mock()
+            item["frame"].grid_configure.reset_mock()
+
+        for _ in range(6):
+            self.app._apply_printer_monitor(list(reversed(health)))
+
+        self.assertEqual(self.frame_factory.call_count, 2)
+        self.assertEqual(self.label_factory.call_count, 6)
+        self.app.printer_monitor_empty_label.grid_remove.assert_called_once()
+        for name, item in widgets.items():
+            self.assertIs(self.app._printer_monitor_rows[name], item)
+            item["frame"].destroy.assert_not_called()
+            item["frame"].grid_configure.assert_not_called()
+            item["led"].configure.assert_not_called()
+            item["protocol"].configure.assert_not_called()
+
+    def test_only_led_and_protocol_change_when_status_changes(self):
+        self.app._apply_printer_monitor([self.health()])
+        original = self.app._printer_monitor_rows["TSC Network"]
+        self.app._apply_printer_monitor([
+            self.health(state=STATE_AVAILABLE)
+        ])
+        self.assertIs(self.app._printer_monitor_rows["TSC Network"], original)
+        original["led"].configure.assert_called_once_with(
+            text_color="#4CAF50"
+        )
+        original["protocol"].configure.assert_not_called()
+        self.app._apply_printer_monitor([
+            self.health(state=STATE_AVAILABLE, connection=CONNECTION_USB)
+        ])
+        original["led"].configure.assert_called_once()
+        original["protocol"].configure.assert_called_once_with(text="USB")
+        self.assertEqual(self.frame_factory.call_count, 1)
+        self.assertEqual(self.label_factory.call_count, 3)
+        original["frame"].destroy.assert_not_called()
+
+    def test_membership_change_only_removes_missing_rows_and_reuses_empty_label(self):
+        self.app._apply_printer_monitor([])
+        self.app.printer_monitor_empty_label.grid.assert_not_called()
+        self.app._apply_printer_monitor([self.health("Printer Z")])
+        saved = self.app._printer_monitor_rows["Printer Z"]
+        self.app._apply_printer_monitor([
+            self.health("Printer A"),
+            self.health("Printer Z"),
+        ])
+        self.assertIs(self.app._printer_monitor_rows["Printer Z"], saved)
+        saved["frame"].grid_configure.assert_called_once_with(row=1)
+        saved["frame"].destroy.assert_not_called()
+        self.app._apply_printer_monitor([self.health("Printer A")])
+        saved["frame"].destroy.assert_called_once()
+        self.app._apply_printer_monitor([])
+        self.app.printer_monitor_empty_label.grid.assert_called_once()
+        self.app._apply_printer_monitor([])
+        self.app.printer_monitor_empty_label.grid.assert_called_once()
+        self.assertEqual(self.frame_factory.call_count, 2)
+
+    def test_no_frame_still_records_latest_health_without_tk_touch(self):
+        del self.app.__dict__["printer_monitor_frame"]
+        health = self.health()
+        self.app._apply_printer_monitor([health])
+        self.assertEqual(self.app._printer_monitor_health, [health])
+        self.frame_factory.assert_not_called()
+        self.label_factory.assert_not_called()
 
 
 if __name__ == "__main__":
