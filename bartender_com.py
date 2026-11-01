@@ -2,6 +2,7 @@
 
 import csv
 import os
+import xml.etree.ElementTree as ET
 
 try:
     from win32com.client import Dispatch
@@ -158,6 +159,30 @@ class BT:
     def _source_basename(path):
         return str(path or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
 
+    @staticmethod
+    def _preview_db_connection_names(configuration):
+        """Read connection names, not recordset names, from Seagull's XML.
+
+        A document can have DatabaseConnection Name="@1" and RecordSet
+        Name="tmp_batch". GetDatabase expects the connection name (@1).
+        The XML is inspection-only; no Configuration mutation is attempted.
+        """
+        if not isinstance(configuration, str) or not configuration.strip():
+            return ()
+        root = ET.fromstring(configuration)
+        connection_names = set()
+        matches = set()
+        for item in root.iter():
+            tag = str(item.tag).rsplit("}", 1)[-1].casefold()
+            attrs = {str(k).rsplit("}", 1)[-1].casefold(): str(v)
+                     for k, v in item.attrib.items()}
+            if tag == "databaseconnection" and attrs.get("name"):
+                connection_names.add(attrs["name"])
+            if tag == "recordset" and attrs.get("name", "").casefold() == "tmp_batch":
+                if attrs.get("connection"):
+                    matches.add(attrs["connection"])
+        return tuple(sorted(connection_names & matches))
+
     def _bind_preview_text_databases(self, fmt, preview_data_path):
         try:
             databases = fmt.Databases
@@ -166,8 +191,23 @@ class BT:
             self.logger.log(f"Preview DB: Databases недоступен: {e}")
             return 0
 
+        # Prefer the documented database *connection* name, not a
+        # recordset name. BarTender's Configuration XML exposes both.
+        try:
+            config = databases.Configuration
+        except (AttributeError, TypeError):
+            config = None
+        try:
+            connection_names = self._preview_db_connection_names(config)
+        except ET.ParseError as e:
+            raise RuntimeError("Preview DB: недоступна структура XML подключения") from e
+        if config and not connection_names:
+            raise RuntimeError(
+                "Preview DB: не удалось однозначно определить подключение tmp_batch"
+            )
+        indices = connection_names if config else range(1, count + 1)
         bound = 0
-        for index in range(1, count + 1):
+        for index in indices:
             try:
                 database = databases.GetDatabase(index)
             except Exception as e:
