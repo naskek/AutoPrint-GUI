@@ -15,6 +15,7 @@ env:
 jobs:
   release-windows:
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -63,6 +64,7 @@ jobs:
           python -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Run BarTender COM contract tests
+        timeout-minutes: 10
         shell: pwsh
         run: |
           python -m py_compile tests/contract_bartender_com.py tools/bartender_live_smoke.py
