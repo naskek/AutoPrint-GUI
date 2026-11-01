@@ -92,7 +92,7 @@ class BtXmlGs1PreviewProbeTests(unittest.TestCase):
             '<Response Version="2.0"><Command Name="PreviewOnly">'
             '<ExportPrintPreviewToImage/></Command></Response>'
         )
-        with self.assertRaisesRegex(RuntimeError, "No successful export"):
+        with self.assertRaisesRegex(RuntimeError, "export command missing"):
             validate_response("<Response><Command/></Response>")
         with self.assertRaisesRegex(RuntimeError, "response contained Error"):
             validate_response(
