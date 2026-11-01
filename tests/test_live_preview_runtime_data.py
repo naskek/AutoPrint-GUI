@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import bartender_com
+from tools.preview_live_smoke import assert_named_only_is_safe
 
 
 class _Databases:
@@ -258,6 +259,26 @@ class LivePreviewRuntimeDataTests(unittest.TestCase):
 
         self.assertIs(result, opened)
         self.assertIsNone(self.bt._preview_fields)
+
+
+
+class NamedOnlyGs1FailClosedTests(unittest.TestCase):
+    def test_gs1_vbscript_sources_block_raw_dm_diagnostic(self):
+        names = {
+            "ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM", "NUM",
+            "GS1_GTIN", "GS1_SERIAL", "GS1_CRYPTO",
+        }
+        with self.assertRaisesRegex(RuntimeError, "INVALID for GS1/VBScript"):
+            assert_named_only_is_safe(names)
+
+    def test_plain_named_only_template_can_be_inspected(self):
+        names = {"ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM", "NUM"}
+        self.assertIsNone(assert_named_only_is_safe(names))
+
+    def test_missing_named_source_fails_conservatively(self):
+        names = {"ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM"}
+        with self.assertRaisesRegex(RuntimeError, "missing"):
+            assert_named_only_is_safe(names)
 
 
 if __name__ == "__main__":
