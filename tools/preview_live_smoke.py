@@ -12,6 +12,10 @@ import hashlib
 import os
 from pathlib import Path
 import tempfile
+import sys
+
+# Resolve the repository modules when this script is invoked by path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import bartender_com
 from bartender_com import BT, BT_DO_NOT_SAVE_CHANGES
