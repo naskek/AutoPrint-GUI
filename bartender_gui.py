@@ -3509,7 +3509,7 @@ class App(ctk.CTk):
         """
         if resolved_fmt and resolved_fmt != "Auto":
             self._part_hint_resolved_fmt = self._normalize_template_id(resolved_fmt)
-        hint = getattr(self, "part_usage_hint", None)
+        hint = self.__dict__.get("part_usage_hint")
         if hint is None:
             return
         try:
@@ -3517,7 +3517,7 @@ class App(ctk.CTk):
             active = (
                 self._normalize_template_id(selected)
                 if selected and selected != "Auto"
-                else getattr(self, "_part_hint_resolved_fmt", "")
+                else self.__dict__.get("_part_hint_resolved_fmt", "")
             )
             if not active or self._template_part_mode(active) == "manual":
                 hint.pack_forget()
