@@ -139,6 +139,57 @@ class LivePreviewRuntimeDataTests(unittest.TestCase):
         self.assertFalse(fmt.PrintSetup.UseDatabase)
         fmt.ExportToFile.assert_called_once()
 
+    def test_real_bartender_12345678_failure_never_exports_stale_preview(self):
+        class UnsupportedDatabases:
+            Count = 1
+
+            def GetDatabase(self, index):
+                raise RuntimeError("Невозможно найти базу данных 12345678.")
+
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = UnsupportedDatabases()
+        fmt.Print = Mock()
+        fmt.PrintOut = Mock()
+        self.bt.apply_fields(fmt, self._runtime_row())
+
+        with tempfile.TemporaryDirectory() as root:
+            requested = os.path.join(root, "preview_%PageNumber%.png")
+            self.assertFalse(self.bt.export_preview(fmt, requested))
+            self.assertFalse(os.path.exists(os.path.join(root, "preview_1.png")))
+
+        fmt.ExportToFile.assert_not_called()
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+        self.logger.err.assert_called_once()
+        self.assertIn("экспорт отменён", str(self.logger.err.call_args.args[0]))
+        self.assertIsNone(self.bt._preview_fields)
+
+    def test_failed_database_path_change_is_not_masked_by_export(self):
+        class BrokenTextFile:
+            FileName = r"C:\\production\\tmp_batch.csv"
+
+            def __setattr__(self, key, value):
+                if key == "FileName":
+                    raise RuntimeError("read-only BarTender binding")
+                super().__setattr__(key, value)
+
+        database = SimpleNamespace(
+            Type=bartender_com.BT_TEXT_FILE_DATABASE,
+            TextFile=BrokenTextFile(),
+        )
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = _Databases(database)
+        fmt.Print = Mock()
+        fmt.PrintOut = Mock()
+        self.bt.apply_fields(fmt, self._runtime_row())
+        with tempfile.TemporaryDirectory() as root:
+            self.assertFalse(self.bt.export_preview(fmt, os.path.join(root, "one.png")))
+        fmt.ExportToFile.assert_not_called()
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+
     def test_opening_new_format_clears_stale_preview_row(self):
         self.bt._preview_fields = self._runtime_row()
         opened = Mock()
