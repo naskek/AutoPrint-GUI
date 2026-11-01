@@ -37,6 +37,7 @@ def sha256(path: Path) -> str:
 def select_two_real_records(csv_path: Path) -> list[int]:
     """1-based record indices; include calibration rows in the count."""
     selected = []
+    seen = set()
     with csv_path.open("r", encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream, delimiter="\t")
         header = reader.fieldnames or []
@@ -47,6 +48,9 @@ def select_two_real_records(csv_path: Path) -> list[int]:
             if dm == "X":
                 continue
             parse_dm93(dm)
+            if dm in seen:
+                raise ValueError("Duplicate marking code in selected preview rows")
+            seen.add(dm)
             selected.append(i)
             if len(selected) == 2:
                 break
