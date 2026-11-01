@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import csv
+import hashlib
 import os
+import shutil
 import xml.etree.ElementTree as ET
 
 try:
@@ -248,6 +250,169 @@ class BT:
                 f"Preview DB: временный источник подключён ({bound}): {preview_data_path}"
             )
         return bound
+
+    @staticmethod
+    def supports_gs1_btxml_preview(fmt):
+        """Only the verified tmp_batch/GS1 contract can use BTXML preview."""
+        try:
+            db_fields = {
+                name.strip().casefold()
+                for name in str(fmt.UsedNames(1, "\n") or "").splitlines()
+            }
+            required = {
+                ("tmp_batch.tmp_batch." + name).casefold()
+                for name in ("ShortName", "ShortGTIN", "PROD_DATE",
+                             "PART_NUM", "DM", "NUM")
+            }
+            named = {
+                name.strip().casefold()
+                for name in str(fmt.UsedNames(0, "\n") or "").splitlines()
+            }
+            gs1_names = {"gs1_gtin", "gs1_serial", "gs1_crypto"}
+            return (
+                required.issubset(db_fields)
+                and gs1_names.issubset(named)
+                and int(fmt.Databases.Count or 0) == 1
+            )
+        except Exception:
+            return False
+
+    @staticmethod
+    def _build_gs1_btxml_preview_request(template_path, csv_path, directory):
+        """Build only the documented BTXML export command, never Print."""
+        root = ET.Element("XMLScript", Version="2.0",
+                          Name="AutoPrintLivePreview")
+        cmd = ET.SubElement(root, "Command", Name="PreviewOnly")
+        preview = ET.SubElement(
+            cmd, "ExportPrintPreviewToImage",
+            ReturnImageInResponse="false",
+        )
+        for tag, value in (
+            ("Format", str(template_path)),
+            ("Folder", str(directory)),
+            ("FileNameTemplate", "preview_%PageNumber%.png"),
+            ("ImageFormatType", "PNG"),
+            ("Colors", "btColors24Bit"),
+            ("DPI", "300"),
+            ("BackgroundColor", "16777215"),
+            ("Overwrite", "false"),
+            ("IncludeMargins", "false"),
+            ("IncludeBorder", "false"),
+        ):
+            ET.SubElement(preview, tag).text = value
+        recordset = ET.SubElement(
+            preview, "RecordSet", Name="tmp_batch", Type="btTextFile",
+            AddIfNone="false",
+        )
+        ET.SubElement(recordset, "FileName").text = str(csv_path)
+        ET.SubElement(recordset, "Delimitation").text = "btDelimTab"
+        ET.SubElement(recordset, "UseFieldNamesFromFirstRecord").text = "true"
+        setup = ET.SubElement(preview, "PrintSetup")
+        for tag, value in (
+            ("UseDatabase", "true"), ("RecordRange", "1"),
+            ("AutoPrintAgain", "false"), ("EnablePrompting", "false"),
+            ("IdenticalCopiesOfLabel", "1"),
+            ("NumberSerializedLabels", "1"),
+        ):
+            ET.SubElement(setup, tag).text = value
+        return ET.tostring(root, encoding="unicode")
+
+    @staticmethod
+    def _btxml_preview_response_ok(response):
+        """Return a result without exposing raw XML/marking values in logs."""
+        if not isinstance(response, str):
+            return False
+        try:
+            root = ET.fromstring(response)
+            if root.tag != "Response":
+                return False
+            if root.find(".//Error") is not None:
+                return False
+            if root.find("./Command/ExportPrintPreviewToImage") is None:
+                return False
+            for msg in root.iter("Message"):
+                if msg.attrib.get("Severity", "").casefold() == "error":
+                    return False
+            return True
+        except ET.ParseError:
+            return False
+
+    def export_gs1_btxml_preview(self, btw_path, row, output_path):
+        """Preview one real GS1 DB row without calling any print submit API.
+
+        The current preview-owned directory holds the copied BTW and CSV.
+        Close temporary COM format with btDoNotSaveChanges when accessible.
+        This is restricted to templates matching supports_gs1_btxml_preview.
+        """
+        dirname = os.path.dirname(os.path.abspath(output_path))
+        preview_template = os.path.join(dirname, "btxml_preview.btw")
+        preview_csv = os.path.join(dirname, "preview_data.csv")
+        final_image = os.path.join(dirname, "preview_1.png")
+        bt_doc = None
+        try:
+            if self.app is None:
+                raise RuntimeError("BarTender COM не запущен.")
+            if not isinstance(row, dict) or not row.get("DM"):
+                raise RuntimeError("Нет данных DM для предпросмотра.")
+            if not all(k in row for k in PREVIEW_DATA_FIELDS):
+                raise RuntimeError("Неполная запись для GS1-предпросмотра.")
+            from pythoncom import VT_BYREF, VT_DISPATCH
+            from win32com.client import VARIANT
+
+            os.makedirs(dirname, exist_ok=True)
+            with open(btw_path, "rb") as src:
+                source_sha = hashlib.sha256(src.read()).hexdigest()
+            shutil.copy2(btw_path, preview_template)
+            with open(preview_template, "rb") as copied:
+                copy_sha = hashlib.sha256(copied.read()).hexdigest()
+
+            with open(preview_csv, "w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(
+                    stream, fieldnames=PREVIEW_DATA_FIELDS, delimiter="\t",
+                )
+                writer.writeheader()
+                writer.writerow({key: row.get(key) or "" for key in PREVIEW_DATA_FIELDS})
+
+            xml = self._build_gs1_btxml_preview_request(
+                preview_template, preview_csv, dirname
+            )
+            messages = VARIANT(VT_BYREF | VT_DISPATCH, None)
+            response = self.app.XMLScript(xml, 0, messages)
+            if not self._btxml_preview_response_ok(response):
+                raise RuntimeError("BarTender BTXML не подтвердил экспорт.")
+            if not os.path.isfile(final_image) or os.path.getsize(final_image) == 0:
+                raise RuntimeError("BarTender BTXML не создал изображение.")
+
+            with open(btw_path, "rb") as src:
+                if hashlib.sha256(src.read()).hexdigest() != source_sha:
+                    raise RuntimeError("Исходный BTW изменился во время превью.")
+            with open(preview_template, "rb") as copied:
+                if hashlib.sha256(copied.read()).hexdigest() != copy_sha:
+                    raise RuntimeError("Временная копия BTW изменилась.")
+            self.logger.log("BTXML GS1: экспорт записи завершён (без печати).")
+            return True
+        except Exception as exc:
+            # Do not log raw XML, source CSV records or marking values.
+            self.logger.err(
+                "GS1 preview: не удалось сформировать корректный кадр "
+                f"({type(exc).__name__}); печать не выполнялась."
+            )
+            return False
+        finally:
+            if self.app is not None and os.path.isfile(preview_template):
+                try:
+                    bt_doc = self.app.Formats.Item(preview_template)
+                    bt_doc.Close(BT_DO_NOT_SAVE_CHANGES)
+                except Exception:
+                    # BarTender can retain file handles after export. The
+                    # preview-owned temporary directory remains in place,
+                    # until cleanup/restart; never touch production data.
+                    self.logger.log(
+                        "GS1 preview: временный BTW может удерживаться "
+                        "BarTender; очистка отложена."
+                    )
+                finally:
+                    bt_doc = None
 
     def export_preview(self, fmt, path):
         """Экспортирует изображение шаблона как в production v3.2.4."""
