@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
 import ipaddress
 import json
 import os
@@ -64,7 +63,6 @@ _BLOCKING_STATUS_FLAGS = (
     (PRINTER_STATUS_USER_INTERVENTION, "требуется вмешательство оператора"),
     (PRINTER_STATUS_OUT_OF_MEMORY, "недостаточно памяти принтера"),
     (PRINTER_STATUS_DOOR_OPEN, "крышка принтера открыта"),
-    (PRINTER_STATUS_SERVER_UNKNOWN, "статус print server неизвестен"),
 )
 
 _LOCAL_NAMED_PORTS = {
@@ -240,7 +238,6 @@ def _endpoint_from_port_name(port_name: str) -> Optional[TcpEndpoint]:
     return None
 
 
-@lru_cache(maxsize=128)
 def resolve_tcp_endpoint(port_name: str) -> Optional[TcpEndpoint]:
     """Resolve a Windows printer port to its configured TCP endpoint.
 
@@ -434,6 +431,22 @@ def check_printer(printer_name: str, timeout: float = 0.75) -> PrinterHealth:
         return _unavailable(
             printer_name,
             "; ".join(reasons),
+            connection=connection,
+            port_name=port_name,
+        )
+
+    # Windows does not know the server status in this case. Treat it
+    # as unknown, not a confirmed offline/blocked print queue.
+    if status & PRINTER_STATUS_SERVER_UNKNOWN:
+        if server_name or printer_name.startswith("\\\\"):
+            connection = CONNECTION_SHARED
+        elif port_name.upper().startswith("WSD-"):
+            connection = CONNECTION_NETWORK
+        else:
+            connection = local_kind or CONNECTION_UNKNOWN
+        return _unknown(
+            printer_name,
+            "Windows не подтвердил состояние print server",
             connection=connection,
             port_name=port_name,
         )
