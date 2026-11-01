@@ -235,6 +235,10 @@ class BT:
 
         if bound:
             try:
+                # Format.UseDatabase is the documented active-record flag;
+                # PrintSetup.UseDatabase is also used by the print setup.
+                # Both changes live only in the opened no-save preview format.
+                fmt.UseDatabase = True
                 fmt.PrintSetup.UseDatabase = True
             except Exception as e:
                 raise RuntimeError(
