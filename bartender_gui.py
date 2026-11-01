@@ -882,6 +882,8 @@ class App(ctk.CTk):
         self._printer_health_generation = 0
         self._printer_health_last = None
         self._printer_monitor_health = []
+        self._printer_monitor_rows = {}
+        self._printer_monitor_empty_visible = True
         self.product_map = {}
 
         self._build_ui()
@@ -3479,68 +3481,112 @@ class App(ctk.CTk):
         self._printer_health_last = health
 
     def _apply_printer_monitor(self, health_items):
-        health_items = list(health_items or [])
+        # Keep Tk widgets stable across periodic polls. Destroying and
+        # recreating the full scrollable panel every five seconds produces
+        # a visible flash even when no printer status has changed.
+        health_items = sorted(
+            list(health_items or []),
+            key=lambda item: item.printer_name.casefold(),
+        )
         self._printer_monitor_health = health_items
-        frame = getattr(self, "printer_monitor_frame", None)
+        state = self.__dict__
+        frame = state.get("printer_monitor_frame")
         if frame is None:
             return
+        rows = state.setdefault("_printer_monitor_rows", {})
+        empty_label = state.get("printer_monitor_empty_label")
 
-        try:
-            for child in frame.winfo_children():
-                child.destroy()
-        except Exception:
-            return
+        names = {health.printer_name for health in health_items}
+        for stale_name in list(rows):
+            if stale_name not in names:
+                old = rows.pop(stale_name)
+                try:
+                    old["frame"].destroy()
+                except Exception:
+                    pass
 
         if not health_items:
-            try:
-                ctk.CTkLabel(
-                    frame,
-                    text="Физические принтеры не найдены",
-                    anchor="w",
-                    text_color="#9E9E9E",
-                ).grid(row=0, column=0, sticky="ew", padx=4, pady=4)
-            except Exception:
-                pass
+            if empty_label is not None and not state.get(
+                "_printer_monitor_empty_visible", False
+            ):
+                empty_label.configure(text="Физические принтеры не найдены")
+                empty_label.grid()
+                state["_printer_monitor_empty_visible"] = True
             return
 
-        for row_index, health in enumerate(
-            sorted(health_items, key=lambda item: item.printer_name.casefold())
+        if empty_label is not None and state.get(
+            "_printer_monitor_empty_visible", True
         ):
+            empty_label.grid_remove()
+            state["_printer_monitor_empty_visible"] = False
+
+        for row_index, health in enumerate(health_items):
             if health.state == STATE_AVAILABLE:
                 color = "#4CAF50"
             elif health.state == STATE_UNAVAILABLE:
                 color = "#EF5350"
             else:
                 color = "#9E9E9E"
+            protocol = connection_label(health)
+            existing = rows.get(health.printer_name)
+            if existing is not None:
+                # A stable status/protocol needs *no* Tk changes at all.
+                if existing["state"] != health.state:
+                    existing["led"].configure(text_color=color)
+                    existing["state"] = health.state
+                if existing["protocol_text"] != protocol:
+                    existing["protocol"].configure(text=protocol)
+                    existing["protocol_text"] = protocol
+                if existing["row_index"] != row_index:
+                    existing["frame"].grid_configure(row=row_index)
+                    existing["row_index"] = row_index
+                continue
 
+            row = None
             try:
                 row = ctk.CTkFrame(frame, fg_color="transparent")
                 row.grid(row=row_index, column=0, sticky="ew", padx=2, pady=1)
                 row.grid_columnconfigure(1, weight=1)
-                ctk.CTkLabel(
+                led = ctk.CTkLabel(
                     row,
                     text="●",
                     width=18,
                     anchor="center",
                     text_color=color,
                     font=("Arial", 16, "bold"),
-                ).grid(row=0, column=0, sticky="w", padx=(2, 3), pady=1)
+                )
+                led.grid(row=0, column=0, sticky="w", padx=(2, 3), pady=1)
                 ctk.CTkLabel(
                     row,
                     text=health.printer_name,
                     anchor="w",
                     justify="left",
                 ).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=1)
-                ctk.CTkLabel(
+                protocol_label = ctk.CTkLabel(
                     row,
-                    text=connection_label(health),
+                    text=protocol,
                     width=92,
                     anchor="e",
                     text_color="#9E9E9E",
                     font=("Arial", 11),
-                ).grid(row=0, column=2, sticky="e", padx=(4, 2), pady=1)
+                )
+                protocol_label.grid(
+                    row=0, column=2, sticky="e", padx=(4, 2), pady=1
+                )
+                rows[health.printer_name] = {
+                    "frame": row,
+                    "led": led,
+                    "protocol": protocol_label,
+                    "protocol_text": protocol,
+                    "state": health.state,
+                    "row_index": row_index,
+                }
             except Exception:
-                continue
+                if row is not None:
+                    try:
+                        row.destroy()
+                    except Exception:
+                        pass
 
     def _cancel_printer_health_callbacks(self):
         state = self.__dict__
