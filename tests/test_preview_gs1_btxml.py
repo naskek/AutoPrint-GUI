@@ -62,7 +62,7 @@ class BtXmlGs1PreviewProbeTests(unittest.TestCase):
         recordset = tree.find("./Command/ExportPrintPreviewToImage/RecordSet")
         self.assertEqual(recordset.attrib,
                          {"Name": "tmp_batch", "Type": "btTextFile", "AddIfNone": "false"})
-        self.assertEqual(recordset.findtext("FileName"), "C:/isolated/record.csv")
+        self.assertEqual(recordset.findtext("FileName"), str(Path("C:/isolated/record.csv")))
         self.assertEqual(recordset.findtext("Delimitation"), "btDelimTab")
         self.assertEqual(recordset.findtext("UseFieldNamesFromFirstRecord"), "true")
 
@@ -74,9 +74,9 @@ class BtXmlGs1PreviewProbeTests(unittest.TestCase):
         )
         tree = ET.fromstring(xml)
         self.assertEqual(tree.findtext("./Command/ExportPrintPreviewToImage/Format"),
-                         "C:/labels/a & b.btw")
+                         str(Path("C:/labels/a & b.btw")))
         self.assertEqual(tree.findtext("./Command/ExportPrintPreviewToImage/RecordSet/FileName"),
-                         "C:/data/x & y.csv")
+                         str(Path("C:/data/x & y.csv")))
         self.assertNotIn("\x1d", xml)
 
     def test_response_requires_export_element_and_no_error(self):
