@@ -15,6 +15,10 @@ import hashlib
 from pathlib import Path
 import shutil
 import tempfile
+import sys
+
+# Allow direct invocation from the tools/ path on Windows.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.gs1_dm_audit import BATCH_FIELDS, parse_dm93
 
