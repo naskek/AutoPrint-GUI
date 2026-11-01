@@ -170,6 +170,16 @@ class BT:
         for index in range(1, count + 1):
             try:
                 database = databases.GetDatabase(index)
+            except Exception as e:
+                # A real BarTender 2022 R5 installation reports COM error
+                # 12345678 here despite valid Databases.Count/Configuration.
+                # Exporting afterwards would show stale template data and
+                # incorrectly report that the preview was refreshed.
+                raise RuntimeError(
+                    f"Preview DB: не удалось получить базу #{index}; "
+                    "текущие данные не подтверждены, экспорт отменён"
+                ) from e
+            try:
                 if int(database.Type) != BT_TEXT_FILE_DATABASE:
                     continue
                 current_path = database.TextFile.FileName
@@ -178,16 +188,18 @@ class BT:
                 database.TextFile.FileName = preview_data_path
                 bound += 1
             except Exception as e:
-                self.logger.err(
-                    f"Preview DB: не удалось перепривязать текстовую БД #{index}: {e}"
-                )
+                raise RuntimeError(
+                    f"Preview DB: ошибка привязки текстовой базы #{index}; "
+                    "экспорт отменён"
+                ) from e
 
         if bound:
             try:
                 fmt.PrintSetup.UseDatabase = True
             except Exception as e:
-                self.logger.err(f"Preview DB: не удалось включить UseDatabase: {e}")
-                return 0
+                raise RuntimeError(
+                    "Preview DB: не удалось включить UseDatabase; экспорт отменён"
+                ) from e
             self.logger.log(
                 f"Preview DB: временный источник подключён ({bound}): {preview_data_path}"
             )
