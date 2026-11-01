@@ -287,8 +287,14 @@ class BT:
             cmd, "ExportPrintPreviewToImage",
             ReturnImageInResponse="false",
         )
+        # BarTender 2022 BTXML Format can close the export-only document
+        # at command completion without saving changes. Avoid Forms.Item()
+        # post-export lookup: not verified on the deployed ActiveX collection.
+        ET.SubElement(
+            preview, "Format", CloseAtEndOfJob="true",
+            SaveAtEndOfJob="false",
+        ).text = str(template_path)
         for tag, value in (
-            ("Format", str(template_path)),
             ("Folder", str(directory)),
             ("FileNameTemplate", "preview_%PageNumber%.png"),
             ("ImageFormatType", "PNG"),
@@ -341,14 +347,13 @@ class BT:
         """Preview one real GS1 DB row without calling any print submit API.
 
         The current preview-owned directory holds the copied BTW and CSV.
-        Close temporary COM format with btDoNotSaveChanges when accessible.
+        BTXML Format closes at export command completion without saving.
         This is restricted to templates matching supports_gs1_btxml_preview.
         """
         dirname = os.path.dirname(os.path.abspath(output_path))
         preview_template = os.path.join(dirname, "btxml_preview.btw")
         preview_csv = os.path.join(dirname, "preview_data.csv")
         final_image = os.path.join(dirname, "preview_1.png")
-        bt_doc = None
         try:
             if self.app is None:
                 raise RuntimeError("BarTender COM не запущен.")
@@ -398,22 +403,6 @@ class BT:
                 f"({type(exc).__name__}); печать не выполнялась."
             )
             return False
-        finally:
-            if self.app is not None and os.path.isfile(preview_template):
-                try:
-                    bt_doc = self.app.Formats.Item(preview_template)
-                    bt_doc.Close(BT_DO_NOT_SAVE_CHANGES)
-                except Exception:
-                    # BarTender can retain file handles after export. The
-                    # preview-owned temporary directory remains in place,
-                    # until cleanup/restart; never touch production data.
-                    self.logger.log(
-                        "GS1 preview: временный BTW может удерживаться "
-                        "BarTender; очистка отложена."
-                    )
-                finally:
-                    bt_doc = None
-
     def export_preview(self, fmt, path):
         """Экспортирует изображение шаблона как в production v3.2.4."""
         output_path = str(path).replace("%PageNumber%", "1")
