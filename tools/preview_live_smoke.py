@@ -33,6 +33,31 @@ class Logger:
         print("ERROR:", message)
 
 
+# These symbols use per-record GS1 processing in the production BTW.
+# A raw DM SetNamedSubStringValue + template ExportToFile can produce a
+# different image while silently bypassing the database/VBScript pipeline.
+GS1_TRANSFORMED_NAMES = frozenset({
+    "GS1_GTIN", "GS1_SERIAL", "GS1_CRYPTO"
+})
+
+
+def assert_named_only_is_safe(names):
+    names = set(names)
+    gs1 = GS1_TRANSFORMED_NAMES & names
+    if gs1:
+        raise RuntimeError(
+            "Named-only diagnostic is INVALID for GS1/VBScript-backed templates "
+            f"({', '.join(sorted(gs1))}). Use database-backed preview verification; "
+            "raw DM PNG cannot validate GS1 encoding."
+        )
+    required = {"ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM", "NUM"}
+    missing = required - names
+    if missing:
+        raise RuntimeError(
+            f"Named-only diagnostic unsupported: missing {sorted(missing)}"
+        )
+
+
 def smoke(template: Path, source_csv: Path, named_diagnostic: bool = False) -> int:
     before = sha256(template)
     with source_csv.open(encoding="utf-8-sig", newline="") as inp:
@@ -60,12 +85,7 @@ def smoke(template: Path, source_csv: Path, named_diagnostic: bool = False) -> i
                 bt.set_common_print_flags(fmt)
                 if named_diagnostic:
                     names = {item.Name for item in fmt.NamedSubStrings}
-                    required = {"ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM", "NUM"}
-                    missing = required - names
-                    if missing:
-                        raise RuntimeError(
-                            f"Named-only diagnostic unsupported: missing {sorted(missing)}"
-                        )
+                    assert_named_only_is_safe(names)
                 bt.apply_fields(fmt, {
                     "ShortName": row.get("ShortName") or row.get("NAME") or "TEST",
                     "ShortGTIN": row.get("ShortGTIN") or str(row.get("GTIN") or "")[-3:],
