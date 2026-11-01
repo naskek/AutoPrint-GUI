@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import tempfile
 
+import bartender_com
 from bartender_com import BT, BT_DO_NOT_SAVE_CHANGES
 
 
@@ -37,6 +38,10 @@ def smoke(template: Path, source_csv: Path) -> int:
 
     output_root = Path(tempfile.mkdtemp(prefix="autoprint-preview60-")).resolve()
     print("OUTPUT DIRECTORY:", output_root)
+    # Use a dedicated BarTender.Application, never attach to an operator
+    # Designer/AutoPrint COM instance.
+    from win32com.client import DispatchEx
+    bartender_com.Dispatch = DispatchEx
     bt = BT(Logger())
     try:
         bt.start()
