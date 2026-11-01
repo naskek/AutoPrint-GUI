@@ -139,6 +139,62 @@ class LivePreviewRuntimeDataTests(unittest.TestCase):
         self.assertFalse(fmt.PrintSetup.UseDatabase)
         fmt.ExportToFile.assert_called_once()
 
+    def test_database_connection_name_from_xml_is_used_instead_of_recordset_name(self):
+        class NamedDatabases:
+            Count = 1
+            Configuration = (
+                '<DatabaseSetup><DatabaseConnections>'
+                '<DatabaseConnection Name="@1" Type="TextFile" />'
+                '</DatabaseConnections><RecordSets>'
+                '<RecordSet Name="tmp_batch" Connection="@1" />'
+                '</RecordSets></DatabaseSetup>'
+            )
+
+            def __init__(self):
+                self.calls = []
+                self.database = SimpleNamespace(
+                    Type=bartender_com.BT_TEXT_FILE_DATABASE,
+                    TextFile=SimpleNamespace(FileName=r"C:\\data\\tmp_batch.csv"),
+                )
+
+            def GetDatabase(self, identifier):
+                self.calls.append(identifier)
+                if identifier != "@1":
+                    raise RuntimeError("Wrong recordset or numeric COM index")
+                return self.database
+
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = NamedDatabases()
+        fmt.PrintSetup = SimpleNamespace(UseDatabase=False)
+        self.bt.apply_fields(fmt, self._runtime_row())
+        with tempfile.TemporaryDirectory() as root:
+            self.assertTrue(self.bt.export_preview(fmt, os.path.join(root, "preview.png")))
+        self.assertEqual(fmt.Databases.calls, ["@1"])
+        self.assertTrue(fmt.PrintSetup.UseDatabase)
+        fmt.ExportToFile.assert_called_once()
+
+    def test_xml_recordset_name_is_never_used_as_database_connection(self):
+        class MisconfiguredDatabases:
+            Count = 1
+            Configuration = (
+                '<DatabaseSetup><DatabaseConnections>'
+                '<DatabaseConnection Name="@1" Type="TextFile" />'
+                '</DatabaseConnections><RecordSets>'
+                '<RecordSet Name="another" Connection="@1" />'
+                '</RecordSets></DatabaseSetup>'
+            )
+            def GetDatabase(self, identifier):
+                raise AssertionError("No known tmp_batch connection")
+
+        fmt = Mock()
+        fmt.NamedSubStrings = []
+        fmt.Databases = MisconfiguredDatabases()
+        self.bt.apply_fields(fmt, self._runtime_row())
+        with tempfile.TemporaryDirectory() as root:
+            self.assertFalse(self.bt.export_preview(fmt, os.path.join(root, "preview.png")))
+        fmt.ExportToFile.assert_not_called()
+
     def test_real_bartender_12345678_failure_never_exports_stale_preview(self):
         class UnsupportedDatabases:
             Count = 1
