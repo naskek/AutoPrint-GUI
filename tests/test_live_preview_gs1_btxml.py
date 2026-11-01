@@ -60,6 +60,11 @@ class GS1BtXmlLivePreviewTests(unittest.TestCase):
         export = root.find("./Command/ExportPrintPreviewToImage")
         self.assertIsNotNone(export)
         self.assertEqual(export.attrib["ReturnImageInResponse"], "false")
+        fmt = export.find("Format")
+        self.assertEqual(fmt.attrib, {
+            "CloseAtEndOfJob": "true",
+            "SaveAtEndOfJob": "false",
+        })
         self.assertEqual(export.findtext("RecordSet/FileName"),
                          "C:/temp/data.csv")
         self.assertEqual(export.find("RecordSet").attrib["AddIfNone"], "false")
@@ -92,7 +97,6 @@ class GS1BtXmlLivePreviewTests(unittest.TestCase):
             original.write_bytes(b"immutable BTW")
             checksum = hashlib.sha256(original.read_bytes()).digest()
             target = Path(root) / "preview" / "preview_%PageNumber%.png"
-            document = Mock()
 
             def export(xml, source_type, messages):
                 self.assertEqual(source_type, 0)
@@ -117,7 +121,6 @@ class GS1BtXmlLivePreviewTests(unittest.TestCase):
 
             app = Mock()
             app.XMLScript.side_effect = export
-            app.Formats.Item.return_value = document
             self.bt.app = app
 
             ok = self.bt.export_gs1_btxml_preview(
@@ -127,10 +130,7 @@ class GS1BtXmlLivePreviewTests(unittest.TestCase):
             self.assertTrue(ok)
             self.assertEqual(hashlib.sha256(original.read_bytes()).digest(), checksum)
             app.XMLScript.assert_called_once()
-            document.Close.assert_called_once_with(1)
-            app.Formats.Item.assert_called_once_with(
-                str(target.parent / "btxml_preview.btw")
-            )
+            app.Formats.Item.assert_not_called()
             app.Print.assert_not_called()
             app.PrintOut.assert_not_called()
 
