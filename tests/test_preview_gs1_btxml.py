@@ -65,6 +65,14 @@ class BtXmlGs1PreviewProbeTests(unittest.TestCase):
         self.assertEqual(recordset.findtext("FileName"), str(Path("C:/isolated/record.csv")))
         self.assertEqual(recordset.findtext("Delimitation"), "btDelimTab")
         self.assertEqual(recordset.findtext("UseFieldNamesFromFirstRecord"), "true")
+        setup = tree.find("./Command/ExportPrintPreviewToImage/PrintSetup")
+        self.assertIsNotNone(setup)
+        self.assertEqual(setup.findtext("UseDatabase"), "true")
+        self.assertEqual(setup.findtext("RecordRange"), "1")
+        self.assertEqual(setup.findtext("AutoPrintAgain"), "false")
+        self.assertEqual(setup.findtext("EnablePrompting"), "false")
+        self.assertEqual(setup.findtext("IdenticalCopiesOfLabel"), "1")
+        self.assertEqual(setup.findtext("NumberSerializedLabels"), "1")
 
     def test_btxml_escapes_untrusted_paths_without_embedded_dm(self):
         xml = build_preview_xml(
@@ -86,11 +94,28 @@ class BtXmlGs1PreviewProbeTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "No successful export"):
             validate_response("<Response><Command/></Response>")
-        with self.assertRaisesRegex(RuntimeError, "contains Error"):
+        with self.assertRaisesRegex(RuntimeError, "response contained Error"):
             validate_response(
                 "<Response><Command><ExportPrintPreviewToImage/>"
                 "<Error/></Command></Response>"
             )
+        with self.assertRaisesRegex(RuntimeError, "severity=Error"):
+            validate_response(
+                "<Response><Command><ExportPrintPreviewToImage/>"
+                '<Message ID="3700" Severity="Error" Category="Database">'
+                "<Text>private marking value</Text></Message>"
+                "</Command></Response>"
+            )
+
+    def test_response_returns_only_non_sensitive_message_metadata(self):
+        result = validate_response(
+            "<Response><Command><ExportPrintPreviewToImage/>"
+            '<Message ID="1000" Severity="Warning" Category="Database">'
+            "<Text>secret customer barcode payload</Text></Message>"
+            "</Command></Response>"
+        )
+        self.assertEqual(result, ["ID=1000 severity=Warning category=Database"])
+        self.assertNotIn("secret", str(result))
 
     def test_no_print_submission_code(self):
         source = (Path(__file__).resolve().parents[1]
