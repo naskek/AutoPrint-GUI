@@ -56,6 +56,15 @@ from services.crpt_settings import load_crpt_settings, set_runtime_overrides
 from services.crpt_token_manager import get_token_manager, CrptTokenError
 from services import crpt_auth
 from licensing import ensure_license_or_exit
+from printer_status import (
+    PrinterHealth,
+    STATE_AVAILABLE,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    check_printer,
+    connection_label,
+    is_physical_printer,
+)
 
 BASE_DIR = get_base_dir()
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
@@ -108,6 +117,8 @@ PATH_RESIZE_DEBOUNCE_MS = 80
 CSV_SCROLLBAR_RESIZE_DEBOUNCE_MS = 120
 PREVIEW_RESIZE_DEBOUNCE_MS = 160
 LIVE_PREVIEW_DEBOUNCE_MS = 400
+PRINTER_HEALTH_INTERVAL_MS = 5000
+PRINTER_HEALTH_TIMEOUT_SEC = 0.75
 TOP_LEVEL_MENU_ORDER = ("Каталог", "Шаблоны", "Работа с кодами")
 CODES_MENU_ORDER = ("Проверка кодов", "Отчёт о вводе в оборот")
 PRINT_SELECTION_MODE_RANGE = "Диапазон"
@@ -866,6 +877,13 @@ class App(ctk.CTk):
         self._live_preview_requested = False
         self._live_preview_generation = 0
         self._preview_temp_dir = None
+        self._printer_health_after_id = None
+        self._printer_health_poll_after_id = None
+        self._printer_health_generation = 0
+        self._printer_health_last = None
+        self._printer_monitor_health = []
+        self._printer_monitor_rows = {}
+        self._printer_monitor_empty_visible = True
         self.product_map = {}
 
         self._build_ui()
@@ -1478,9 +1496,37 @@ class App(ctk.CTk):
             source_body,
             values=["(нет принтеров)"],
             state="readonly",
-            command=lambda _value: self._refresh_runtime_status(),
+            command=self._on_printer_change,
         )
         self.prn_combo.grid(row=2, column=1, sticky="ew", padx=10, pady=(5, 10))
+
+        self.printer_monitor_section = self._make_main_section(
+            self.right_column_frame,
+            "Доступность принтеров",
+        )
+        self.printer_monitor_section.grid(
+            row=1, column=0, sticky="nsew", pady=(8, 0)
+        )
+        monitor_body = self.printer_monitor_section.body
+        self.printer_monitor_frame = ctk.CTkScrollableFrame(
+            monitor_body,
+            height=180,
+            fg_color="transparent",
+        )
+        self.printer_monitor_frame.pack(
+            fill="both", expand=True, padx=6, pady=(0, 8)
+        )
+        self.printer_monitor_frame.grid_columnconfigure(0, weight=1)
+        self.printer_monitor_empty_label = ctk.CTkLabel(
+            self.printer_monitor_frame,
+            text="Проверка принтеров…",
+            anchor="w",
+            text_color="#9E9E9E",
+        )
+        self.printer_monitor_empty_label.grid(
+            row=0, column=0, sticky="ew", padx=4, pady=4
+        )
+
         self.btw16_entry = ctk.CTkEntry(source_body)
         self.btw30_entry = ctk.CTkEntry(source_body)
 
@@ -3211,6 +3257,10 @@ class App(ctk.CTk):
             except Exception:
                 pass
         state["_live_preview_after_id"] = None
+        state["_printer_health_generation"] = int(
+            state.get("_printer_health_generation", 0)
+        ) + 1
+        self._cancel_printer_health_callbacks()
         self._cleanup_preview_temp_dir()
         self._close_date_popover()
         version_closer = getattr(type(self), "_close_version_dialog", None)
@@ -3415,6 +3465,315 @@ class App(ctk.CTk):
     def _template_requires_manual_part(self, template_id: str) -> bool:
         return self._template_part_mode(template_id) == "manual"
 
+    def _on_printer_change(self, _value=None):
+        self._refresh_runtime_status()
+        self._schedule_printer_health_check(immediate=True)
+
+    def _apply_printer_health(self, health: PrinterHealth):
+        if health is None:
+            return
+        try:
+            current = (self.prn_combo.get() or "").strip()
+        except Exception:
+            current = ""
+        if current and health.printer_name and current != health.printer_name:
+            return
+        self._printer_health_last = health
+
+    def _apply_printer_monitor(self, health_items):
+        # Keep Tk widgets stable across periodic polls. Destroying and
+        # recreating the full scrollable panel every five seconds produces
+        # a visible flash even when no printer status has changed.
+        health_items = sorted(
+            list(health_items or []),
+            key=lambda item: item.printer_name.casefold(),
+        )
+        self._printer_monitor_health = health_items
+        state = self.__dict__
+        frame = state.get("printer_monitor_frame")
+        if frame is None:
+            return
+        rows = state.setdefault("_printer_monitor_rows", {})
+        empty_label = state.get("printer_monitor_empty_label")
+
+        names = {health.printer_name for health in health_items}
+        for stale_name in list(rows):
+            if stale_name not in names:
+                old = rows.pop(stale_name)
+                try:
+                    old["frame"].destroy()
+                except Exception:
+                    pass
+
+        if not health_items:
+            if empty_label is not None and not state.get(
+                "_printer_monitor_empty_visible", False
+            ):
+                empty_label.configure(text="Физические принтеры не найдены")
+                empty_label.grid()
+                state["_printer_monitor_empty_visible"] = True
+            return
+
+        if empty_label is not None and state.get(
+            "_printer_monitor_empty_visible", True
+        ):
+            empty_label.grid_remove()
+            state["_printer_monitor_empty_visible"] = False
+
+        for row_index, health in enumerate(health_items):
+            if health.state == STATE_AVAILABLE:
+                color = "#4CAF50"
+            elif health.state == STATE_UNAVAILABLE:
+                color = "#EF5350"
+            else:
+                color = "#9E9E9E"
+            protocol = connection_label(health)
+            existing = rows.get(health.printer_name)
+            if existing is not None:
+                # A stable status/protocol needs *no* Tk changes at all.
+                if existing["state"] != health.state:
+                    existing["led"].configure(text_color=color)
+                    existing["state"] = health.state
+                if existing["protocol_text"] != protocol:
+                    existing["protocol"].configure(text=protocol)
+                    existing["protocol_text"] = protocol
+                if existing["row_index"] != row_index:
+                    existing["frame"].grid_configure(row=row_index)
+                    existing["row_index"] = row_index
+                continue
+
+            row = None
+            try:
+                row = ctk.CTkFrame(frame, fg_color="transparent")
+                row.grid(row=row_index, column=0, sticky="ew", padx=2, pady=1)
+                row.grid_columnconfigure(1, weight=1)
+                led = ctk.CTkLabel(
+                    row,
+                    text="●",
+                    width=18,
+                    anchor="center",
+                    text_color=color,
+                    font=("Arial", 16, "bold"),
+                )
+                led.grid(row=0, column=0, sticky="w", padx=(2, 3), pady=1)
+                ctk.CTkLabel(
+                    row,
+                    text=health.printer_name,
+                    anchor="w",
+                    justify="left",
+                ).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=1)
+                protocol_label = ctk.CTkLabel(
+                    row,
+                    text=protocol,
+                    width=92,
+                    anchor="e",
+                    text_color="#9E9E9E",
+                    font=("Arial", 11),
+                )
+                protocol_label.grid(
+                    row=0, column=2, sticky="e", padx=(4, 2), pady=1
+                )
+                rows[health.printer_name] = {
+                    "frame": row,
+                    "led": led,
+                    "protocol": protocol_label,
+                    "protocol_text": protocol,
+                    "state": health.state,
+                    "row_index": row_index,
+                }
+            except Exception:
+                if row is not None:
+                    try:
+                        row.destroy()
+                    except Exception:
+                        pass
+
+    def _cancel_printer_health_callbacks(self):
+        state = self.__dict__
+        for key in ("_printer_health_after_id", "_printer_health_poll_after_id"):
+            pending = state.get(key)
+            if pending is not None:
+                try:
+                    object.__getattribute__(self, "after_cancel")(pending)
+                except Exception:
+                    pass
+            state[key] = None
+
+    def _schedule_printer_health_check(self, immediate=False):
+        state = self.__dict__
+        if state.get("_shutdown_started", False):
+            return
+
+        generation = int(state.get("_printer_health_generation", 0)) + 1
+        state["_printer_health_generation"] = generation
+        self._cancel_printer_health_callbacks()
+
+        def launch():
+            state["_printer_health_after_id"] = None
+            if generation != state.get("_printer_health_generation", 0):
+                return
+            if state.get("_shutdown_started", False):
+                return
+            try:
+                selected_printer = (self.prn_combo.get() or "").strip()
+            except Exception:
+                selected_printer = ""
+
+            result_holder = {}
+
+            def unknown_health(printer_name, exc):
+                return PrinterHealth(
+                    printer_name=printer_name,
+                    state=STATE_UNKNOWN,
+                    connection="unknown",
+                    detail=f"ошибка проверки: {exc}",
+                )
+
+            def worker():
+                try:
+                    printer_names = enum_printers() or []
+                except Exception:
+                    printer_names = []
+
+                monitor_health = []
+                seen = set()
+                for raw_name in printer_names:
+                    printer_name = str(raw_name or "").strip()
+                    key = printer_name.casefold()
+                    if not printer_name or printer_name == "(нет принтеров)" or key in seen:
+                        continue
+                    seen.add(key)
+                    try:
+                        if not is_physical_printer(printer_name):
+                            continue
+                    except Exception:
+                        # Prefer a false positive over hiding an offline physical printer.
+                        pass
+                    try:
+                        health = check_printer(
+                            printer_name,
+                            timeout=PRINTER_HEALTH_TIMEOUT_SEC,
+                        )
+                    except Exception as exc:
+                        health = unknown_health(printer_name, exc)
+                    monitor_health.append(health)
+
+                result_holder["monitor"] = monitor_health
+
+                if not selected_printer or selected_printer == "(нет принтеров)":
+                    result_holder["health"] = PrinterHealth(
+                        printer_name=selected_printer,
+                        state=STATE_UNKNOWN,
+                        connection="unknown",
+                        detail="принтер не выбран",
+                    )
+                    return
+
+                selected_health = next(
+                    (
+                        item
+                        for item in monitor_health
+                        if item.printer_name == selected_printer
+                    ),
+                    None,
+                )
+                if selected_health is not None:
+                    result_holder["health"] = selected_health
+                    return
+
+                try:
+                    result_holder["health"] = check_printer(
+                        selected_printer,
+                        timeout=PRINTER_HEALTH_TIMEOUT_SEC,
+                    )
+                except Exception as exc:
+                    result_holder["health"] = unknown_health(selected_printer, exc)
+
+            thread = threading.Thread(
+                target=worker,
+                name="AutoPrintPrinterHealth",
+                daemon=True,
+            )
+            thread.start()
+
+            def poll():
+                state["_printer_health_poll_after_id"] = None
+                if generation != state.get("_printer_health_generation", 0):
+                    return
+                if state.get("_shutdown_started", False):
+                    return
+                if thread.is_alive():
+                    try:
+                        after = object.__getattribute__(self, "after")
+                        state["_printer_health_poll_after_id"] = after(100, poll)
+                    except Exception:
+                        state["_printer_health_poll_after_id"] = None
+                    return
+
+                monitor_health = result_holder.get("monitor")
+                if monitor_health is not None:
+                    self._apply_printer_monitor(monitor_health)
+                health = result_holder.get("health")
+                if health is not None:
+                    self._apply_printer_health(health)
+                try:
+                    after = object.__getattribute__(self, "after")
+                    state["_printer_health_after_id"] = after(
+                        PRINTER_HEALTH_INTERVAL_MS,
+                        lambda: self._schedule_printer_health_check(immediate=True),
+                    )
+                except Exception:
+                    state["_printer_health_after_id"] = None
+
+            poll()
+
+        try:
+            after = object.__getattribute__(self, "after")
+            state["_printer_health_after_id"] = after(
+                0 if immediate else PRINTER_HEALTH_INTERVAL_MS,
+                launch,
+            )
+        except Exception:
+            state["_printer_health_after_id"] = None
+
+    def _ensure_printer_available_for_print(self, printer_name, action="Печать"):
+        try:
+            health = check_printer(
+                printer_name,
+                timeout=PRINTER_HEALTH_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            health = PrinterHealth(
+                printer_name=str(printer_name or ""),
+                state=STATE_UNKNOWN,
+                connection="unknown",
+                detail=f"ошибка проверки: {exc}",
+            )
+        self._apply_printer_health(health)
+
+        if health.state == STATE_UNAVAILABLE:
+            message = (
+                f"{action}: принтер '{printer_name}' недоступен.\n"
+                f"{health.detail}\n\n"
+                "Печать не отправлена."
+            )
+            try:
+                self.logger.err(message.replace("\n", " "))
+            except Exception:
+                pass
+            mb.showerror("Принтер недоступен", message)
+            return False
+
+        if health.state == STATE_UNKNOWN:
+            try:
+                self.logger.log(
+                    f"{action}: состояние принтера '{printer_name}' не удалось "
+                    f"подтвердить ({health.detail}); печать продолжается."
+                )
+            except Exception:
+                pass
+        return True
+
     def _get_printer_values(self):
         try:
             values = list(self.prn_combo.cget("values") or [])
@@ -3470,6 +3829,7 @@ class App(ctk.CTk):
         if not target:
             target = self._pick_printer_by_keywords(("TSC310", "TSC 310", "TSC TE310", "TE310"))
         self.prn_combo.set(target or items[0])
+        self._schedule_printer_health_check(immediate=True)
 
     def _set_default_printer_for_format(self, fmt: str):
         """Выбирает принтер по умолчанию для формата, если он есть в списке."""
@@ -3480,7 +3840,10 @@ class App(ctk.CTk):
         target = self._match_printer_value(pref)
         if target:
             try:
+                previous = self.prn_combo.get()
                 self.prn_combo.set(target)
+                if target != previous:
+                    self._schedule_printer_health_check(immediate=True)
             except Exception:
                 pass
             return
@@ -3488,7 +3851,10 @@ class App(ctk.CTk):
         target = self._pick_printer_by_keywords(preferred)
         if target:
             try:
+                previous = self.prn_combo.get()
                 self.prn_combo.set(target)
+                if target != previous:
+                    self._schedule_printer_health_check(immediate=True)
             except Exception:
                 pass
 
@@ -7155,6 +7521,8 @@ class App(ctk.CTk):
         if not prn:
             self.logger.err("Стикер: принтер не найден.")
             return
+        if not self._ensure_printer_available_for_print(prn, "Печать стикера"):
+            return
         sticker_path = resolve_sticker_template_path(self.cfg)
         if not sticker_path:
             self.logger.err(
@@ -8624,6 +8992,13 @@ class App(ctk.CTk):
         prn = self._get_printer()
         if not prn:
             return
+        try:
+            selected_fmt = (self.format_combo.get() or "").strip()
+        except Exception:
+            selected_fmt = ""
+        if selected_fmt and selected_fmt != "Auto":
+            if not self._ensure_printer_available_for_print(prn, "Печать"):
+                return
 
         copies = 1
         batch_size = self._get_batch_size() or total
@@ -8770,6 +9145,14 @@ class App(ctk.CTk):
                         last_fmt = fmt_name
                     except Exception:
                         pass
+
+                    if not prn:
+                        raise Exception("Принтер не выбран.")
+                    if not self._ensure_printer_available_for_print(
+                        prn,
+                        f"Пакет {bidx}",
+                    ):
+                        break
 
                     btw = self._get_btw_for_format(fmt_name)
                     if not btw:
