@@ -243,7 +243,9 @@ def resolve_tcp_endpoint(port_name: str) -> Optional[TcpEndpoint]:
 
     Win32_TCPIPPrinterPort is used because arbitrary Standard TCP/IP port names
     do not have to contain the printer IP address. The fallback only handles port
-    names that are themselves an IP address (or IP_/TCP_ prefixed).
+    names that are themselves an IP address (or IP_/TCP_ prefixed) on
+    non-Windows hosts. On Windows an unknown configured port must fail open
+    as UNKNOWN rather than guessing RAW/9100 (which may be LPR/515).
     """
     port_name = _first_port_name(port_name)
     if not port_name:
@@ -281,19 +283,19 @@ def resolve_tcp_endpoint(port_name: str) -> Optional[TcpEndpoint]:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.SubprocessError):
-        return fallback
+        return None
 
     if completed.returncode != 0:
-        return fallback
+        return None
 
     try:
         payload = json.loads((completed.stdout or "").strip() or "{}")
     except (TypeError, ValueError):
-        return fallback
+        return None
 
     host = str(payload.get("Host") or "").strip()
     if not host:
-        return fallback
+        return None
 
     try:
         port = int(payload.get("Port") or 0)
