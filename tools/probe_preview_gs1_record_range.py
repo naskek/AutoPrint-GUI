@@ -120,8 +120,16 @@ def probe(source_btw: Path, source_csv: Path) -> int:
                 finally:
                     fmt = None
 
-        # Different images alone do NOT prove different/valid DataMatrix.
-        print("DIAGNOSTIC COMPLETED; NOT Issue #60 PASS")
+        # Identical output is a definitive failure for two distinct source DMs.
+        # Distinct output is NOT proof of correct GS1 bytes or database binding.
+        if sha256(output_root / "record_1" / "preview_1.png") == sha256(
+            output_root / "record_2" / "preview_1.png"
+        ):
+            raise RuntimeError(
+                "FAIL: two distinct source DM rows produced IDENTICAL PNGs; "
+                "database/record binding not confirmed"
+            )
+        print("DIAGNOSTIC COMPLETED; PNGs differ but NOT Issue #60 PASS")
         print("MANUAL CHECK: compare decoded GS1 01/21/93 and FNC1 with exact source")
         print("NO Print / NO PrintOut / NO DATABASE PATH CHANGE")
         return 0
