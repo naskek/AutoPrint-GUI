@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from tools.probe_preview_gs1_btxml import (
     build_preview_xml, choose_rows, validate_response, write_one_row,
+    summarize_com_messages,
 )
 from tools.gs1_dm_audit import BATCH_FIELDS
 
@@ -116,6 +117,25 @@ class BtXmlGs1PreviewProbeTests(unittest.TestCase):
         )
         self.assertEqual(result, ["ID=1000 severity=Warning category=Database"])
         self.assertNotIn("secret", str(result))
+
+    def test_com_message_diagnostic_keeps_only_number_and_severity(self):
+        from types import SimpleNamespace
+
+        class Messages:
+            Count = 1
+
+            def GetMessage(self, index):
+                self.call_index = index
+                return SimpleNamespace(
+                    Number=3711, Severity=2,
+                    Message="secret production barcode payload"
+                )
+
+        messages = Messages()
+        summary = summarize_com_messages(SimpleNamespace(value=messages))
+        self.assertEqual(summary, ["Number=3711 Severity=2"])
+        self.assertEqual(messages.call_index, 1)
+        self.assertNotIn("secret", str(summary))
 
     def test_no_print_submission_code(self):
         source = (Path(__file__).resolve().parents[1]
