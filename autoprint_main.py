@@ -118,6 +118,7 @@ class AutoPrintApp(bartender_gui.App):
         except Exception:
             pass
         self._set_default_printer_for_format(resolved_fmt)
+        self._update_part_usage_hint(resolved_fmt)
 
     def _on_format_change(self, value):
         self._apply_format_ui(value, selected_fmt=value)
