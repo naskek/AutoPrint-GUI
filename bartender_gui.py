@@ -9011,6 +9011,8 @@ class App(ctk.CTk):
 
         sent_total = 0
         ambiguous_batch = False
+        failed_batch = False
+        cancelled_batch = False
         calib_total = 0
         last_prn = prn
         last_fmt = None
@@ -9049,6 +9051,7 @@ class App(ctk.CTk):
                 if self._should_stop():
                     break
                 if self.cancel_requested:
+                    cancelled_batch = True
                     self.logger.log("Печать отменена пользователем.")
                     break
 
@@ -9241,6 +9244,7 @@ class App(ctk.CTk):
                             )
                             break
                         if batch_outcome != BT_BATCH_SUBMITTED:
+                            failed_batch = True
                             raise Exception("BarTender сообщил об ошибке пакетной печати.")
                     else:
                         self.logger.log(
@@ -9324,11 +9328,18 @@ class App(ctk.CTk):
                     self._mark_csv_printed(self.csv_path, sent_total, printer=last_prn, fmt=last_fmt, calib_total=calib_total)
                 except Exception as exc:
                     self.logger.err(f"Не удалось записать историю отправки: {exc}")
-            if ambiguous_batch and getattr(self, "csv_path", None):
+            terminal_state = (
+                "unknown" if ambiguous_batch else
+                "failed" if failed_batch else
+                "cancelled" if cancelled_batch else None
+            )
+            if terminal_state and getattr(self, "csv_path", None):
                 try:
-                    self._record_csv_status(self.csv_path, "unknown", printer=last_prn, fmt=last_fmt)
-                except Exception:
-                    pass
+                    self._record_csv_status(
+                        self.csv_path, terminal_state, printer=last_prn, fmt=last_fmt
+                    )
+                except Exception as exc:
+                    self.logger.err(f"Не удалось записать итоговый статус CSV: {exc}")
 
             if calib_total:
                 self.logger.log(f"Завершено. Всего отправлено на печать: {sent_total} из {total} строк и {calib_total} калибровочных.")
