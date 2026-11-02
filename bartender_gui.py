@@ -28,7 +28,12 @@ from utils import (
 from template_storage import (
     get_bundled_templates_dir,
     get_user_templates_dir,
+    get_template_registry_path,
+    bootstrap_template_registry,
+    import_user_template,
     migrate_legacy_templates,
+    read_template_registry,
+    write_template_registry,
 )
 from data_processing import load_kontur_raw, enrich_row
 from catalog_compat import build_product_map
@@ -843,6 +848,20 @@ class App(ctk.CTk):
                 ]
 
         self.cfg = load_config()
+        # Persist editor settings separately from install-dir config.json.
+        self._template_registry_path = get_template_registry_path(
+            os.path.dirname(TEMPLATES_DIR)
+        )
+        try:
+            self.cfg = bootstrap_template_registry(
+                self.cfg, TEMPLATES_DIR, self._template_registry_path
+            )
+        except Exception as exc:
+            self._template_migration_events.append({
+                "status": "error", "source": str(self._template_registry_path),
+                "target": str(self._template_registry_path),
+                "error": f"template metadata: {exc}",
+            })
         self.label_templates = self._load_label_templates_from_cfg()
         # статистика печати отключена
         self.stats = None
@@ -3366,6 +3385,19 @@ class App(ctk.CTk):
             self.cfg["format_printers"] = format_printers
         else:
             self.cfg.pop("format_printers", None)
+        sticker_name = os.path.basename(
+            str(self.cfg.get("sticker_btw") or "").replace("\\", "/")
+        )
+        try:
+            write_template_registry(
+                payload,
+                sticker_name if sticker_name.lower().endswith(".btw") else "",
+                path=self.__dict__.get("_template_registry_path") or get_template_registry_path(),
+            )
+        except Exception as exc:
+            if getattr(self, "logger", None):
+                self.logger.err(f"[Шаблоны] Не удалось сохранить metadata вне install dir: {exc}")
+            raise
         save_config(self.cfg)
 
     def _iter_label_templates(self):
@@ -3433,14 +3465,20 @@ class App(ctk.CTk):
         src_path = str(src_path or "").strip()
         if not src_path or not os.path.isfile(src_path):
             raise FileNotFoundError(src_path or "Sticker template file is missing")
-        os.makedirs(TEMPLATES_DIR, exist_ok=True)
-        target = os.path.join(TEMPLATES_DIR, STICKER_BTW_NAME)
-        import shutil as _shutil
-        if os.path.normcase(os.path.abspath(src_path)) != os.path.normcase(os.path.abspath(target)):
-            _shutil.copy2(src_path, target)
-        self.cfg["sticker_btw"] = target
+        # If sticker60x40 exists already, keep it and import the new version
+        # under a content-addressed name, preserving both originals.
+        target = import_user_template(
+            src_path, TEMPLATES_DIR, STICKER_BTW_NAME
+        )
+        sticker_name = os.path.basename(target)
+        write_template_registry(
+            self.label_templates,
+            sticker_name,
+            path=self.__dict__.get("_template_registry_path") or get_template_registry_path(),
+        )
+        self.cfg["sticker_btw"] = str(target)
         save_config(self.cfg)
-        return target
+        return str(target)
 
     def _copy_template_into_workspace(self, src_path: str, template_id: str = ""):
         src_path = str(src_path or "").strip()
@@ -3451,12 +3489,8 @@ class App(ctk.CTk):
             meta.get("file_name") or os.path.basename(src_path),
             template_id,
         )
-        os.makedirs(TEMPLATES_DIR, exist_ok=True)
-        target = os.path.join(TEMPLATES_DIR, file_name)
-        import shutil as _shutil
-        if os.path.normcase(os.path.abspath(src_path)) != os.path.normcase(os.path.abspath(target)):
-            _shutil.copy2(src_path, target)
-        return target, file_name
+        target = import_user_template(src_path, TEMPLATES_DIR, file_name)
+        return str(target), target.name
 
     def _template_part_mode(self, template_id: str) -> str:
         meta = self._get_label_template(template_id) or {}
