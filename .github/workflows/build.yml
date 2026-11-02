@@ -133,12 +133,13 @@ jobs:
           $env:AUTOPRINT_SMOKE_EXPECT_SHA = "${{ github.event.pull_request.head.sha || github.sha }}"
           ./tools/packaged_template_smoke.ps1 -Installer "dist/installer/AutoPrint_Setup_${version}.exe"
 
-      - name: Packaged data migration smoke (Issue 68)
-        shell: pwsh
-        run: |
-          $version = python -c "from app_version import APP_VERSION; print(APP_VERSION)"
-          $env:AUTOPRINT_SMOKE_EXPECT_SHA = "${{ github.event.pull_request.head.sha || github.sha }}"
-          ./tools/release68_data_smoke.ps1 -Installer "dist/installer/AutoPrint_Setup_${version}.exe"
+      - name: Save candidate installer for isolated data migration job
+        uses: actions/upload-artifact@v6
+        with:
+          name: AutoPrint-Release68-Isolated-Candidate
+          path: dist/installer/AutoPrint_Setup_*.exe
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Upload packaged smoke logs on failure
         if: failure()
@@ -157,3 +158,48 @@ jobs:
           path: dist/installer/AutoPrint_Setup_*.exe
           if-no-files-found: error
           retention-days: 3
+
+  packaged-data-migration-smoke:
+    needs: [build-windows]
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout exact integration candidate
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: build_tools/requirements.txt
+
+      - name: Install migration-test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install -r build_tools/requirements.txt
+
+      - name: Download built candidate installer to disposable runner
+        uses: actions/download-artifact@v6
+        with:
+          name: AutoPrint-Release68-Isolated-Candidate
+          path: dist/installer
+
+      - name: Verify exact SHA and run packaged data migration
+        shell: pwsh
+        run: |
+          $version = python -c "from app_version import APP_VERSION; print(APP_VERSION)"
+          $env:AUTOPRINT_SMOKE_EXPECT_SHA = "${{ github.event.pull_request.head.sha || github.sha }}"
+          ./tools/release68_data_smoke.ps1 -Installer "dist/installer/AutoPrint_Setup_${version}.exe"
+
+      - name: Save isolated migration logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: AutoPrint-Release68-Data-Smoke-Logs
+          path: ${{ runner.temp }}/autoprint-68-data-*/*.log
+          if-no-files-found: ignore
+          retention-days: 1
