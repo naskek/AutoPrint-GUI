@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 import bartender_gui
 from csv_history_store import (
     CsvHistoryError, CsvHistoryStore, get_csv_history_path, legacy_config_paths,
+    normalize_csv_path,
 )
 
 
@@ -49,7 +50,7 @@ class CsvHistoryPersistenceTests(unittest.TestCase):
         old_path = self._config("BarTenderGUI", first)
         new_path = self._config("AutoPrint", second)
         self.store.initialize([old_path, new_path])
-        saved = self.store.read_all()[str(self.csv)]
+        saved = self.store.read_all()[normalize_csv_path(self.csv)]
         self.assertEqual(saved["state"], "submitted_to_bartender")
         self.assertEqual(len(saved["history"]), 2)
         self.assertEqual(saved["print_runs"], 2)
@@ -60,7 +61,7 @@ class CsvHistoryPersistenceTests(unittest.TestCase):
         old_path.unlink()
         new_path.unlink()
         self.store.initialize([old_path, new_path])
-        self.assertEqual(self.store.read_all()[str(self.csv)]["history"], saved["history"])
+        self.assertEqual(self.store.read_all()[normalize_csv_path(self.csv)]["history"], saved["history"])
 
     def test_events_are_atomic_and_never_claim_physical_completion(self):
         self.store.initialize()
@@ -68,14 +69,14 @@ class CsvHistoryPersistenceTests(unittest.TestCase):
             self.csv, "submitted_to_bartender", printer="TEST", fmt="16x16",
             sent=10, timestamp="2026-11-02 10:00:00",
         )
-        first = self.store.read_all()[str(self.csv)]
+        first = self.store.read_all()[normalize_csv_path(self.csv)]
         self.assertTrue(first["printed"])
         self.assertEqual(first["state"], "submitted_to_bartender")
         self.assertEqual(first["print_runs"], 1)
         self.store.append_event(
             self.csv, "unknown", printer="TEST", timestamp="2026-11-02 10:02:00",
         )
-        recovered = CsvHistoryStore(self.database).read_all()[str(self.csv)]
+        recovered = CsvHistoryStore(self.database).read_all()[normalize_csv_path(self.csv)]
         self.assertEqual(recovered["state"], "unknown")
         self.assertEqual(recovered["print_runs"], 1)
         self.assertEqual(recovered["last_print"], "2026-11-02 10:00:00")
@@ -90,7 +91,7 @@ class CsvHistoryPersistenceTests(unittest.TestCase):
             "old", {str(self.csv): {"printed": True, "print_runs": 500}},
         )
         self.store.initialize([config])
-        self.assertEqual(self.store.read_all()[str(self.csv)]["state"], "failed")
+        self.assertEqual(self.store.read_all()[normalize_csv_path(self.csv)]["state"], "failed")
 
     def test_invalid_existing_db_is_not_replaced(self):
         self.data.mkdir(parents=True)
@@ -124,8 +125,8 @@ class CsvHistoryPersistenceTests(unittest.TestCase):
         self.store.append_event(right, "failed")
         data = self.store.read_all()
         self.assertEqual(len(data), 2)
-        self.assertEqual(data[str(left)]["state"], "submitted_to_bartender")
-        self.assertEqual(data[str(right)]["state"], "failed")
+        self.assertEqual(data[normalize_csv_path(left)]["state"], "submitted_to_bartender")
+        self.assertEqual(data[normalize_csv_path(right)]["state"], "failed")
 
     def test_isolation_environment_and_legacy_discovery(self):
         with patch.dict(os.environ, {
@@ -147,7 +148,7 @@ class CsvHistoryPersistenceTests(unittest.TestCase):
         bartender_gui.App._mark_csv_printed(
             app, str(self.csv), 3, printer="TEST", fmt="16x16"
         )
-        saved = CsvHistoryStore(self.database).read_all()[str(self.csv)]
+        saved = CsvHistoryStore(self.database).read_all()[normalize_csv_path(self.csv)]
         self.assertEqual(saved["state"], "submitted_to_bartender")
         self.assertEqual(saved["history"][0]["sent"], 3)
         self.assertNotEqual(saved["state"], "completed")
