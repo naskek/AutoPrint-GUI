@@ -6938,8 +6938,10 @@ class App(ctk.CTk):
             ok_color = ("#28a745", "#1e7e34")  # зелёный для обеих тем
             cur_color = ("#0d6efd", "#0d6efd")
             if kind == "file":
-                ctk.CTkLabel(row, text=status, anchor="w",
-                             text_color=(ok_color if printed else (cur_color if is_cur else None))).pack(side="left", padx=(8, 8))
+                ctk.CTkLabel(
+                    row, text=status, anchor="w", height=CSV_BROWSER_ROW_HEIGHT,
+                    text_color=(ok_color if printed else (cur_color if is_cur else None)),
+                ).pack(side="left", padx=(8, 8))
                 cm = Menu(self, tearoff=0)
                 cm.add_command(label="История печати", command=lambda p=full: self._open_print_history(p))
                 def _popup_menu(event, menu=cm):
