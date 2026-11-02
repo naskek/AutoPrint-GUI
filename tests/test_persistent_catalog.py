@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from contextlib import closing
 from unittest.mock import patch
 
 from catalog_runtime import initialize_catalog_runtime
@@ -93,8 +94,9 @@ class PersistentCatalogTests(unittest.TestCase):
 
     def test_unknown_schema_fails_closed(self):
         self.legacy.parent.mkdir(parents=True)
-        with sqlite3.connect(self.legacy) as db:
+        with closing(sqlite3.connect(self.legacy)) as db:
             db.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
+            db.commit()
         result = self._start()
         self.assertFalse(result.ready)
         self.assertIn("version", result.error)
