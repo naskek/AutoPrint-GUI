@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from contextlib import closing
 from unittest.mock import Mock, patch
 
 import bartender_gui
@@ -79,7 +80,7 @@ class CsvHistoryPersistenceTests(unittest.TestCase):
         self.assertEqual(recovered["print_runs"], 1)
         self.assertEqual(recovered["last_print"], "2026-11-02 10:00:00")
         self.assertEqual(len(recovered["history"]), 2)
-        with sqlite3.connect(self.database) as db:
+        with closing(sqlite3.connect(self.database)) as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM print_events").fetchone()[0], 2)
 
     def test_existing_persistent_db_is_authoritative_not_reimported(self):
@@ -107,11 +108,12 @@ class CsvHistoryPersistenceTests(unittest.TestCase):
 
     def test_unsupported_schema_is_not_mutated(self):
         self.data.mkdir(parents=True)
-        with sqlite3.connect(self.database) as db:
+        with closing(sqlite3.connect(self.database)) as db:
             db.execute("PRAGMA user_version = 99")
+            db.commit()
         with self.assertRaises(CsvHistoryError):
             self.store.initialize()
-        with sqlite3.connect(self.database) as db:
+        with closing(sqlite3.connect(self.database)) as db:
             self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 99)
 
     def test_path_identity_is_absolute_path_not_basename(self):
