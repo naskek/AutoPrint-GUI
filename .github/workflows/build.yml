@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -47,6 +49,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -77,6 +81,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -119,6 +125,22 @@ jobs:
           if (-not (Test-Path $installer)) { throw "Installer not found: $installer" }
           Get-Item $installer | Select-Object Name, Length, LastWriteTime
           Get-FileHash $installer -Algorithm SHA256
+
+      - name: Packaged BTW preservation smoke
+        shell: pwsh
+        run: |
+          $version = python -c "from app_version import APP_VERSION; print(APP_VERSION)"
+          $env:AUTOPRINT_SMOKE_EXPECT_SHA = "${{ github.event.pull_request.head.sha || github.sha }}"
+          ./tools/packaged_template_smoke.ps1 -Installer "dist/installer/AutoPrint_Setup_${version}.exe"
+
+      - name: Upload packaged smoke logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: AutoPrint-Packaged-Smoke-Logs
+          path: ${{ runner.temp }}/autoprint-btw-smoke-*/*.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Upload installer artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -13,6 +13,7 @@ from catalog_excel import (
     select_automatic_migration_source,
 )
 from catalog_store import CatalogSnapshot, CatalogStore, get_catalog_db_path
+from catalog_persistence import migrate_legacy_catalog
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,8 @@ def _duplicate_row_count(prepared: PreparedExcelImport) -> int:
 def initialize_catalog_runtime(
     base_dir: str | os.PathLike[str],
     database_path: str | os.PathLike[str] | None = None,
+    *,
+    legacy_database_paths=None,
 ) -> CatalogRuntimeResult:
     """Open the authoritative DB or atomically create it from the initial XLSX."""
     root = Path(base_dir)
@@ -78,6 +81,18 @@ def initialize_catalog_runtime(
             return _ready_result(store)
         except Exception as exc:
             return _error_result(f"Не удалось открыть каталог {final_path}: {exc}")
+
+    if database_path is not None:
+        try:
+            migrated = migrate_legacy_catalog(root, final_path, legacy_database_paths)
+            if migrated is not None:
+                store = CatalogStore(final_path)
+                store.initialize()
+                return _ready_result(store, migration_source=migrated)
+        except Exception as exc:
+            return _error_result(
+                f"Не удалось безопасно перенести catalog.sqlite3 в {final_path}: {exc}"
+            )
 
     source = select_automatic_migration_source(root, final_path)
     if source is None:

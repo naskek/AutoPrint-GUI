@@ -19,7 +19,7 @@ import threading
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog as fd, messagebox as mb, Menu, ttk
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from utils import (
     get_base_dir, load_config, save_config, enum_printers,
@@ -28,7 +28,12 @@ from utils import (
 from template_storage import (
     get_bundled_templates_dir,
     get_user_templates_dir,
+    get_template_registry_path,
+    bootstrap_template_registry,
+    import_user_template,
     migrate_legacy_templates,
+    read_template_registry,
+    write_template_registry,
 )
 from data_processing import load_kontur_raw, enrich_row
 from catalog_compat import build_product_map
@@ -39,6 +44,7 @@ from catalog_excel import (
     export_catalog_xlsx,
     prepare_excel_import,
 )
+from csv_history_store import CsvHistoryStore, legacy_config_paths
 from catalog_runtime import initialize_catalog_runtime, install_prepared_catalog
 from catalog_store import (
     CATALOG_FIELDS,
@@ -111,6 +117,11 @@ MAIN_LAYOUT_BLOCK_ORDER = (
 )
 PRINT_BATCH_CONTAINER_SCROLLABLE = False
 CSV_FILE_LIST_SCROLL_POLICY = "vertical-auto"
+# Requested size is soft: grid can shrink on small windows; no fixed row minimum.
+CSV_BROWSER_LIST_REQUEST_HEIGHT = 230
+CSV_BROWSER_ROW_HEIGHT = 22
+CSV_BROWSER_ROW_PADDING = 1
+CSV_BROWSER_FOLDER_ICON_SIZE = (20, 16)
 CSV_FILE_ENTRY_RENDER_LIMIT = 120
 CSV_FILE_SCAN_LIMIT = 500
 PATH_RESIZE_DEBOUNCE_MS = 80
@@ -126,6 +137,16 @@ PRINT_SELECTION_MODE_COUNT = "Количество"
 BT_BATCH_SUBMITTED = "submitted"
 BT_BATCH_AMBIGUOUS = "ambiguous"
 BT_BATCH_FAILED = "failed"
+
+
+def build_csv_folder_icon_image() -> Image.Image:
+    """A distinct, always-yellow Windows-style folder in light and dark themes."""
+    icon = Image.new("RGBA", (24, 20), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(icon)
+    draw.rounded_rectangle((2, 2, 13, 10), radius=2, fill="#F9CF69", outline="#A06B16")
+    draw.rounded_rectangle((2, 6, 22, 18), radius=2, fill="#E8A929", outline="#A06B16")
+    draw.line((4, 8, 20, 8), fill="#FFDF86", width=2)
+    return icon
 
 
 def application_icon_path() -> str:
@@ -843,6 +864,20 @@ class App(ctk.CTk):
                 ]
 
         self.cfg = load_config()
+        # Persist editor settings separately from install-dir config.json.
+        self._template_registry_path = get_template_registry_path(
+            os.path.dirname(TEMPLATES_DIR)
+        )
+        try:
+            self.cfg = bootstrap_template_registry(
+                self.cfg, TEMPLATES_DIR, self._template_registry_path
+            )
+        except Exception as exc:
+            self._template_migration_events.append({
+                "status": "error", "source": str(self._template_registry_path),
+                "target": str(self._template_registry_path),
+                "error": f"template metadata: {exc}",
+            })
         self.label_templates = self._load_label_templates_from_cfg()
         # статистика печати отключена
         self.stats = None
@@ -852,7 +887,11 @@ class App(ctk.CTk):
         self.default_batch_size = 0
         self.default_show_dialog = bool(self.cfg.get('show_print_dialog', False))
         self.csv_dir = self.cfg.get("csv_dir") or BASE_DIR
-        self.csv_stats = self._normalize_csv_stats(self.cfg.get("csv_print_stats", {}))
+        # Live history is independent from installer-owned config.json.
+        # A corrupt persistent store blocks startup rather than resetting history.
+        self._csv_history_store = CsvHistoryStore()
+        self._csv_history_store.initialize(legacy_config_paths(BASE_DIR))
+        self.csv_stats = self._normalize_csv_stats(self._csv_history_store.read_all())
         self._part_missing_logged = False
         self._stickers_preprinted = False
         self.last_batches = []
@@ -1236,7 +1275,9 @@ class App(ctk.CTk):
             csv_file_buttons, text="Обновить",
             command=self._render_csv_list,
         ).grid(row=0, column=2, sticky="ew", padx=2)
-        self.csv_list_frame = ctk.CTkScrollableFrame(csv_files_body)
+        self.csv_list_frame = ctk.CTkScrollableFrame(
+            csv_files_body, height=CSV_BROWSER_LIST_REQUEST_HEIGHT
+        )
         self.csv_list_frame.grid(
             row=2, column=0, sticky="nsew", padx=8, pady=(0, 8)
         )
@@ -1254,9 +1295,9 @@ class App(ctk.CTk):
         self.params_section.grid(row=1, column=0, sticky="ew", pady=7)
         params = self.params_section.body
         params.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(params, text="Дата производства:", anchor="w").grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(params, text="Дата производства:", anchor="w").grid(row=0, column=0, sticky="w", padx=10, pady=2)
         date_row = ctk.CTkFrame(params, fg_color="transparent")
-        date_row.grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+        date_row.grid(row=0, column=1, sticky="ew", padx=10, pady=2)
         self.prod_date_entry = ctk.CTkEntry(date_row, width=150)
         self.prod_date_entry.insert(0, dt.date.today().strftime("%d.%m.%Y"))
         self.prod_date_entry.pack(side="left", fill="x", expand=True)
@@ -1272,9 +1313,9 @@ class App(ctk.CTk):
         self.prod_date_entry.configure(validate="key", validatecommand=vcmd)
         self.prod_date_entry.bind("<KeyRelease>", self._format_prod_date)
         self.prod_date_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
-        ctk.CTkLabel(params, text="Номер партии:", anchor="w").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(params, text="Номер партии:", anchor="w").grid(row=1, column=0, sticky="w", padx=10, pady=2)
         part_input_box = ctk.CTkFrame(params, fg_color="transparent")
-        part_input_box.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
+        part_input_box.grid(row=1, column=1, sticky="ew", padx=10, pady=2)
         self.part_entry = ctk.CTkEntry(part_input_box, placeholder_text="Номер партии вручную")
         self.part_entry.pack(fill="x")
         self.part_usage_hint = ctk.CTkLabel(
@@ -1291,30 +1332,30 @@ class App(ctk.CTk):
             self.part_entry_border_default = self.part_entry.cget("border_color")
         except Exception:
             self.part_entry_border_default = None
-        ctk.CTkLabel(params, text="Клиент (стикер):", anchor="w").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(params, text="Клиент (стикер):", anchor="w").grid(row=2, column=0, sticky="w", padx=10, pady=2)
         client_box = ctk.CTkFrame(params, fg_color="transparent")
-        client_box.grid(row=2, column=1, sticky="ew", padx=10, pady=5)
+        client_box.grid(row=2, column=1, sticky="ew", padx=10, pady=2)
         self.client_entry = ctk.CTkEntry(client_box, placeholder_text="Название клиента")
         self.client_entry.pack(fill="x", expand=True)
         self.client_entry.bind("<KeyRelease>", self._schedule_live_preview)
         self.client_combo = ctk.CTkComboBox(
             client_box, values=[], state="readonly", command=lambda value: self._on_client_select(value)
         )
-        self.client_combo.pack(fill="x", expand=True, pady=(5, 0))
+        self.client_combo.pack(fill="x", expand=True, pady=(2, 0))
         client_actions = ctk.CTkFrame(params, fg_color="transparent")
-        client_actions.grid(row=3, column=1, sticky="w", padx=8, pady=(0, 5))
+        client_actions.grid(row=3, column=1, sticky="w", padx=8, pady=(0, 2))
         ctk.CTkButton(client_actions, text="Добавить", width=75, command=self._client_add).pack(side="left", padx=2)
         ctk.CTkButton(client_actions, text="Очистить", width=75, command=self._client_clear).pack(side="left", padx=2)
         ctk.CTkButton(client_actions, text="Удалить", width=75, command=self._client_delete).pack(side="left", padx=2)
         self.show_dialog_var = ctk.BooleanVar(value=self.default_show_dialog)
         self.show_dialog_chk = ctk.CTkCheckBox(params, text="Показывать диалог печати BarTender", variable=self.show_dialog_var)
-        self.show_dialog_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=4)
+        self.show_dialog_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=2)
         self.calib_var = ctk.BooleanVar(value=DEFAULT_TSC_CALIBRATION_ENABLED)
         self.calib_chk = ctk.CTkCheckBox(params, text="Калибровка TSC: 6 этикеток 'X'", variable=self.calib_var)
-        self.calib_chk.grid(row=5, column=0, columnspan=2, sticky="w", padx=10, pady=4)
+        self.calib_chk.grid(row=5, column=0, columnspan=2, sticky="w", padx=10, pady=2)
         self.skip_sticker_var = ctk.BooleanVar(value=False)
         self.skip_sticker_chk = ctk.CTkCheckBox(params, text="Не печатать маркировочный стикер", variable=self.skip_sticker_var)
-        self.skip_sticker_chk.grid(row=6, column=0, columnspan=2, sticky="w", padx=10, pady=(4, 10))
+        self.skip_sticker_chk.grid(row=6, column=0, columnspan=2, sticky="w", padx=10, pady=(2, 5))
         self.exp_days_entry = ctk.CTkEntry(params)
 
         self.print_section = self._make_main_section(
@@ -1325,7 +1366,7 @@ class App(ctk.CTk):
         print_body = self.print_section.body
 
         mode_row = ctk.CTkFrame(print_body, fg_color="transparent")
-        mode_row.pack(fill="x", padx=8, pady=(6, 4))
+        mode_row.pack(fill="x", padx=8, pady=(3, 2))
         ctk.CTkLabel(mode_row, text="Режим печати:").pack(side="left", padx=(2, 6))
         self.print_selection_mode_var = tk.StringVar(
             master=self, value=DEFAULT_PRINT_SELECTION_MODE
@@ -1340,7 +1381,7 @@ class App(ctk.CTk):
         self.print_selection_mode_control.pack(side="left", fill="x", expand=True)
 
         fields_row = ctk.CTkFrame(print_body, fg_color="transparent")
-        fields_row.pack(fill="x", padx=8, pady=(0, 4))
+        fields_row.pack(fill="x", padx=8, pady=(0, 2))
         ctk.CTkLabel(fields_row, text="С строки:").pack(side="left", padx=(2, 4))
         self.index_entry = ctk.CTkEntry(fields_row, width=64)
         self.index_entry.insert(0, "1")
@@ -1362,7 +1403,7 @@ class App(ctk.CTk):
             self._selection_entry_border_defaults = (None, None)
 
         batch_row = ctk.CTkFrame(print_body, fg_color="transparent")
-        batch_row.pack(fill="x", padx=8, pady=(0, 4))
+        batch_row.pack(fill="x", padx=8, pady=(0, 2))
         ctk.CTkLabel(batch_row, text="Пакет по (шт.):").pack(side="left", padx=(2, 6))
         self.batch_entry = ctk.CTkEntry(batch_row, width=90)
         self.batch_entry.insert(0, "0")
@@ -1372,10 +1413,10 @@ class App(ctk.CTk):
         self.print_selection_summary_label = ctk.CTkLabel(
             print_body, text="—", anchor="w", text_color=("#65717c", "#aeb6bf")
         )
-        self.print_selection_summary_label.pack(fill="x", padx=10, pady=(0, 5))
+        self.print_selection_summary_label.pack(fill="x", padx=10, pady=(0, 2))
 
         actions = ctk.CTkFrame(print_body, fg_color="transparent")
-        actions.pack(fill="x", padx=8, pady=(0, 5))
+        actions.pack(fill="x", padx=8, pady=(0, 2))
         self.print_btn = ctk.CTkButton(
             actions, text="Печать", command=self._print_range_one_job_via_csv,
             height=38, fg_color="#198754", hover_color="#157347"
@@ -1393,7 +1434,7 @@ class App(ctk.CTk):
         self.cancel_btn.pack(side="left", fill="x", expand=True, padx=(3, 2))
 
         secondary_actions = ctk.CTkFrame(print_body, fg_color="transparent")
-        secondary_actions.pack(fill="x", padx=8, pady=(0, 6))
+        secondary_actions.pack(fill="x", padx=8, pady=(0, 3))
         self.sticker_reprint_btn = ctk.CTkButton(
             secondary_actions,
             text="Перепечатать стикер",
@@ -1404,8 +1445,8 @@ class App(ctk.CTk):
         )
         self.sticker_reprint_btn.pack(fill="x", padx=2)
 
-        self.batch_btns_frame = ctk.CTkFrame(print_body, height=54)
-        self.batch_btns_frame.pack(fill="x", padx=8, pady=(0, 8))
+        self.batch_btns_frame = ctk.CTkFrame(print_body, height=42)
+        self.batch_btns_frame.pack(fill="x", padx=8, pady=(0, 5))
 
         self.preview_section = self._make_main_section(
             self.main_layout_frame,
@@ -3366,6 +3407,20 @@ class App(ctk.CTk):
             self.cfg["format_printers"] = format_printers
         else:
             self.cfg.pop("format_printers", None)
+        sticker_name = os.path.basename(
+            str(self.cfg.get("sticker_btw") or "").replace("\\", "/")
+        )
+        try:
+            write_template_registry(
+                payload,
+                sticker_name if sticker_name.lower().endswith(".btw") else "",
+                path=self.__dict__.get("_template_registry_path")
+                or get_template_registry_path(os.path.dirname(TEMPLATES_DIR)),
+            )
+        except Exception as exc:
+            if getattr(self, "logger", None):
+                self.logger.err(f"[Шаблоны] Не удалось сохранить metadata вне install dir: {exc}")
+            raise
         save_config(self.cfg)
 
     def _iter_label_templates(self):
@@ -3433,14 +3488,21 @@ class App(ctk.CTk):
         src_path = str(src_path or "").strip()
         if not src_path or not os.path.isfile(src_path):
             raise FileNotFoundError(src_path or "Sticker template file is missing")
-        os.makedirs(TEMPLATES_DIR, exist_ok=True)
-        target = os.path.join(TEMPLATES_DIR, STICKER_BTW_NAME)
-        import shutil as _shutil
-        if os.path.normcase(os.path.abspath(src_path)) != os.path.normcase(os.path.abspath(target)):
-            _shutil.copy2(src_path, target)
-        self.cfg["sticker_btw"] = target
+        # If sticker60x40 exists already, keep it and import the new version
+        # under a content-addressed name, preserving both originals.
+        target = import_user_template(
+            src_path, TEMPLATES_DIR, STICKER_BTW_NAME
+        )
+        sticker_name = os.path.basename(target)
+        write_template_registry(
+            self.__dict__.get("label_templates", {}),
+            sticker_name,
+            path=self.__dict__.get("_template_registry_path")
+            or get_template_registry_path(os.path.dirname(TEMPLATES_DIR)),
+        )
+        self.cfg["sticker_btw"] = str(target)
         save_config(self.cfg)
-        return target
+        return str(target)
 
     def _copy_template_into_workspace(self, src_path: str, template_id: str = ""):
         src_path = str(src_path or "").strip()
@@ -3451,12 +3513,8 @@ class App(ctk.CTk):
             meta.get("file_name") or os.path.basename(src_path),
             template_id,
         )
-        os.makedirs(TEMPLATES_DIR, exist_ok=True)
-        target = os.path.join(TEMPLATES_DIR, file_name)
-        import shutil as _shutil
-        if os.path.normcase(os.path.abspath(src_path)) != os.path.normcase(os.path.abspath(target)):
-            _shutil.copy2(src_path, target)
-        return target, file_name
+        target = import_user_template(src_path, TEMPLATES_DIR, file_name)
+        return str(target), target.name
 
     def _template_part_mode(self, template_id: str) -> str:
         meta = self._get_label_template(template_id) or {}
@@ -3973,7 +4031,7 @@ class App(ctk.CTk):
             pass
 
     def _initialize_catalog_runtime(self):
-        result = initialize_catalog_runtime(BASE_DIR)
+        result = initialize_catalog_runtime(BASE_DIR, database_path=get_catalog_db_path())
         self.catalog_store = result.store
         self.catalog_revision = (
             result.snapshot.revision if result.snapshot is not None else None
@@ -3982,7 +4040,7 @@ class App(ctk.CTk):
         self._set_catalog_status(result.state, result.error)
         if result.ready:
             count = len(result.snapshot.products) if result.snapshot else 0
-            message = f"Каталог SQLite загружен: {get_catalog_db_path(BASE_DIR)} (товаров={count})"
+            message = f"Каталог SQLite загружен: {get_catalog_db_path()} (товаров={count})"
             if result.migration_source:
                 message += f"; миграция из {result.migration_source}"
             if result.duplicate_count:
@@ -4374,7 +4432,7 @@ class App(ctk.CTk):
                 return
             try:
                 if self.catalog_store is None:
-                    db_path = get_catalog_db_path(BASE_DIR)
+                    db_path = get_catalog_db_path()
                     if db_path.exists():
                         raise CatalogError(
                             "Существующий catalog.sqlite3 недоступен. "
@@ -4411,7 +4469,7 @@ class App(ctk.CTk):
                 return
             try:
                 if self.catalog_store is None:
-                    result = install_prepared_catalog(prepared, get_catalog_db_path(BASE_DIR))
+                    result = install_prepared_catalog(prepared, get_catalog_db_path())
                     if not result.ready:
                         raise CatalogError(result.error)
                     self.catalog_store = result.store
@@ -6739,8 +6797,6 @@ class App(ctk.CTk):
             try:
                 info["history"] = history
                 self.csv_stats[key] = info
-                self.cfg["csv_print_stats"] = self.csv_stats
-                save_config(self.cfg)
             except Exception:
                 pass
         win = ctk.CTkToplevel(self)
@@ -6818,6 +6874,18 @@ class App(ctk.CTk):
         except Exception:
             return []
 
+    def _get_csv_folder_icon(self):
+        image = getattr(self, "_csv_folder_icon", None)
+        if image is None:
+            bitmap = build_csv_folder_icon_image()
+            image = ctk.CTkImage(
+                light_image=bitmap,
+                dark_image=bitmap,
+                size=CSV_BROWSER_FOLDER_ICON_SIZE,
+            )
+            self._csv_folder_icon = image
+        return image
+
     def _render_csv_list(self):
         self._schedule_path_label_refresh()
         self._schedule_csv_scrollbar_refresh()
@@ -6869,7 +6937,7 @@ class App(ctk.CTk):
             # fg_color ожидает (light, dark)
             fg = ("#e0ecff", "#3a4a6a") if is_cur else None  # подсветка заметнее в тёмной теме
             row = ctk.CTkFrame(frame, fg_color=fg)
-            row.pack(fill="x", padx=6, pady=2)
+            row.pack(fill="x", padx=6, pady=CSV_BROWSER_ROW_PADDING)
             try:
                 row._base_fg = row.cget("fg_color")
             except Exception:
@@ -6879,21 +6947,35 @@ class App(ctk.CTk):
             printed = False
             if kind == "file":
                 info = self.csv_stats.get(self._norm_csv_path(full), {}) if isinstance(self.csv_stats, dict) else {}
-                printed = bool(info.get("printed"))
+                state = info.get("state")
+                printed = state in ("submitted_to_bartender", "spooled", "completed")
                 ts = info.get("last_print", "")
                 if printed:
-                    status = f"Печатался {ts}" if ts else "Печатался"
+                    status = f"Отправлен {ts}" if ts else "Отправлен"
+                elif state == "unknown":
+                    status = "Исход неизвестен"
+                elif state == "failed":
+                    status = "Ошибка отправки"
+                elif state == "cancelled":
+                    status = "Отменено"
+                elif state == "prepared":
+                    status = "Подготовлен"
                 else:
-                    status = "Не печатался"
+                    status = "Не отправлялся"
 
             # Цвет текста под выбранный фон: (light_mode, dark_mode)
             name_color = ("#0b2540", "#ffffff") if is_cur else None
-            icon = "📁 " if kind == "dir" else "📄 "
+            # A drawn yellow folder is reliable even when Windows renders
+            # folder emoji as monochrome. Keep existing CSV file glyph unchanged.
+            folder_image = self._get_csv_folder_icon() if kind == "dir" else None
             lbl = ctk.CTkLabel(
                 row,
-                text=icon + fname,
+                text=fname if kind == "dir" else "📄 " + fname,
+                image=folder_image,
+                compound="left",
                 anchor="w",
-                text_color=name_color
+                text_color=name_color,
+                height=CSV_BROWSER_ROW_HEIGHT,
             )
             lbl.pack(side="left", fill="x", expand=True, padx=(0, 6))
             lbl.bind("<Button-1>", lambda e, p=full, k=kind: (self._switch_csv_dir(p) if k == "dir" else self._select_csv_from_list(p)))
@@ -6904,8 +6986,10 @@ class App(ctk.CTk):
             ok_color = ("#28a745", "#1e7e34")  # зелёный для обеих тем
             cur_color = ("#0d6efd", "#0d6efd")
             if kind == "file":
-                ctk.CTkLabel(row, text=status, anchor="w",
-                             text_color=(ok_color if printed else (cur_color if is_cur else None))).pack(side="left", padx=(8, 8))
+                ctk.CTkLabel(
+                    row, text=status, anchor="w", height=CSV_BROWSER_ROW_HEIGHT,
+                    text_color=(ok_color if printed else (cur_color if is_cur else None)),
+                ).pack(side="left", padx=(8, 8))
                 cm = Menu(self, tearoff=0)
                 cm.add_command(label="История печати", command=lambda p=full: self._open_print_history(p))
                 def _popup_menu(event, menu=cm):
@@ -7007,17 +7091,11 @@ class App(ctk.CTk):
             pass
         self._refresh_runtime_status()
 
-    def _mark_csv_printed(self, path, sent_total=0, printer=None, fmt=None, calib_total=0):
+    def _record_csv_status(self, path, state, *, sent_total=0, printer=None, fmt=None, calib_total=0):
         key = self._norm_csv_path(path)
         if not key:
             return
-        now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            info = self.csv_stats if isinstance(self.csv_stats, dict) else {}
-            cur = info.get(key, {})
-            runs = int(cur.get("print_runs") or 0)
-            # История запусков
-            history = list(cur.get("history") or [])
             try:
                 user = os.getlogin()
             except Exception:
@@ -7025,36 +7103,30 @@ class App(ctk.CTk):
                     user = getpass.getuser()
                 except Exception:
                     user = "-"
-            history.append({
-                "ts": now,
-                "printer": printer,
-                "fmt": fmt,
-                "sent": int(sent_total or 0),
-                "calib": int(calib_total or 0),
-                "user": user,
-            })
-            history = history[-50:]  # ограничиваем размер истории
-            cur.update({
-                "printed": True,
-                "last_print": now,
-                "print_runs": runs + 1,
-                "last_sent": int(sent_total or 0),
-                "last_printer": printer,
-                "last_fmt": fmt,
-                "last_calib": int(calib_total or 0),
-                "last_user": user,
-                "history": history,
-            })
-            info[key] = cur
-            self.csv_stats = info
-            self.cfg["csv_print_stats"] = self.csv_stats
-            save_config(self.cfg)
-        except Exception:
-            pass
+            info = self._csv_history_store.append_event(
+                key, state, printer=printer, fmt=fmt,
+                sent=sent_total, calib=calib_total, user=user,
+            )
+            if not isinstance(self.csv_stats, dict):
+                self.csv_stats = {}
+            self.csv_stats[key] = info
+        except Exception as exc:
+            if getattr(self, "logger", None):
+                self.logger.err(f"Не удалось сохранить статус CSV: {exc}")
+            raise
         try:
             self._render_csv_list()
         except Exception:
+            # Persistence has already committed; a redraw failure is not
+            # a history write failure and must never cause a print retry.
             pass
+
+    def _mark_csv_printed(self, path, sent_total=0, printer=None, fmt=None, calib_total=0):
+        # Historical method name; means accepted/submitted, not physical print.
+        self._record_csv_status(
+            path, "submitted_to_bartender", sent_total=sent_total,
+            printer=printer, fmt=fmt, calib_total=calib_total,
+        )
 
     # ---------- helpers ----------
     def _get_batch_size(self):
@@ -9010,6 +9082,9 @@ class App(ctk.CTk):
             self.last_sticker_jobs = []
 
         sent_total = 0
+        ambiguous_batch = False
+        failed_batch = False
+        cancelled_batch = False
         calib_total = 0
         last_prn = prn
         last_fmt = None
@@ -9046,8 +9121,10 @@ class App(ctk.CTk):
             for bidx, (start, end) in enumerate(batches, start=1):
                 self._pause_wait()
                 if self._should_stop():
+                    cancelled_batch = True
                     break
                 if self.cancel_requested:
+                    cancelled_batch = True
                     self.logger.log("Печать отменена пользователем.")
                     break
 
@@ -9232,6 +9309,7 @@ class App(ctk.CTk):
                             self._dialog_flag(),
                         )
                         if batch_outcome == BT_BATCH_AMBIGUOUS:
+                            ambiguous_batch = True
                             self.logger.log(
                                 f"Пакет {bidx}: задание могло быть отправлено в BarTender, "
                                 "но подтверждение результата не получено. "
@@ -9239,6 +9317,7 @@ class App(ctk.CTk):
                             )
                             break
                         if batch_outcome != BT_BATCH_SUBMITTED:
+                            failed_batch = True
                             raise Exception("BarTender сообщил об ошибке пакетной печати.")
                     else:
                         self.logger.log(
@@ -9320,8 +9399,20 @@ class App(ctk.CTk):
             if sent_total > 0 and getattr(self, "csv_path", None):
                 try:
                     self._mark_csv_printed(self.csv_path, sent_total, printer=last_prn, fmt=last_fmt, calib_total=calib_total)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.logger.err(f"Не удалось записать историю отправки: {exc}")
+            terminal_state = (
+                "unknown" if ambiguous_batch else
+                "failed" if failed_batch else
+                "cancelled" if cancelled_batch else None
+            )
+            if terminal_state and getattr(self, "csv_path", None):
+                try:
+                    self._record_csv_status(
+                        self.csv_path, terminal_state, printer=last_prn, fmt=last_fmt
+                    )
+                except Exception as exc:
+                    self.logger.err(f"Не удалось записать итоговый статус CSV: {exc}")
 
             if calib_total:
                 self.logger.log(f"Завершено. Всего отправлено на печать: {sent_total} из {total} строк и {calib_total} калибровочных.")

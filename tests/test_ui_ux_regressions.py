@@ -423,6 +423,71 @@ class MainLayoutContractTests(unittest.TestCase):
         self.assertNotIn("height=", actions)
 
 
+class CsvBrowserLayoutIssue30Tests(unittest.TestCase):
+    def test_csv_list_has_a_soft_larger_requested_height(self):
+        self.assertGreaterEqual(bartender_gui.CSV_BROWSER_LIST_REQUEST_HEIGHT, 220)
+        self.assertLessEqual(bartender_gui.CSV_BROWSER_LIST_REQUEST_HEIGHT, 250)
+        self.assertLessEqual(bartender_gui.CSV_BROWSER_ROW_HEIGHT, 24)
+        self.assertLessEqual(bartender_gui.CSV_BROWSER_ROW_PADDING, 1)
+        source = inspect.getsource(bartender_gui.App._build_ui)
+        csv = source.split("csv_files_body = self.csv_files_section.body", 1)[1].split(
+            "self.params_section =", 1
+        )[0]
+        self.assertIn("height=CSV_BROWSER_LIST_REQUEST_HEIGHT", csv)
+        self.assertIn("csv_files_body.grid_rowconfigure(2, weight=1)", csv)
+        self.assertIn('self.csv_list_frame.grid(', csv)
+        self.assertNotIn("grid_propagate(False)", csv)
+        self.assertIn('csv_file_buttons.grid(', csv)
+
+    def test_only_left_column_paddings_are_compacted(self):
+        source = inspect.getsource(bartender_gui.App._build_ui)
+        left = source.split("self.csv_files_section =", 1)[1].split(
+            "self.preview_section =", 1
+        )[0]
+        self.assertIn("client_box.grid(row=2, column=1", left)
+        self.assertIn("self.skip_sticker_chk.grid(row=6", left)
+        self.assertIn("self.batch_btns_frame.pack", left)
+        self.assertIn('self.print_btn.pack(', left)
+        self.assertIn('self.cancel_btn.pack(', left)
+        self.assertIn('self.sticker_reprint_btn.pack(', left)
+        self.assertNotIn("left_column_frame.grid_rowconfigure(1, weight=1)", left)
+        self.assertNotIn("left_column_frame.grid_rowconfigure(2, weight=1)", left)
+
+    def test_folder_icon_is_yellow_and_has_transparent_background(self):
+        bitmap = bartender_gui.build_csv_folder_icon_image()
+        self.assertEqual(bitmap.size, (24, 20))
+        self.assertEqual(bitmap.mode, "RGBA")
+        self.assertEqual(bitmap.getpixel((0, 0))[3], 0)
+        r, g, b, alpha = bitmap.getpixel((15, 12))
+        self.assertGreater(r, 175)
+        self.assertGreater(g, 120)
+        self.assertLess(b, 90)
+        self.assertEqual(alpha, 255)
+
+    def test_folder_image_is_cached_for_repeated_csv_renders(self):
+        app = object.__new__(bartender_gui.App)
+        app._csv_folder_icon = None
+        with patch.object(bartender_gui.ctk, "CTkImage") as image_type:
+            first = app._get_csv_folder_icon()
+            second = app._get_csv_folder_icon()
+        self.assertIs(first, second)
+        image_type.assert_called_once()
+        kwargs = image_type.call_args.kwargs
+        self.assertIs(kwargs["light_image"], kwargs["dark_image"])
+        self.assertEqual(kwargs["size"], bartender_gui.CSV_BROWSER_FOLDER_ICON_SIZE)
+
+    def test_folder_and_csv_rows_keep_existing_click_and_hover_handlers(self):
+        source = inspect.getsource(bartender_gui.App._render_csv_list)
+        self.assertIn('self._get_csv_folder_icon() if kind == "dir" else None', source)
+        self.assertIn('text=fname if kind == "dir" else "📄 " + fname', source)
+        self.assertIn("compound=\"left\"", source)
+        self.assertIn("height=CSV_BROWSER_ROW_HEIGHT", source)
+        self.assertIn('lbl.bind("<Button-1>"', source)
+        self.assertIn('lbl.bind("<Enter>"', source)
+        self.assertIn('lbl.bind("<Leave>"', source)
+        self.assertIn('frame._parent_canvas.yview_moveto(0)', source)
+
+
 class CsvBrowserLargeDirectoryTests(unittest.TestCase):
     def test_entry_scan_is_bounded_and_marks_truncation(self):
         app = object.__new__(bartender_gui.App)
