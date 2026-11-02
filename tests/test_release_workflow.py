@@ -53,12 +53,27 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("never overwrite published assets", preflight)
         self.assertIn("if ($LASTEXITCODE -ne 0)", preflight)
 
+    def test_release_workflow_steps_are_unique_and_ordered(self):
+        names = [
+            line.strip().removeprefix("- name: ")
+            for line in self.workflow.splitlines()
+            if line.startswith("      - name: ")
+        ]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(names.count("Install build dependencies"), 1)
+        self.assertEqual(names.count("Publish private source release"), 1)
+        self.assertEqual(names.count("Publish public updater release"), 1)
+        self.assertLess(
+            names.index("Install build dependencies"),
+            names.index("Publish private source release"),
+        )
+        self.assertEqual(self.workflow.count("gh release create $tag"), 2)
+
     def test_release_does_not_replace_binary_of_existing_version(self):
         source = self.workflow.split("- name: Publish private source release", 1)[1]
         self.assertNotIn("gh release upload", source)
         self.assertNotIn("--clobber", source)
-        self.assertIn("gh release create $tag $env:INSTALLER_PATH", source)
-        self.assertIn("gh release create $tag $env:INSTALLER_PATH", source)
+        self.assertEqual(source.count("gh release create $tag $env:INSTALLER_PATH"), 2)
         self.assertIn("--repo $env:GITHUB_REPOSITORY", source)
         self.assertIn("--repo $env:PUBLIC_RELEASE_REPO", source)
 
