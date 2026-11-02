@@ -3973,7 +3973,7 @@ class App(ctk.CTk):
             pass
 
     def _initialize_catalog_runtime(self):
-        result = initialize_catalog_runtime(BASE_DIR)
+        result = initialize_catalog_runtime(BASE_DIR, database_path=get_catalog_db_path())
         self.catalog_store = result.store
         self.catalog_revision = (
             result.snapshot.revision if result.snapshot is not None else None
@@ -3982,7 +3982,7 @@ class App(ctk.CTk):
         self._set_catalog_status(result.state, result.error)
         if result.ready:
             count = len(result.snapshot.products) if result.snapshot else 0
-            message = f"Каталог SQLite загружен: {get_catalog_db_path(BASE_DIR)} (товаров={count})"
+            message = f"Каталог SQLite загружен: {get_catalog_db_path()} (товаров={count})"
             if result.migration_source:
                 message += f"; миграция из {result.migration_source}"
             if result.duplicate_count:
@@ -4374,7 +4374,7 @@ class App(ctk.CTk):
                 return
             try:
                 if self.catalog_store is None:
-                    db_path = get_catalog_db_path(BASE_DIR)
+                    db_path = get_catalog_db_path()
                     if db_path.exists():
                         raise CatalogError(
                             "Существующий catalog.sqlite3 недоступен. "
@@ -4411,7 +4411,7 @@ class App(ctk.CTk):
                 return
             try:
                 if self.catalog_store is None:
-                    result = install_prepared_catalog(prepared, get_catalog_db_path(BASE_DIR))
+                    result = install_prepared_catalog(prepared, get_catalog_db_path())
                     if not result.ready:
                         raise CatalogError(result.error)
                     self.catalog_store = result.store
