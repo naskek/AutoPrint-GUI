@@ -50,7 +50,6 @@ def legacy_config_paths(base_dir) -> list[Path]:
 
 def _load_legacy_stats(config_paths) -> dict:
     merged = {}
-    seen_events = {}
     for path in config_paths:
         source = Path(path)
         if not source.is_file():
@@ -78,7 +77,7 @@ def _load_legacy_stats(config_paths) -> dict:
             else:
                 selected = {**raw, **current}
             history = []
-            fingerprints = seen_events.setdefault(key, set())
+            fingerprints = set()
             for event in list(current.get("history") or []) + list(raw.get("history") or []):
                 if not isinstance(event, dict):
                     continue
