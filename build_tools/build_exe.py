@@ -6,7 +6,12 @@ import sys
 from pathlib import Path
 
 
-REQUIRED_BUNDLED_TEMPLATES = ("16x16.btw", "30x20.btw", "58x60.btw")
+REQUIRED_BUNDLED_TEMPLATES = (
+    "16x16.btw",
+    "30x20.btw",
+    "58x60.btw",
+    "sticker60x40.btw",
+)
 
 
 def _version_tuple(version: str) -> tuple[int, int, int, int]:

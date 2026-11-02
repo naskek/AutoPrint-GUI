@@ -3307,7 +3307,7 @@ class App(ctk.CTk):
         old_printers = self.cfg.get("format_printers") or {}
         defaults = {}
         for template_id, name, file_name, part_mode in (
-            ("16x16", "Банка 16x16", "16x16.btw", "blank"),
+            ("16x16", "Банка 16x16", "16x16.btw", "manual"),
             ("30x20", "Ведро 30x20", "30x20.btw", "manual"),
             ("58x60", "Ведро 58x60", "58x60.btw", "manual"),
         ):
