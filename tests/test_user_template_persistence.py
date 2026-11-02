@@ -70,7 +70,7 @@ class UserTemplatePersistenceTests(unittest.TestCase):
             source.write_bytes(b"important-original")
             destination = Path(root) / "user"
             destination.mkdir()
-            with patch.object(template_storage.shutil, "copy2",
+            with patch.object(template_storage.shutil, "copyfile",
                               side_effect=OSError("read-only volume")):
                 with self.assertRaises(OSError):
                     import_user_template(source, destination, "incoming.btw")
@@ -118,7 +118,7 @@ class UserTemplatePersistenceTests(unittest.TestCase):
             user_dir.mkdir()
             (source_dir / "30x20.btw").write_bytes(b"legacy-locked-btw")
             (user_dir / "other.btw").write_bytes(b"user-important")
-            with patch.object(template_storage.shutil, "copy2",
+            with patch.object(template_storage.shutil, "copyfile",
                               side_effect=PermissionError("locked")):
                 result = migrate_legacy_templates(
                     destination_dir=user_dir, legacy_dirs=[source_dir]

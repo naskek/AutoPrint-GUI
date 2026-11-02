@@ -213,7 +213,9 @@ def _copy_new_file(source: Path, destination: Path) -> bool:
             dir=destination.parent, delete=False
         ) as stream:
             stage = Path(stream.name)
-        shutil.copy2(source, stage)
+        # Preserve BTW bytes, not source Windows read-only attributes:
+        # the destination staging file must remain removable/writable.
+        shutil.copyfile(source, stage)
         try:
             os.link(stage, destination)  # Atomic no-overwrite on local NTFS.
         except FileExistsError:
