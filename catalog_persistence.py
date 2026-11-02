@@ -6,6 +6,7 @@ import os
 import shutil
 import sqlite3
 import uuid
+from contextlib import closing
 from pathlib import Path
 
 from catalog_store import CatalogStore
@@ -64,8 +65,10 @@ def migrate_legacy_catalog(root: Path, target: Path, legacy_paths=None) -> Path 
     target.parent.mkdir(parents=True, exist_ok=True)
     stage = target.with_name(f".{target.name}.migration-{uuid.uuid4().hex}.tmp")
     try:
-        with sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True) as src:
-            with sqlite3.connect(stage) as dst:
+        # sqlite3.Connection context managers do not CLOSE connections.
+        # Explicit closing is necessary before staging/linking on Windows NTFS.
+        with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as src:
+            with closing(sqlite3.connect(stage)) as dst:
                 src.backup(dst)  # includes committed WAL transactions
         CatalogStore(stage).initialize()
         digest = _sha256_file(stage)
