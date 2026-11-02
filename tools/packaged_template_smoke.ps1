@@ -26,9 +26,11 @@ foreach ($key in $uninstallKeys) {
     if (-not (Test-Path $key)) { continue }
     foreach ($entry in (Get-ChildItem $key -ErrorAction Stop)) {
         $info = Get-ItemProperty -LiteralPath $entry.PSPath -ErrorAction SilentlyContinue
-        if ($info -and ($info.DisplayName -eq 'AutoPrint' -or
-                        $info.DisplayName -like 'AutoPrint version *')) {
-            throw "AutoPrint is already registered: $($entry.PSPath)"
+        if ($info -and $info.PSObject.Properties.Match('DisplayName').Count -gt 0) {
+            $name = $info.DisplayName
+            if ($name -eq 'AutoPrint' -or $name -like 'AutoPrint version *') {
+                throw "AutoPrint is already registered: $($entry.PSPath)"
+            }
         }
     }
 }
