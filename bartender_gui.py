@@ -7027,7 +7027,10 @@ class App(ctk.CTk):
             try:
                 user = os.getlogin()
             except Exception:
-                user = getpass.getuser()
+                try:
+                    user = getpass.getuser()
+                except Exception:
+                    user = "-"
             info = self._csv_history_store.append_event(
                 key, state, printer=printer, fmt=fmt,
                 sent=sent_total, calib=calib_total, user=user,
@@ -7039,7 +7042,12 @@ class App(ctk.CTk):
             if getattr(self, "logger", None):
                 self.logger.err(f"Не удалось сохранить статус CSV: {exc}")
             raise
-        self._render_csv_list()
+        try:
+            self._render_csv_list()
+        except Exception:
+            # Persistence has already committed; a redraw failure is not
+            # a history write failure and must never cause a print retry.
+            pass
 
     def _mark_csv_printed(self, path, sent_total=0, printer=None, fmt=None, calib_total=0):
         # Historical method name; means accepted/submitted, not physical print.
