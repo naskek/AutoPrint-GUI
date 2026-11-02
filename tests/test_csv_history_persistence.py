@@ -84,6 +84,20 @@ class CsvHistoryPersistenceTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM print_events").fetchone()[0], 2)
 
+    def test_failed_cancelled_and_unknown_do_not_claim_completion(self):
+        self.store.initialize()
+        self.store.append_event(self.csv, "failed", timestamp="2026-11-02 10:00:00")
+        self.store.append_event(self.csv, "cancelled", timestamp="2026-11-02 10:01:00")
+        self.store.append_event(self.csv, "unknown", timestamp="2026-11-02 10:02:00")
+        saved = self.store.read_all()[normalize_csv_path(self.csv)]
+        self.assertEqual(saved["state"], "unknown")
+        self.assertEqual(saved.get("print_runs", 0), 0)
+        self.assertFalse(saved.get("printed", False))
+        self.assertEqual(
+            [item["state"] for item in saved["history"]],
+            ["failed", "cancelled", "unknown"],
+        )
+
     def test_existing_persistent_db_is_authoritative_not_reimported(self):
         self.store.initialize()
         self.store.append_event(self.csv, "failed", timestamp="2026-11-02 12:00:00")
