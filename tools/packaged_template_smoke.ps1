@@ -43,6 +43,11 @@ $env:AUTOPRINT_USER_DATA_DIR = $userData
 $env:AUTOPRINT_SMOKE_ROOT = $workRoot
 $env:AUTOPRINT_SMOKE_INSTALL = $installDir
 Set-Location -LiteralPath $repositoryRoot
+$actualSha = (& git rev-parse HEAD).Trim()
+$expectedSha = $env:AUTOPRINT_SMOKE_EXPECT_SHA
+if ($LASTEXITCODE -ne 0 -or -not $expectedSha -or $actualSha -ne $expectedSha) {
+    throw "Smoke checkout mismatch: actual=$actualSha expected=$expectedSha"
+}
 $q = [char]34
 
 function Invoke-Installer([string] $phase) {
@@ -92,7 +97,7 @@ function Assert-Snapshot([hashtable] $expected, [string] $phase) {
 }
 
 Write-Host "Packaged smoke: $installerPath"
-Write-Host "Commit: $env:GITHUB_SHA"
+Write-Host "Tested exact PR HEAD SHA: $actualSha"
 Invoke-Installer 'fresh-install'
 Assert-Installed
 if (Test-Path -LiteralPath $userData) {
