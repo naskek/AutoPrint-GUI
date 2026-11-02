@@ -3392,7 +3392,8 @@ class App(ctk.CTk):
             write_template_registry(
                 payload,
                 sticker_name if sticker_name.lower().endswith(".btw") else "",
-                path=self.__dict__.get("_template_registry_path") or get_template_registry_path(),
+                path=self.__dict__.get("_template_registry_path")
+                or get_template_registry_path(os.path.dirname(TEMPLATES_DIR)),
             )
         except Exception as exc:
             if getattr(self, "logger", None):
@@ -3472,9 +3473,10 @@ class App(ctk.CTk):
         )
         sticker_name = os.path.basename(target)
         write_template_registry(
-            self.label_templates,
+            self.__dict__.get("label_templates", {}),
             sticker_name,
-            path=self.__dict__.get("_template_registry_path") or get_template_registry_path(),
+            path=self.__dict__.get("_template_registry_path")
+            or get_template_registry_path(os.path.dirname(TEMPLATES_DIR)),
         )
         self.cfg["sticker_btw"] = str(target)
         save_config(self.cfg)
