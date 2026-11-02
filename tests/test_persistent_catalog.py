@@ -53,7 +53,7 @@ class PersistentCatalogTests(unittest.TestCase):
         backups = list((self.target.parent / "backups").glob("*.sqlite3"))
         self.assertEqual(len(backups), 1)
         self.assertEqual(CatalogStore(backups[0]).list_products()[0], original_product)
-        with sqlite3.connect(self.target) as conn:
+        with closing(sqlite3.connect(self.target)) as conn:
             self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
             self.assertEqual(conn.execute("PRAGMA quick_check").fetchone()[0], "ok")
             self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
