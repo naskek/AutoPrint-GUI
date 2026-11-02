@@ -51,9 +51,8 @@ jobs:
           }
           "APP_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      # Fail before any build/publish if public access is unavailable or a
-      # published version would be reused. A rerun after partial publication
-      # must stop for manual reconciliation, never --clobber existing binaries.
+      # Check both release channels before any publication. Existing versions
+      # are immutable: partial publication must be reconciled manually.
       - name: Require public updater channel credentials
         if: env.PUBLIC_RELEASE_TOKEN == ''
         shell: pwsh
@@ -82,7 +81,17 @@ jobs:
             if ([string]$entry.tagName -eq $tag) {
               throw "Release $tag already exists in a release repository; never overwrite published assets."
             }
-            if ([string]$entry.tagName -match '^v?(\d+\.\d+\.\d+)        shell: pwsh
+            if ([string]$entry.tagName -match '^v?(\d+\.\d+\.\d+)$') {
+              $published = [version]$Matches[1]
+              if ($candidate -le $published) {
+                throw "Version $candidate must be newer than all published versions ($published)."
+              }
+            }
+          }
+          Write-Host "Release preflight passed: unique $tag, access to both channels verified."
+
+      - name: Install build dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r build_tools/requirements.txt
@@ -165,148 +174,6 @@ jobs:
           "@
           gh release create $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --title "AutoPrint $env:APP_VERSION" --notes $notes
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify public updater release
-        env:
-          GH_TOKEN: ${{ secrets.AUTOPRINT_RELEASE_TOKEN }}
-        shell: pwsh
-        run: |
-          $tag = $env:GITHUB_REF_NAME
-          $expectedCurrent = "AutoPrint_Setup_$env:APP_VERSION.exe"
-          $expectedLegacy = "BarTenderGUI_Setup_$env:APP_VERSION.exe"
-
-          $releaseJson = gh api "repos/$env:PUBLIC_RELEASE_REPO/releases/tags/$tag"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $release = $releaseJson | ConvertFrom-Json
-
-          if ([string]$release.tag_name -ne $tag) {
-            throw "Public updater release tag mismatch: expected $tag, got $($release.tag_name)"
-          }
-
-          $assets = @($release.assets)
-          $current = $assets | Where-Object { $_.name -eq $expectedCurrent } | Select-Object -First 1
-          $legacy = $assets | Where-Object { $_.name -eq $expectedLegacy } | Select-Object -First 1
-
-          if (-not $current) { throw "Public updater release is missing $expectedCurrent" }
-          if (-not $legacy) { throw "Public updater release is missing $expectedLegacy" }
-
-          foreach ($asset in @($current, $legacy)) {
-            $digest = [string]$asset.digest
-            if (-not $digest.StartsWith("sha256:")) {
-              throw "Public updater asset $($asset.name) has no SHA-256 digest"
-            }
-            $publishedHash = $digest.Substring(7).ToLowerInvariant()
-            if ($publishedHash -ne $env:INSTALLER_SHA256) {
-              throw "Public updater asset $($asset.name) digest does not match built installer"
-            }
-          }
-
-          Write-Host "Public updater release verified: $tag"
-) {
-              $published = [version]$Matches[1]
-              if ($candidate -le $published) {
-                throw "Version $candidate must be newer than all published versions ($published)."
-              }
-            }
-          }
-          Write-Host "Release preflight passed: unique $tag, access to both channels verified."
-
-      - name: Install build dependencies
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r build_tools/requirements.txt
-
-      - name: Validate Python sources and unit/regression tests
-        shell: pwsh
-        run: |
-          python -m py_compile app_version.py updater.py autoprint_main.py bartender_com.py build_tools/build_exe.py tests/test_updater.py
-          python -m unittest discover -s tests -p "test_*.py" -v
-
-      - name: Run BarTender COM contract tests
-        timeout-minutes: 10
-        shell: pwsh
-        run: |
-          python -m py_compile tests/contract_bartender_com.py tools/bartender_live_smoke.py
-          python -m unittest discover -s tests -p "contract_*.py" -v
-
-      - name: Build PyInstaller application
-        shell: pwsh
-        run: python build_tools/build_exe.py
-
-      - name: Build Inno Setup installer
-        shell: pwsh
-        run: |
-          $candidates = @(
-            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
-          )
-          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $iscc) {
-            choco install innosetup --no-progress -y
-            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          }
-          if (-not $iscc) { throw "ISCC.exe not found" }
-          & $iscc "build_tools\installer.iss"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Resolve installer
-        shell: pwsh
-        run: |
-          $installer = "dist\installer\AutoPrint_Setup_$env:APP_VERSION.exe"
-          if (-not (Test-Path $installer)) { throw "Installer not found: $installer" }
-          # AutoPrint 3.2.1 and older only recognize the legacy filename. Keep this
-          # byte-identical alias until compatibility with those updaters is intentionally dropped.
-          $legacyInstaller = "dist\installer\BarTenderGUI_Setup_$env:APP_VERSION.exe"
-          Copy-Item -LiteralPath $installer -Destination $legacyInstaller -Force
-          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
-          $legacyHash = (Get-FileHash $legacyInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($legacyHash -ne $hash) { throw "Legacy installer alias is not byte-identical" }
-          "INSTALLER_PATH=$installer" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "LEGACY_INSTALLER_PATH=$legacyInstaller" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "INSTALLER_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Installer SHA256: $hash"
-
-      - name: Publish private source release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: pwsh
-        run: |
-          $tag = $env:GITHUB_REF_NAME
-          $notes = @"
-          AutoPrint $env:APP_VERSION
-
-          SHA-256: $env:INSTALLER_SHA256
-          "@
-          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --clobber
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          } else {
-            gh release create $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --title "AutoPrint $env:APP_VERSION" --notes $notes
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-
-      - name: Publish public updater release
-        env:
-          GH_TOKEN: ${{ secrets.AUTOPRINT_RELEASE_TOKEN }}
-        shell: pwsh
-        run: |
-          $tag = $env:GITHUB_REF_NAME
-          $notes = @"
-          AutoPrint $env:APP_VERSION
-
-          Compiled update package. Source code is stored separately in the private AutoPrint-GUI repository.
-          SHA-256: $env:INSTALLER_SHA256
-          "@
-          gh release view $tag --repo $env:PUBLIC_RELEASE_REPO *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --clobber
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          } else {
-            gh release create $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --title "AutoPrint $env:APP_VERSION" --notes $notes
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
 
       - name: Verify public updater release
         env:
