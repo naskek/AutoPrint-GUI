@@ -9049,6 +9049,7 @@ class App(ctk.CTk):
             for bidx, (start, end) in enumerate(batches, start=1):
                 self._pause_wait()
                 if self._should_stop():
+                    cancelled_batch = True
                     break
                 if self.cancel_requested:
                     cancelled_batch = True
