@@ -52,3 +52,12 @@ Use **exact PR HEAD SHA** built by PyInstaller and Inno Setup on a separate Wind
 - Verify user-data directory is not registered as installer-owned payload and is not deleted by uninstall.
 
 **Smoke PASS is valid only for the exact current PR SHA. New commits require repeating packaged smoke.** CI is not proof of real Windows installer migration, live BarTender or physical print. Merge requires packaged smoke PASS and separate explicit user approval.
+
+
+### Disposable GitHub Actions packaged smoke
+
+The Windows `build-windows` job runs `tools/packaged_template_smoke.ps1` after building the actual Inno Setup EXE. The script is restricted to an ephemeral GitHub Actions Windows runner, checks for existing AutoPrint registration, and uses a disposable install directory plus `AUTOPRINT_USER_DATA_DIR`. During this test only, `AUTOPRINT_PACKAGED_SMOKE=1` and `GITHUB_ACTIONS=true` suppress the installer's normal silent-mode GUI auto-launch; production installer/updater behavior is unchanged.
+
+It verifies: first installation and bundled default assets; content-addressed conflict import; two legacy-conflict variants and idempotent source-level migration; metadata restoration; same-version in-place installer update; uninstall; reinstall; and exact SHA-256 preservation of all synthetic user BTW files and registry metadata. Inno install/uninstall logs are uploaded on CI failure. No real print job or BarTender COM session is started.
+
+**Coverage limits:** This does not test an upgrade from a different production installer version, the installed frozen GUI startup, automatic migration inside that frozen GUI, or a non-print BarTender open of a real BTW. Real BarTender verification remains a separate opt-in Windows smoke step. CI PASS alone must not be described as end-to-end live BarTender/package migration verification.
