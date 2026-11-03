@@ -77,7 +77,9 @@ def main() -> int:
             user32.EnumWindows(callback, 0)
             for hwnd, title in windows:
                 if title not in seen:
-                    print(f"Isolated frozen window: {title!r}", flush=True)
+                    # GitHub Windows runner can use cp1252 for stdout; escape
+                    # non-ASCII for logs, but compare the original Unicode title.
+                    print(f"Isolated frozen window: {ascii(title)}", flush=True)
                     seen.add(title)
                 if title == "AutoPrint — лицензия":
                     found = True
@@ -89,7 +91,7 @@ def main() -> int:
         if not found:
             raise RuntimeError(
                 "Frozen EXE did not expose its expected license window on Windows CI "
-                f"(observed: {sorted(seen)})"
+                f"(observed: {ascii(sorted(seen))})"
             )
         try:
             result = proc.wait(timeout=15)
