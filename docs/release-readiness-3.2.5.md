@@ -31,6 +31,39 @@ not the version-bump/release authorization.
 - Inspect #69 source-run licensing behavior if it blocks isolated GUI smoke.
   No license key or production license file belongs in this PR.
 
+## Evidence obtained before merges (2026-11-03)
+
+These checks ran on an **integration-only composite branch**, not on
+independently merged commits in main. Never merge test PR #78.
+
+- Combined candidate `0ce8a5d0dffb59596520c0c5971ae6af3eb4475a`:
+  [Windows CI](https://github.com/naskek/AutoPrint-GUI/actions/runs/41596576460)
+  **4/4 PASS** (unit-regression, COM-contract, build installer, isolated
+  packaged-data migration).
+- Authentic public v3.2.4 installer downloaded, checked against published
+  SHA-256 `bf69876759b3a8d356d8fe26494b7a13bb2bd2f9e92dd6e56dfa3ba16087c168`,
+  installed on disposable Windows CI, then replaced by the composite
+  candidate. SQLite catalog (1 synthetic product), 2 synthetic CSV histories,
+  BTW, config and an **invalid synthetic** license survived install,
+  uninstall and reinstall, verified by SHA-256.
+- Real candidate PyInstaller EXE launched on Windows and correctly displayed
+  the missing/invalid license dialog, then exited on closing it. This was
+  **not** a licensed frozen-GUI startup test.
+- Local BarTender 2022 R5 Enterprise COM start/stop PASS. Static export
+  of a copy of real BTW yielded PNG 189x189 and original BTW SHA-256 unchanged.
+  Two **synthetic** BTXML inputs produced visually different rendered
+  DataMatrix and substituted TEST-A/B, BATCH-A/B, NUM 10001/20002. No print
+  was submitted. Scanner validation of GS1 01/21/93 not implied.
+- User accepted CSV-browser layout (dark theme) from integration candidate.
+  This is an operator visual acceptance of the combined UI, not proof of
+  independent PR #76 exact-head smoke.
+
+**Remaining release gates:** real versioned 3.2.4→3.2.5 update, post-merge
+exact-head smoke as appropriate, licensed frozen GUI initialization and
+read-only BTW verification after migration, decisions around #63 shipped
+defaults, and final separate version-bump PR. None of these tests authorize
+main merges, tagging, publishing or physical printing.
+
 ## Required release sequence
 
 1. Complete independent PR reviews, required CI (unit-regression-tests,
