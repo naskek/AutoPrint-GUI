@@ -51,6 +51,45 @@ jobs:
           }
           "APP_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      # Check both release channels before any publication. Existing versions
+      # are immutable: partial publication must be reconciled manually.
+      - name: Require public updater channel credentials
+        if: env.PUBLIC_RELEASE_TOKEN == ''
+        shell: pwsh
+        run: |
+          throw "Production release blocked: AUTOPRINT_RELEASE_TOKEN is required to publish the public updater channel."
+
+      - name: Reject reused release version in both repositories
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $candidate = [version]$env:APP_VERSION
+
+          $privateJson = gh release list --repo $env:GITHUB_REPOSITORY --limit 1000 --json tagName
+          if ($LASTEXITCODE -ne 0) { throw "Cannot inspect private releases; refusing to publish." }
+          $privateReleases = @($privateJson | ConvertFrom-Json)
+
+          # The public token must work before a private Release is created.
+          $env:GH_TOKEN = $env:PUBLIC_RELEASE_TOKEN
+          $publicJson = gh release list --repo $env:PUBLIC_RELEASE_REPO --limit 1000 --json tagName
+          if ($LASTEXITCODE -ne 0) { throw "Cannot inspect public updater releases; refusing to publish." }
+          $publicReleases = @($publicJson | ConvertFrom-Json)
+
+          foreach ($entry in @($privateReleases) + @($publicReleases)) {
+            if ([string]$entry.tagName -eq $tag) {
+              throw "Release $tag already exists in a release repository; never overwrite published assets."
+            }
+            if ([string]$entry.tagName -match '^v?(\d+\.\d+\.\d+)$') {
+              $published = [version]$Matches[1]
+              if ($candidate -le $published) {
+                throw "Version $candidate must be newer than all published versions ($published)."
+              }
+            }
+          }
+          Write-Host "Release preflight passed: unique $tag, access to both channels verified."
+
       - name: Install build dependencies
         shell: pwsh
         run: |
@@ -118,20 +157,8 @@ jobs:
 
           SHA-256: $env:INSTALLER_SHA256
           "@
-          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --clobber
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          } else {
-            gh release create $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --title "AutoPrint $env:APP_VERSION" --notes $notes
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-
-      - name: Require public updater channel credentials
-        if: env.PUBLIC_RELEASE_TOKEN == ''
-        shell: pwsh
-        run: |
-          throw "Production release blocked: AUTOPRINT_RELEASE_TOKEN is required to publish the public updater channel."
+          gh release create $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:GITHUB_REPOSITORY --title "AutoPrint $env:APP_VERSION" --notes $notes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Publish public updater release
         env:
@@ -145,14 +172,8 @@ jobs:
           Compiled update package. Source code is stored separately in the private AutoPrint-GUI repository.
           SHA-256: $env:INSTALLER_SHA256
           "@
-          gh release view $tag --repo $env:PUBLIC_RELEASE_REPO *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --clobber
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          } else {
-            gh release create $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --title "AutoPrint $env:APP_VERSION" --notes $notes
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          gh release create $tag $env:INSTALLER_PATH $env:LEGACY_INSTALLER_PATH --repo $env:PUBLIC_RELEASE_REPO --title "AutoPrint $env:APP_VERSION" --notes $notes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify public updater release
         env:
