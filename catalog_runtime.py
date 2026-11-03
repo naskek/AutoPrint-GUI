@@ -105,9 +105,9 @@ def initialize_catalog_runtime(
             staging_store.read_snapshot()
             final_path.parent.mkdir(parents=True, exist_ok=True)
             # Publish only when nobody else has created the live catalog.
-        # os.link is atomic and rejects a destination that already exists.
-        os.link(staging_path, final_path)
-        staging_path.unlink(missing_ok=True)
+            # os.link is atomic and rejects a destination that already exists.
+            os.link(staging_path, final_path)
+            staging_path.unlink(missing_ok=True)
             store = CatalogStore(final_path)
             store.initialize()
             return _ready_result(store)
