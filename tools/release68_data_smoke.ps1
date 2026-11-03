@@ -71,7 +71,14 @@ if ($productionPath) {
     $q = [char]34
     $log = Join-Path $root 'production-3.2.4-install.log'
     $args = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=$q$install$q /LOG=$q$log$q"
-    $process = Start-Process -FilePath $productionPath -ArgumentList $args -Wait -PassThru
+    # Do NOT use Start-Process -Wait: Inno 3.2.4 starts a child GUI
+    # even in silent mode and -Wait would wait for that child as well.
+    $process = Start-Process -FilePath $productionPath -ArgumentList $args -PassThru
+    if (-not $process.WaitForExit(120000)) {
+        Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        throw 'Published 3.2.4 installer timeout'
+    }
+    $process.Refresh()
     if ($process.ExitCode -ne 0) {
         throw "Published 3.2.4 installer failed (exit=$($process.ExitCode)): $log"
     }
@@ -300,6 +307,11 @@ print("PASS verified restored catalog/history/templates/registry after reinstall
 if ($LASTEXITCODE -ne 0) { throw 'Post-reinstall restore failed' }
 
 Write-Host 'PASS: synthetic catalog/history/template/config/license preserved after installed Inno lifecycle.'
+if ($productionPath) {
+    & python (Join-Path $repo 'tools/frozen_license_gate_probe.py') $install
+    if ($LASTEXITCODE -ne 0) { throw 'Frozen license-gate probe failed' }
+}
+
 if ($productionPath) {
     Write-Host 'PASS: genuine public v3.2.4 installer -> integration candidate EXE replacement.'
 } else {
