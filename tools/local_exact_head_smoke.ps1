@@ -153,19 +153,24 @@ cfgdir.mkdir(exist_ok=True)
 
 import bartender_gui
 from autoprint_main import AutoPrintApp
+# Keep the no-COM and no-submit guards for the ENTIRE GUI mainloop,
+# not just construction, so timers and keyboard callbacks cannot submit.
 with patch.object(bartender_gui.App,"_start_bt",return_value=None), \
+     patch.object(bartender_gui.App,"_print_range_one_job_via_csv",return_value=None), \
+     patch.object(bartender_gui.App,"_print_rows_direct",return_value=None), \
+     patch.object(bartender_gui.App,"_print_sticker_placeholder",return_value=None), \
      patch.object(bartender_gui,"enum_printers",return_value=[]):
     app = AutoPrintApp()
-app.print_btn.configure(state="disabled")
-app.cancel_btn.configure(state="disabled")
-app.sticker_reprint_btn.configure(state="disabled")
-app.title("PR #76 EXACT HEAD UI SMOKE — PRINT DISABLED")
-app.csv_dir = str(fixtures)
-app._render_csv_list()
-app.geometry("1040x720")
-print("PASS #76 source GUI started; yellow folders and 16 CSV fixtures visible")
-print("NO COM, NO PRINT/PRINTOUT — close the GUI after inspecting layout")
-app.mainloop()
+    app.print_btn.configure(state="disabled")
+    app.cancel_btn.configure(state="disabled")
+    app.sticker_reprint_btn.configure(state="disabled")
+    app.title("PR #76 EXACT HEAD UI SMOKE — PRINT DISABLED")
+    app.csv_dir = str(fixtures)
+    app._render_csv_list()
+    app.geometry("1040x720")
+    print("PASS #76 source GUI started; yellow folders and 16 CSV fixtures visible")
+    print("NO COM, NO PRINT/PRINTOUT — close the GUI after inspecting layout")
+    app.mainloop()
 '@ | & $python -
     if ($LASTEXITCODE -ne 0) { throw 'PR #76 GUI smoke FAILED' }
     if ((Get-FileHash -LiteralPath $TemplatePath -Algorithm SHA256).Hash -ne $hash) {
