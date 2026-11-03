@@ -188,12 +188,29 @@ jobs:
           name: AutoPrint-Release68-Isolated-Candidate
           path: dist/installer
 
-      - name: Verify exact SHA and run packaged data migration
+      - name: Download and hash-verify published 3.2.4 installer
+        shell: pwsh
+        run: |
+          $publishedUrl = "https://github.com/naskek/AutoPrint-GUI-Releases/releases/download/v3.2.4/AutoPrint_Setup_3.2.4.exe"
+          $publishedInstaller = Join-Path $env:RUNNER_TEMP 'AutoPrint_Setup_public-v3.2.4.exe'
+          $expectedHash = 'bf69876759b3a8d356d8fe26494b7a13bb2bd2f9e92dd6e56dfa3ba16087c168'
+          Invoke-WebRequest -Uri $publishedUrl -OutFile $publishedInstaller -MaximumRedirection 10 -ErrorAction Stop
+          if (-not (Test-Path -LiteralPath $publishedInstaller)) { throw 'Missing public 3.2.4 installer' }
+          $actualHash = (Get-FileHash -LiteralPath $publishedInstaller -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) {
+            throw "Published 3.2.4 checksum mismatch, expected $expectedHash got $actualHash"
+          }
+          "PRODUCTION_324_INSTALLER=$publishedInstaller" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "PASS: actual publicly released v3.2.4 installer SHA-256 verified"
+
+      - name: Verify exact SHA and run public-installer upgrade smoke
         shell: pwsh
         run: |
           $version = python -c "from app_version import APP_VERSION; print(APP_VERSION)"
           $env:AUTOPRINT_SMOKE_EXPECT_SHA = "${{ github.event.pull_request.head.sha || github.sha }}"
-          ./tools/release68_data_smoke.ps1 -Installer "dist/installer/AutoPrint_Setup_${version}.exe"
+          ./tools/release68_data_smoke.ps1 -Installer "dist/installer/AutoPrint_Setup_${version}.exe" `
+            -ProductionInstaller $env:PRODUCTION_324_INSTALLER `
+            -ProductionSha256 'bf69876759b3a8d356d8fe26494b7a13bb2bd2f9e92dd6e56dfa3ba16087c168'
 
       - name: Save isolated migration logs on failure
         if: failure()
