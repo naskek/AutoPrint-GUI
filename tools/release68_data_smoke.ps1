@@ -3,7 +3,9 @@
 param(
     [Parameter(Mandatory = $true)][string] $Installer,
     [string] $ProductionInstaller = '',
-    [string] $ProductionSha256 = ''
+    [string] $ProductionSha256 = '',
+    [string] $SourceDir = '',
+    [string] $ExpectedCandidateVersion = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,7 +14,12 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or
     -not $env:RUNNER_TEMP -or -not $env:GITHUB_RUN_ID) {
     throw 'Restricted to a disposable GitHub-hosted Windows runner'
 }
-$repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+# Test harness can validate a separate exact source SHA without changing it.
+$repo = if ($SourceDir) {
+    (Resolve-Path -LiteralPath $SourceDir).Path
+} else {
+    (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+}
 $actualSha = (& git -C $repo rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or
     -not $env:AUTOPRINT_SMOKE_EXPECT_SHA -or
@@ -203,6 +210,13 @@ Assert-FileHashMap $baseline 'initial candidate install'
 if ($productionPath) {
     $newExe = Join-Path $install 'AutoPrint.exe'
     $newExeHash = (Get-FileHash -LiteralPath $newExe -Algorithm SHA256).Hash
+    if ($ExpectedCandidateVersion) {
+        $actualVersion = (Get-Item -LiteralPath $newExe).VersionInfo.FileVersion
+        if ($actualVersion -ne $ExpectedCandidateVersion) {
+            throw "Candidate EXE FileVersion mismatch: expected $ExpectedCandidateVersion, found $actualVersion"
+        }
+        Write-Host "PASS true version upgrade: old 3.2.4 -> new $actualVersion (installed EXE)"
+    }
     if ($newExeHash -eq $oldExeHash) {
         throw 'Candidate did not replace the actual published 3.2.4 executable'
     }
@@ -308,7 +322,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Post-reinstall restore failed' }
 
 Write-Host 'PASS: synthetic catalog/history/template/config/license preserved after installed Inno lifecycle.'
 if ($productionPath) {
-    & python (Join-Path $repo 'tools/frozen_license_gate_probe.py') $install
+    & python (Join-Path $PSScriptRoot 'frozen_license_gate_probe.py') $install
     if ($LASTEXITCODE -ne 0) { throw 'Frozen license-gate probe failed' }
 }
 
@@ -317,4 +331,7 @@ if ($productionPath) {
 } else {
     Write-Host 'NOT COVERED: published v3.2.4 installer upgrade.'
 }
-Write-Host 'NOT COVERED: version-number change 3.2.4 -> 3.2.5, live licensed frozen GUI, real BTW/BarTender or physical print.'
+if (-not $ExpectedCandidateVersion) {
+    Write-Host 'NOT COVERED: version-number change 3.2.4 -> 3.2.5.'
+}
+Write-Host 'NOT COVERED: live licensed frozen GUI, real BTW/BarTender or physical print.'
