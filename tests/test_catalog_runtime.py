@@ -104,6 +104,35 @@ class CatalogRuntimeStartupTests(unittest.TestCase):
         self.assertFalse(result.ready)
         self.assertFalse(self.db_path.exists())
 
+    def test_competing_first_run_catalog_is_never_overwritten(self):
+        original = b"concurrent-writer-created-catalog"
+
+        def concurrent_create(source, target):
+            path = Path(target)
+            path.write_bytes(original)
+            raise FileExistsError(str(path))
+
+        with patch("catalog_runtime.os.link", side_effect=concurrent_create):
+            result = initialize_catalog_runtime(self.root)
+        self.assertFalse(result.ready)
+        self.assertEqual(self.db_path.read_bytes(), original)
+        self.assertFalse(list(self.db_path.parent.glob("*.tmp")))
+
+    def test_competing_excel_migration_catalog_is_never_overwritten(self):
+        self._workbook("product_catalog.xlsx", [("222", "Excel source")])
+        original = b"created-by-a-concurrent-process"
+
+        def concurrent_create(source, target):
+            path = Path(target)
+            path.write_bytes(original)
+            raise FileExistsError(str(path))
+
+        with patch("catalog_runtime.os.link", side_effect=concurrent_create):
+            result = initialize_catalog_runtime(self.root)
+        self.assertFalse(result.ready)
+        self.assertEqual(self.db_path.read_bytes(), original)
+        self.assertFalse(list(self.db_path.parent.glob("*.tmp")))
+
     def test_corrupt_existing_database_is_preserved_without_excel_fallback(self):
         self.db_path.parent.mkdir(parents=True)
         self.db_path.write_bytes(b"not sqlite")
