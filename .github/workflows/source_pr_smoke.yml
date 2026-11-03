@@ -29,13 +29,13 @@ jobs:
       - name: Checkout test-only harness
         uses: actions/checkout@v6
         with:
-          ref: \${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           path: harness
 
       - name: Checkout exact independent PR source commit
         uses: actions/checkout@v6
         with:
-          ref: \${{ matrix.source_sha }}
+          ref: ${{ matrix.source_sha }}
           path: source
 
       - name: Set up Python
@@ -53,14 +53,14 @@ jobs:
           Push-Location source
           try {
             $actual = (git rev-parse HEAD).Trim()
-            if ($actual -ne '\${{ matrix.source_sha }}') {
+            if ($actual -ne '${{ matrix.source_sha }}') {
               throw "Source SHA mismatch: $actual"
             }
             python build_tools/build_exe.py
             if ($LASTEXITCODE -ne 0) { throw "Exact source PyInstaller build failed" }
             $candidates = @(
-              "\${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-              "\${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+              "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+              "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
             )
             $iscc = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
             if (-not $iscc) {
@@ -80,13 +80,13 @@ jobs:
       - name: Run authentic public v3.2.4 to exact source-PR packaged smoke
         shell: pwsh
         run: |
-          ./harness/tools/source_pr_packaged_smoke.ps1 -Kind '\${{ matrix.kind }}' -SourceDir ./source -ExpectedSourceSha '\${{ matrix.source_sha }}'
+          ./harness/tools/source_pr_packaged_smoke.ps1 -Kind '${{ matrix.kind }}' -SourceDir ./source -ExpectedSourceSha '${{ matrix.source_sha }}'
 
       - name: Upload isolated smoke logs on failure
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: AutoPrint-Issue-\${{ matrix.issue }}-Source-Head-Smoke-Logs
-          path: \${{ runner.temp }}/autoprint-source-*/*.log
+          name: AutoPrint-Issue-${{ matrix.issue }}-Source-Head-Smoke-Logs
+          path: ${{ runner.temp }}/autoprint-source-*/*.log
           if-no-files-found: ignore
           retention-days: 1
