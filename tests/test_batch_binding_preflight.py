@@ -99,7 +99,7 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
     def test_verified_path_and_refresh_allow_one_batch_submit(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "tmp_batch.csv"
-            path.write_text("DM\\tNUM\\nSYNTHETIC\\t1\\n", encoding="utf-8-sig")
+            path.write_text("DM\tNUM\nSYNTHETIC\t1\n", encoding="utf-8-sig")
             fmt, text, dbs, setup = self._fmt(path)
 
             self.assertTrue(self.app._rebind_template_db(fmt, str(path)))
@@ -115,7 +115,7 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
     def test_already_correct_binding_still_must_accept_setter(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "tmp_batch.csv"
-            path.write_text("DM\\nSYNTHETIC\\n", encoding="utf-8-sig")
+            path.write_text("DM\nSYNTHETIC\n", encoding="utf-8-sig")
             fmt, text, _, _ = self._fmt(path, current=str(path))
             self.assertTrue(self.app._rebind_template_db(fmt, str(path)))
             self.assertEqual(text.set_count, 1)
@@ -128,7 +128,7 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
     def test_missing_com_collection_is_not_success(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "tmp_batch.csv"
-            path.write_text("DM\\nSYNTHETIC\\n", encoding="utf-8-sig")
+            path.write_text("DM\nSYNTHETIC\n", encoding="utf-8-sig")
             # Legacy DatabaseConnections is intentionally absent. Without
             # documented Databases, a batch must not be considered verified.
             fmt = SimpleNamespace(Print=Mock(), PrintOut=Mock())
@@ -140,7 +140,7 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
     def test_no_database_multiple_databases_and_unsupported_item_are_denied(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "tmp_batch.csv"
-            path.write_text("DM\\nSYNTHETIC\\n", encoding="utf-8-sig")
+            path.write_text("DM\nSYNTHETIC\n", encoding="utf-8-sig")
             for options in ({"count": 0}, {"count": 2}, {"fail_item": True}):
                 with self.subTest(options=options):
                     fmt, text, _, _ = self._fmt(path, **options)
@@ -153,7 +153,7 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
     def test_failed_setter_stale_readback_and_unreadable_path_are_denied(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "tmp_batch.csv"
-            path.write_text("DM\\nSYNTHETIC\\n", encoding="utf-8-sig")
+            path.write_text("DM\nSYNTHETIC\n", encoding="utf-8-sig")
             for options in (
                 {"fail_set": True},
                 {"ignore_set": True},
@@ -171,7 +171,7 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
     def test_refresh_failure_or_false_readback_is_denied(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "tmp_batch.csv"
-            path.write_text("DM\\nSYNTHETIC\\n", encoding="utf-8-sig")
+            path.write_text("DM\nSYNTHETIC\n", encoding="utf-8-sig")
             for options in ({"fail_refresh": True}, {"ignore_refresh": True}):
                 with self.subTest(options=options):
                     fmt, _, _, _ = self._fmt(path, **options)
