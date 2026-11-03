@@ -69,6 +69,10 @@ try {
     }
     $env:AUTOPRINT68_LEGACY_TEMPLATE = $copied
     $env:AUTOPRINT68_BTW_SMOKE_OUTPUT = Join-Path $work 'live-preview.png'
+    # Real BarTender COM uses the operator's normal Seagull profile.
+    # AutoPrint user data stays isolated via AUTOPRINT_USER_DATA_DIR.
+    $env:LOCALAPPDATA = $prev['LOCALAPPDATA']
+    $env:APPDATA = $prev['APPDATA']
     Set-Location -LiteralPath $btwSource
     @'
 import hashlib, os, pythoncom
@@ -119,6 +123,8 @@ finally:
         throw 'Original BTW changed! Check filesystem'
     }
     Write-Host 'PASS: original operator BTW SHA-256 unchanged.'
+    $env:LOCALAPPDATA = Join-Path $work 'local'
+    $env:APPDATA = Join-Path $work 'roaming'
 
     # The second exact-head check is source-run-only and has no BarTender COM.
     Set-Location -LiteralPath $guiSource
