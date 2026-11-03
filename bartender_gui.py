@@ -19,7 +19,7 @@ import threading
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog as fd, messagebox as mb, Menu, ttk
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from utils import (
     get_base_dir, load_config, save_config, enum_printers,
@@ -117,6 +117,11 @@ MAIN_LAYOUT_BLOCK_ORDER = (
 )
 PRINT_BATCH_CONTAINER_SCROLLABLE = False
 CSV_FILE_LIST_SCROLL_POLICY = "vertical-auto"
+# Requested size is soft: grid can shrink on small windows; no fixed row minimum.
+CSV_BROWSER_LIST_REQUEST_HEIGHT = 230
+CSV_BROWSER_ROW_HEIGHT = 22
+CSV_BROWSER_ROW_PADDING = 1
+CSV_BROWSER_FOLDER_ICON_SIZE = (20, 16)
 CSV_FILE_ENTRY_RENDER_LIMIT = 120
 CSV_FILE_SCAN_LIMIT = 500
 PATH_RESIZE_DEBOUNCE_MS = 80
@@ -132,6 +137,16 @@ PRINT_SELECTION_MODE_COUNT = "Количество"
 BT_BATCH_SUBMITTED = "submitted"
 BT_BATCH_AMBIGUOUS = "ambiguous"
 BT_BATCH_FAILED = "failed"
+
+
+def build_csv_folder_icon_image() -> Image.Image:
+    """A distinct, always-yellow Windows-style folder in light and dark themes."""
+    icon = Image.new("RGBA", (24, 20), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(icon)
+    draw.rounded_rectangle((2, 2, 13, 10), radius=2, fill="#F9CF69", outline="#A06B16")
+    draw.rounded_rectangle((2, 6, 22, 18), radius=2, fill="#E8A929", outline="#A06B16")
+    draw.line((4, 8, 20, 8), fill="#FFDF86", width=2)
+    return icon
 
 
 def application_icon_path() -> str:
@@ -1260,7 +1275,9 @@ class App(ctk.CTk):
             csv_file_buttons, text="Обновить",
             command=self._render_csv_list,
         ).grid(row=0, column=2, sticky="ew", padx=2)
-        self.csv_list_frame = ctk.CTkScrollableFrame(csv_files_body)
+        self.csv_list_frame = ctk.CTkScrollableFrame(
+            csv_files_body, height=CSV_BROWSER_LIST_REQUEST_HEIGHT
+        )
         self.csv_list_frame.grid(
             row=2, column=0, sticky="nsew", padx=8, pady=(0, 8)
         )
@@ -1278,9 +1295,9 @@ class App(ctk.CTk):
         self.params_section.grid(row=1, column=0, sticky="ew", pady=7)
         params = self.params_section.body
         params.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(params, text="Дата производства:", anchor="w").grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(params, text="Дата производства:", anchor="w").grid(row=0, column=0, sticky="w", padx=10, pady=2)
         date_row = ctk.CTkFrame(params, fg_color="transparent")
-        date_row.grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+        date_row.grid(row=0, column=1, sticky="ew", padx=10, pady=2)
         self.prod_date_entry = ctk.CTkEntry(date_row, width=150)
         self.prod_date_entry.insert(0, dt.date.today().strftime("%d.%m.%Y"))
         self.prod_date_entry.pack(side="left", fill="x", expand=True)
@@ -1296,9 +1313,9 @@ class App(ctk.CTk):
         self.prod_date_entry.configure(validate="key", validatecommand=vcmd)
         self.prod_date_entry.bind("<KeyRelease>", self._format_prod_date)
         self.prod_date_entry.bind("<KeyRelease>", self._schedule_live_preview, add="+")
-        ctk.CTkLabel(params, text="Номер партии:", anchor="w").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(params, text="Номер партии:", anchor="w").grid(row=1, column=0, sticky="w", padx=10, pady=2)
         part_input_box = ctk.CTkFrame(params, fg_color="transparent")
-        part_input_box.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
+        part_input_box.grid(row=1, column=1, sticky="ew", padx=10, pady=2)
         self.part_entry = ctk.CTkEntry(part_input_box, placeholder_text="Номер партии вручную")
         self.part_entry.pack(fill="x")
         self.part_usage_hint = ctk.CTkLabel(
@@ -1315,30 +1332,30 @@ class App(ctk.CTk):
             self.part_entry_border_default = self.part_entry.cget("border_color")
         except Exception:
             self.part_entry_border_default = None
-        ctk.CTkLabel(params, text="Клиент (стикер):", anchor="w").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(params, text="Клиент (стикер):", anchor="w").grid(row=2, column=0, sticky="w", padx=10, pady=2)
         client_box = ctk.CTkFrame(params, fg_color="transparent")
-        client_box.grid(row=2, column=1, sticky="ew", padx=10, pady=5)
+        client_box.grid(row=2, column=1, sticky="ew", padx=10, pady=2)
         self.client_entry = ctk.CTkEntry(client_box, placeholder_text="Название клиента")
         self.client_entry.pack(fill="x", expand=True)
         self.client_entry.bind("<KeyRelease>", self._schedule_live_preview)
         self.client_combo = ctk.CTkComboBox(
             client_box, values=[], state="readonly", command=lambda value: self._on_client_select(value)
         )
-        self.client_combo.pack(fill="x", expand=True, pady=(5, 0))
+        self.client_combo.pack(fill="x", expand=True, pady=(2, 0))
         client_actions = ctk.CTkFrame(params, fg_color="transparent")
-        client_actions.grid(row=3, column=1, sticky="w", padx=8, pady=(0, 5))
+        client_actions.grid(row=3, column=1, sticky="w", padx=8, pady=(0, 2))
         ctk.CTkButton(client_actions, text="Добавить", width=75, command=self._client_add).pack(side="left", padx=2)
         ctk.CTkButton(client_actions, text="Очистить", width=75, command=self._client_clear).pack(side="left", padx=2)
         ctk.CTkButton(client_actions, text="Удалить", width=75, command=self._client_delete).pack(side="left", padx=2)
         self.show_dialog_var = ctk.BooleanVar(value=self.default_show_dialog)
         self.show_dialog_chk = ctk.CTkCheckBox(params, text="Показывать диалог печати BarTender", variable=self.show_dialog_var)
-        self.show_dialog_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=4)
+        self.show_dialog_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=2)
         self.calib_var = ctk.BooleanVar(value=DEFAULT_TSC_CALIBRATION_ENABLED)
         self.calib_chk = ctk.CTkCheckBox(params, text="Калибровка TSC: 6 этикеток 'X'", variable=self.calib_var)
-        self.calib_chk.grid(row=5, column=0, columnspan=2, sticky="w", padx=10, pady=4)
+        self.calib_chk.grid(row=5, column=0, columnspan=2, sticky="w", padx=10, pady=2)
         self.skip_sticker_var = ctk.BooleanVar(value=False)
         self.skip_sticker_chk = ctk.CTkCheckBox(params, text="Не печатать маркировочный стикер", variable=self.skip_sticker_var)
-        self.skip_sticker_chk.grid(row=6, column=0, columnspan=2, sticky="w", padx=10, pady=(4, 10))
+        self.skip_sticker_chk.grid(row=6, column=0, columnspan=2, sticky="w", padx=10, pady=(2, 5))
         self.exp_days_entry = ctk.CTkEntry(params)
 
         self.print_section = self._make_main_section(
@@ -1349,7 +1366,7 @@ class App(ctk.CTk):
         print_body = self.print_section.body
 
         mode_row = ctk.CTkFrame(print_body, fg_color="transparent")
-        mode_row.pack(fill="x", padx=8, pady=(6, 4))
+        mode_row.pack(fill="x", padx=8, pady=(3, 2))
         ctk.CTkLabel(mode_row, text="Режим печати:").pack(side="left", padx=(2, 6))
         self.print_selection_mode_var = tk.StringVar(
             master=self, value=DEFAULT_PRINT_SELECTION_MODE
@@ -1364,7 +1381,7 @@ class App(ctk.CTk):
         self.print_selection_mode_control.pack(side="left", fill="x", expand=True)
 
         fields_row = ctk.CTkFrame(print_body, fg_color="transparent")
-        fields_row.pack(fill="x", padx=8, pady=(0, 4))
+        fields_row.pack(fill="x", padx=8, pady=(0, 2))
         ctk.CTkLabel(fields_row, text="С строки:").pack(side="left", padx=(2, 4))
         self.index_entry = ctk.CTkEntry(fields_row, width=64)
         self.index_entry.insert(0, "1")
@@ -1386,7 +1403,7 @@ class App(ctk.CTk):
             self._selection_entry_border_defaults = (None, None)
 
         batch_row = ctk.CTkFrame(print_body, fg_color="transparent")
-        batch_row.pack(fill="x", padx=8, pady=(0, 4))
+        batch_row.pack(fill="x", padx=8, pady=(0, 2))
         ctk.CTkLabel(batch_row, text="Пакет по (шт.):").pack(side="left", padx=(2, 6))
         self.batch_entry = ctk.CTkEntry(batch_row, width=90)
         self.batch_entry.insert(0, "0")
@@ -1396,10 +1413,10 @@ class App(ctk.CTk):
         self.print_selection_summary_label = ctk.CTkLabel(
             print_body, text="—", anchor="w", text_color=("#65717c", "#aeb6bf")
         )
-        self.print_selection_summary_label.pack(fill="x", padx=10, pady=(0, 5))
+        self.print_selection_summary_label.pack(fill="x", padx=10, pady=(0, 2))
 
         actions = ctk.CTkFrame(print_body, fg_color="transparent")
-        actions.pack(fill="x", padx=8, pady=(0, 5))
+        actions.pack(fill="x", padx=8, pady=(0, 2))
         self.print_btn = ctk.CTkButton(
             actions, text="Печать", command=self._print_range_one_job_via_csv,
             height=38, fg_color="#198754", hover_color="#157347"
@@ -1417,7 +1434,7 @@ class App(ctk.CTk):
         self.cancel_btn.pack(side="left", fill="x", expand=True, padx=(3, 2))
 
         secondary_actions = ctk.CTkFrame(print_body, fg_color="transparent")
-        secondary_actions.pack(fill="x", padx=8, pady=(0, 6))
+        secondary_actions.pack(fill="x", padx=8, pady=(0, 3))
         self.sticker_reprint_btn = ctk.CTkButton(
             secondary_actions,
             text="Перепечатать стикер",
@@ -1428,8 +1445,8 @@ class App(ctk.CTk):
         )
         self.sticker_reprint_btn.pack(fill="x", padx=2)
 
-        self.batch_btns_frame = ctk.CTkFrame(print_body, height=54)
-        self.batch_btns_frame.pack(fill="x", padx=8, pady=(0, 8))
+        self.batch_btns_frame = ctk.CTkFrame(print_body, height=42)
+        self.batch_btns_frame.pack(fill="x", padx=8, pady=(0, 5))
 
         self.preview_section = self._make_main_section(
             self.main_layout_frame,
@@ -6857,6 +6874,18 @@ class App(ctk.CTk):
         except Exception:
             return []
 
+    def _get_csv_folder_icon(self):
+        image = getattr(self, "_csv_folder_icon", None)
+        if image is None:
+            bitmap = build_csv_folder_icon_image()
+            image = ctk.CTkImage(
+                light_image=bitmap,
+                dark_image=bitmap,
+                size=CSV_BROWSER_FOLDER_ICON_SIZE,
+            )
+            self._csv_folder_icon = image
+        return image
+
     def _render_csv_list(self):
         self._schedule_path_label_refresh()
         self._schedule_csv_scrollbar_refresh()
@@ -6908,7 +6937,7 @@ class App(ctk.CTk):
             # fg_color ожидает (light, dark)
             fg = ("#e0ecff", "#3a4a6a") if is_cur else None  # подсветка заметнее в тёмной теме
             row = ctk.CTkFrame(frame, fg_color=fg)
-            row.pack(fill="x", padx=6, pady=2)
+            row.pack(fill="x", padx=6, pady=CSV_BROWSER_ROW_PADDING)
             try:
                 row._base_fg = row.cget("fg_color")
             except Exception:
@@ -6936,12 +6965,17 @@ class App(ctk.CTk):
 
             # Цвет текста под выбранный фон: (light_mode, dark_mode)
             name_color = ("#0b2540", "#ffffff") if is_cur else None
-            icon = "📁 " if kind == "dir" else "📄 "
+            # A drawn yellow folder is reliable even when Windows renders
+            # folder emoji as monochrome. Keep existing CSV file glyph unchanged.
+            folder_image = self._get_csv_folder_icon() if kind == "dir" else None
             lbl = ctk.CTkLabel(
                 row,
-                text=icon + fname,
+                text=fname if kind == "dir" else "📄 " + fname,
+                image=folder_image,
+                compound="left",
                 anchor="w",
-                text_color=name_color
+                text_color=name_color,
+                height=CSV_BROWSER_ROW_HEIGHT,
             )
             lbl.pack(side="left", fill="x", expand=True, padx=(0, 6))
             lbl.bind("<Button-1>", lambda e, p=full, k=kind: (self._switch_csv_dir(p) if k == "dir" else self._select_csv_from_list(p)))
@@ -6952,8 +6986,10 @@ class App(ctk.CTk):
             ok_color = ("#28a745", "#1e7e34")  # зелёный для обеих тем
             cur_color = ("#0d6efd", "#0d6efd")
             if kind == "file":
-                ctk.CTkLabel(row, text=status, anchor="w",
-                             text_color=(ok_color if printed else (cur_color if is_cur else None))).pack(side="left", padx=(8, 8))
+                ctk.CTkLabel(
+                    row, text=status, anchor="w", height=CSV_BROWSER_ROW_HEIGHT,
+                    text_color=(ok_color if printed else (cur_color if is_cur else None)),
+                ).pack(side="left", padx=(8, 8))
                 cm = Menu(self, tearoff=0)
                 cm.add_command(label="История печати", command=lambda p=full: self._open_print_history(p))
                 def _popup_menu(event, menu=cm):
