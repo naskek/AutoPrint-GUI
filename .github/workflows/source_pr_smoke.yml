@@ -1,0 +1,103 @@
+name: Exact source-PR packaged persistence smoke (Issue 68)
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head-packaged:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 78
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: Catalog
+            issue: 6
+            pr: 74
+            source_sha: 82558de0dfd0174e0d9b10994078a6916e237b19
+          - kind: History
+            issue: 7
+            pr: 75
+            source_sha: 1d6b746e81bbd146afb38b2847fd8c4dd63e53d2
+
+    steps:
+      - name: Checkout test-only harness
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: harness
+
+      - name: Checkout exact independent PR source commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.source_sha }}
+          path: source
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install build requirements
+        shell: pwsh
+        run: python -m pip install -r source/build_tools/requirements.txt
+
+      - name: Parse read-only local smoke PowerShell syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'harness/tools/local_exact_head_smoke.ps1').Path,
+            [ref]$tokens, [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors) { throw ($parseErrors | Out-String) }
+
+      - name: Build Windows EXE and Inno installer from exact source head
+        shell: pwsh
+        run: |
+          Push-Location source
+          try {
+            $actual = (git rev-parse HEAD).Trim()
+            if ($actual -ne '${{ matrix.source_sha }}') {
+              throw "Source SHA mismatch: $actual"
+            }
+            python build_tools/build_exe.py
+            if ($LASTEXITCODE -ne 0) { throw "Exact source PyInstaller build failed" }
+            $candidates = @(
+              "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+              "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+            )
+            $iscc = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            if (-not $iscc) {
+              choco install innosetup --no-progress -y
+              $iscc = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            }
+            if (-not $iscc) { throw "ISCC.exe not found" }
+            & $iscc 'build_tools\installer.iss'
+            if ($LASTEXITCODE -ne 0) { throw "Exact source installer build failed" }
+            if (-not (Test-Path 'dist\installer\AutoPrint_Setup_3.2.4.exe')) {
+              throw "Expected exact source installer missing"
+            }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Run authentic public v3.2.4 to exact source-PR packaged smoke
+        shell: pwsh
+        run: |
+          ./harness/tools/source_pr_packaged_smoke.ps1 -Kind '${{ matrix.kind }}' -SourceDir ./source -ExpectedSourceSha '${{ matrix.source_sha }}'
+
+      - name: Upload isolated smoke logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: AutoPrint-Issue-${{ matrix.issue }}-Source-Head-Smoke-Logs
+          path: ${{ runner.temp }}/autoprint-source-*/*.log
+          if-no-files-found: ignore
+          retention-days: 1

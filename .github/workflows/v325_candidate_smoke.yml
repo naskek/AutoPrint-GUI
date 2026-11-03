@@ -1,0 +1,91 @@
+name: Exact v3.2.5 release candidate upgrade smoke (Issue 68)
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  versioned-upgrade-smoke:
+    if: github.event.pull_request.number == 78
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout disposable test harness
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: harness
+
+      - name: Checkout exact release candidate
+        uses: actions/checkout@v6
+        with:
+          ref: c9364ef2af6edbafd00403e6e70fa00a1eded895
+          path: candidate
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install candidate build requirements
+        shell: pwsh
+        run: python -m pip install -r candidate/build_tools/requirements.txt
+
+      - name: Build exact 3.2.5 PyInstaller and Inno installer
+        shell: pwsh
+        run: |
+          Push-Location candidate
+          try {
+            $sha = (git rev-parse HEAD).Trim()
+            if ($sha -ne 'c9364ef2af6edbafd00403e6e70fa00a1eded895') { throw "Candidate SHA mismatch: $sha" }
+            $version = python -c "from app_version import APP_VERSION; print(APP_VERSION)"
+            if ($version -ne '3.2.5') { throw "Candidate version mismatch: $version" }
+            python build_tools/build_exe.py
+            if ($LASTEXITCODE -ne 0) { throw 'PyInstaller candidate build failed' }
+            $paths = @(
+              "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+              "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+            )
+            $iscc = $paths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            if (-not $iscc) {
+              choco install innosetup --no-progress -y
+              $iscc = $paths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            }
+            if (-not $iscc) { throw 'Inno Setup compiler unavailable' }
+            & $iscc 'build_tools\installer.iss'
+            if ($LASTEXITCODE -ne 0) { throw 'Candidate installer build failed' }
+            if (-not (Test-Path -LiteralPath 'dist\installer\AutoPrint_Setup_3.2.5.exe')) {
+              throw 'Versioned candidate installer missing'
+            }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Download genuine public v3.2.4 installer and pin SHA-256
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/naskek/AutoPrint-GUI-Releases/releases/download/v3.2.4/AutoPrint_Setup_3.2.4.exe'
+          $target = Join-Path $env:RUNNER_TEMP 'AutoPrint_Setup_public-v3.2.4.exe'
+          $expected = 'bf69876759b3a8d356d8fe26494b7a13bb2bd2f9e92dd6e56dfa3ba16087c168'
+          Invoke-WebRequest -Uri $url -OutFile $target -MaximumRedirection 10 -ErrorAction Stop
+          $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw "Public binary SHA-256 mismatch: $actual" }
+          "RELEASE68_PUBLIC_INSTALLER=$target" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Test published 3.2.4 to exact 3.2.5 plus operator data
+        shell: pwsh
+        run: |
+          $env:AUTOPRINT_SMOKE_EXPECT_SHA = 'c9364ef2af6edbafd00403e6e70fa00a1eded895'
+          ./harness/tools/release68_data_smoke.ps1 -SourceDir candidate -ExpectedCandidateVersion '3.2.5' -Installer 'candidate/dist/installer/AutoPrint_Setup_3.2.5.exe' -ProductionInstaller $env:RELEASE68_PUBLIC_INSTALLER -ProductionSha256 'bf69876759b3a8d356d8fe26494b7a13bb2bd2f9e92dd6e56dfa3ba16087c168'
+
+      - name: Save diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: AutoPrint-V325-Upgrade-Logs
+          path: ${{ runner.temp }}/autoprint-68-data-*/*.log
+          if-no-files-found: ignore
+          retention-days: 1

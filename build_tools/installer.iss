@@ -42,11 +42,19 @@ Name: "{autodesktop}\AutoPrint"; Filename: "{app}\{#MyAppExeName}"; IconFilename
 
 [Run]
 ; Normal/manual install: offer to launch from the final wizard page.
-Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; Flags: nowait postinstall skipifsilent; Check: ShouldLaunchApp
 ; Updater uses /VERYSILENT: restart automatically after the files are replaced.
-Filename: "{app}\{#MyAppExeName}"; Flags: nowait skipifnotsilent
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait skipifnotsilent; Check: ShouldLaunchApp
 
 [Code]
+// A disposable GitHub Actions package smoke must never start the GUI/COM session.
+// Interactive installs and production updater installs retain their behavior.
+function ShouldLaunchApp(): Boolean;
+begin
+  Result := not ((GetEnv('GITHUB_ACTIONS') = 'true') and
+                 (GetEnv('AUTOPRINT_PACKAGED_SMOKE') = '1'));
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then

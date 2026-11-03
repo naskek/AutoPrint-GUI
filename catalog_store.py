@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from utils import get_base_dir
+from template_storage import get_user_data_dir
 
 
 SCHEMA_VERSION = 1
@@ -98,7 +99,12 @@ class ImportResult:
 
 
 def get_catalog_db_path(base_dir: str | os.PathLike[str] | None = None) -> Path:
-    root = Path(base_dir) if base_dir is not None else Path(get_base_dir())
+    """Persistent production catalog; explicit base_dir retains legacy/test layout.
+
+    Runtime callers should omit base_dir. The explicit argument is retained for
+    legacy fixture paths and tests, not for a mutable frozen install directory.
+    """
+    root = Path(base_dir) if base_dir is not None else Path(get_user_data_dir())
     return root / "data" / CATALOG_FILENAME
 
 
