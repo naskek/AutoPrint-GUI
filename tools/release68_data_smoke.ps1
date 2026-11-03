@@ -212,7 +212,7 @@ if ($productionPath) {
     $newExeHash = (Get-FileHash -LiteralPath $newExe -Algorithm SHA256).Hash
     if ($ExpectedCandidateVersion) {
         $actualVersion = (Get-Item -LiteralPath $newExe).VersionInfo.FileVersion
-        if ($actualVersion -ne $ExpectedCandidateVersion) {
+        if ($actualVersion -ne $ExpectedCandidateVersion -and $actualVersion -ne "$ExpectedCandidateVersion.0") {
             throw "Candidate EXE FileVersion mismatch: expected $ExpectedCandidateVersion, found $actualVersion"
         }
         Write-Host "PASS true version upgrade: old 3.2.4 -> new $actualVersion (installed EXE)"
