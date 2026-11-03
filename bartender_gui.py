@@ -44,6 +44,7 @@ from catalog_excel import (
     export_catalog_xlsx,
     prepare_excel_import,
 )
+from csv_history_store import CsvHistoryStore, legacy_config_paths
 from catalog_runtime import initialize_catalog_runtime, install_prepared_catalog
 from catalog_store import (
     CATALOG_FIELDS,
@@ -871,7 +872,11 @@ class App(ctk.CTk):
         self.default_batch_size = 0
         self.default_show_dialog = bool(self.cfg.get('show_print_dialog', False))
         self.csv_dir = self.cfg.get("csv_dir") or BASE_DIR
-        self.csv_stats = self._normalize_csv_stats(self.cfg.get("csv_print_stats", {}))
+        # Live history is independent from installer-owned config.json.
+        # A corrupt persistent store blocks startup rather than resetting history.
+        self._csv_history_store = CsvHistoryStore()
+        self._csv_history_store.initialize(legacy_config_paths(BASE_DIR))
+        self.csv_stats = self._normalize_csv_stats(self._csv_history_store.read_all())
         self._part_missing_logged = False
         self._stickers_preprinted = False
         self.last_batches = []
@@ -6775,8 +6780,6 @@ class App(ctk.CTk):
             try:
                 info["history"] = history
                 self.csv_stats[key] = info
-                self.cfg["csv_print_stats"] = self.csv_stats
-                save_config(self.cfg)
             except Exception:
                 pass
         win = ctk.CTkToplevel(self)
@@ -6915,12 +6918,21 @@ class App(ctk.CTk):
             printed = False
             if kind == "file":
                 info = self.csv_stats.get(self._norm_csv_path(full), {}) if isinstance(self.csv_stats, dict) else {}
-                printed = bool(info.get("printed"))
+                state = info.get("state")
+                printed = state in ("submitted_to_bartender", "spooled", "completed")
                 ts = info.get("last_print", "")
                 if printed:
-                    status = f"Печатался {ts}" if ts else "Печатался"
+                    status = f"Отправлен {ts}" if ts else "Отправлен"
+                elif state == "unknown":
+                    status = "Исход неизвестен"
+                elif state == "failed":
+                    status = "Ошибка отправки"
+                elif state == "cancelled":
+                    status = "Отменено"
+                elif state == "prepared":
+                    status = "Подготовлен"
                 else:
-                    status = "Не печатался"
+                    status = "Не отправлялся"
 
             # Цвет текста под выбранный фон: (light_mode, dark_mode)
             name_color = ("#0b2540", "#ffffff") if is_cur else None
@@ -7043,17 +7055,11 @@ class App(ctk.CTk):
             pass
         self._refresh_runtime_status()
 
-    def _mark_csv_printed(self, path, sent_total=0, printer=None, fmt=None, calib_total=0):
+    def _record_csv_status(self, path, state, *, sent_total=0, printer=None, fmt=None, calib_total=0):
         key = self._norm_csv_path(path)
         if not key:
             return
-        now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            info = self.csv_stats if isinstance(self.csv_stats, dict) else {}
-            cur = info.get(key, {})
-            runs = int(cur.get("print_runs") or 0)
-            # История запусков
-            history = list(cur.get("history") or [])
             try:
                 user = os.getlogin()
             except Exception:
@@ -7061,36 +7067,30 @@ class App(ctk.CTk):
                     user = getpass.getuser()
                 except Exception:
                     user = "-"
-            history.append({
-                "ts": now,
-                "printer": printer,
-                "fmt": fmt,
-                "sent": int(sent_total or 0),
-                "calib": int(calib_total or 0),
-                "user": user,
-            })
-            history = history[-50:]  # ограничиваем размер истории
-            cur.update({
-                "printed": True,
-                "last_print": now,
-                "print_runs": runs + 1,
-                "last_sent": int(sent_total or 0),
-                "last_printer": printer,
-                "last_fmt": fmt,
-                "last_calib": int(calib_total or 0),
-                "last_user": user,
-                "history": history,
-            })
-            info[key] = cur
-            self.csv_stats = info
-            self.cfg["csv_print_stats"] = self.csv_stats
-            save_config(self.cfg)
-        except Exception:
-            pass
+            info = self._csv_history_store.append_event(
+                key, state, printer=printer, fmt=fmt,
+                sent=sent_total, calib=calib_total, user=user,
+            )
+            if not isinstance(self.csv_stats, dict):
+                self.csv_stats = {}
+            self.csv_stats[key] = info
+        except Exception as exc:
+            if getattr(self, "logger", None):
+                self.logger.err(f"Не удалось сохранить статус CSV: {exc}")
+            raise
         try:
             self._render_csv_list()
         except Exception:
+            # Persistence has already committed; a redraw failure is not
+            # a history write failure and must never cause a print retry.
             pass
+
+    def _mark_csv_printed(self, path, sent_total=0, printer=None, fmt=None, calib_total=0):
+        # Historical method name; means accepted/submitted, not physical print.
+        self._record_csv_status(
+            path, "submitted_to_bartender", sent_total=sent_total,
+            printer=printer, fmt=fmt, calib_total=calib_total,
+        )
 
     # ---------- helpers ----------
     def _get_batch_size(self):
@@ -9046,6 +9046,9 @@ class App(ctk.CTk):
             self.last_sticker_jobs = []
 
         sent_total = 0
+        ambiguous_batch = False
+        failed_batch = False
+        cancelled_batch = False
         calib_total = 0
         last_prn = prn
         last_fmt = None
@@ -9082,8 +9085,10 @@ class App(ctk.CTk):
             for bidx, (start, end) in enumerate(batches, start=1):
                 self._pause_wait()
                 if self._should_stop():
+                    cancelled_batch = True
                     break
                 if self.cancel_requested:
+                    cancelled_batch = True
                     self.logger.log("Печать отменена пользователем.")
                     break
 
@@ -9268,6 +9273,7 @@ class App(ctk.CTk):
                             self._dialog_flag(),
                         )
                         if batch_outcome == BT_BATCH_AMBIGUOUS:
+                            ambiguous_batch = True
                             self.logger.log(
                                 f"Пакет {bidx}: задание могло быть отправлено в BarTender, "
                                 "но подтверждение результата не получено. "
@@ -9275,6 +9281,7 @@ class App(ctk.CTk):
                             )
                             break
                         if batch_outcome != BT_BATCH_SUBMITTED:
+                            failed_batch = True
                             raise Exception("BarTender сообщил об ошибке пакетной печати.")
                     else:
                         self.logger.log(
@@ -9356,8 +9363,20 @@ class App(ctk.CTk):
             if sent_total > 0 and getattr(self, "csv_path", None):
                 try:
                     self._mark_csv_printed(self.csv_path, sent_total, printer=last_prn, fmt=last_fmt, calib_total=calib_total)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.logger.err(f"Не удалось записать историю отправки: {exc}")
+            terminal_state = (
+                "unknown" if ambiguous_batch else
+                "failed" if failed_batch else
+                "cancelled" if cancelled_batch else None
+            )
+            if terminal_state and getattr(self, "csv_path", None):
+                try:
+                    self._record_csv_status(
+                        self.csv_path, terminal_state, printer=last_prn, fmt=last_fmt
+                    )
+                except Exception as exc:
+                    self.logger.err(f"Не удалось записать итоговый статус CSV: {exc}")
 
             if calib_total:
                 self.logger.log(f"Завершено. Всего отправлено на печать: {sent_total} из {total} строк и {calib_total} калибровочных.")
