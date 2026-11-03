@@ -47,6 +47,17 @@ jobs:
         shell: pwsh
         run: python -m pip install -r source/build_tools/requirements.txt
 
+      - name: Parse read-only local smoke PowerShell syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'harness/tools/local_exact_head_smoke.ps1').Path,
+            [ref]$tokens, [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors) { throw ($parseErrors | Out-String) }
+
       - name: Build Windows EXE and Inno installer from exact source head
         shell: pwsh
         run: |
