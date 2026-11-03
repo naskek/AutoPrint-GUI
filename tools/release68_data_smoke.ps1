@@ -1,6 +1,10 @@
 # Issue #68: synthetic persistent-data migration across an actual candidate Inno install.
 # CI-only / disposable Windows machine. No frozen app startup or print submission.
-param([Parameter(Mandatory = $true)][string] $Installer)
+param(
+    [Parameter(Mandatory = $true)][string] $Installer,
+    [string] $ProductionInstaller = '',
+    [string] $ProductionSha256 = ''
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -16,6 +20,17 @@ if ($LASTEXITCODE -ne 0 -or
     throw "Unexpected candidate SHA: $actualSha"
 }
 $installerPath = (Resolve-Path -LiteralPath $Installer).Path
+$productionPath = ''
+if ($ProductionInstaller) {
+    $productionPath = (Resolve-Path -LiteralPath $ProductionInstaller).Path
+    if (-not $ProductionSha256 -or $ProductionSha256 -notmatch '^[a-fA-F0-9]{64}$') {
+        throw 'Production installer must have a pinned SHA-256'
+    }
+    $realHash = (Get-FileHash -LiteralPath $productionPath -Algorithm SHA256).Hash
+    if ($realHash -ne $ProductionSha256) {
+        throw "Published installer checksum mismatch. Expected=$ProductionSha256 actual=$realHash"
+    }
+}
 $root = Join-Path $env:RUNNER_TEMP ("autoprint-68-data-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")
 if (Test-Path -LiteralPath $root) { throw "Refusing reused smoke root $root" }
 
@@ -46,6 +61,45 @@ $env:AUTOPRINT_PACKAGED_SMOKE = '1'
 $env:AUTOPRINT_SMOKE_INSTALL = $install
 $env:AUTOPRINT_SMOKE_ROOT = $root
 Set-Location -LiteralPath $repo
+
+# For the upgrade scenario install the actual public production binary FIRST.
+# Public 3.2.4 auto-starts AutoPrint even during /VERYSILENT. It is unlicensed
+# on the disposable runner; close ONLY that exact isolated executable. No
+# production license and no real print driver/BarTender are provisioned here.
+$oldExeHash = $null
+if ($productionPath) {
+    $q = [char]34
+    $log = Join-Path $root 'production-3.2.4-install.log'
+    $args = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=$q$install$q /LOG=$q$log$q"
+    $process = Start-Process -FilePath $productionPath -ArgumentList $args -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "Published 3.2.4 installer failed (exit=$($process.ExitCode)): $log"
+    }
+    $oldExe = Join-Path $install 'AutoPrint.exe'
+    if (-not (Test-Path -LiteralPath $oldExe)) {
+        throw 'Published 3.2.4 did not install AutoPrint.exe'
+    }
+    $oldExeHash = (Get-FileHash -LiteralPath $oldExe -Algorithm SHA256).Hash
+    $oldAppVersion = (Get-Item -LiteralPath $oldExe).VersionInfo.FileVersion
+    if ($oldAppVersion -notlike '3.2.4*') {
+        throw "Wrong published executable version: $oldAppVersion"
+    }
+
+    $foundOldProcess = $false
+    for ($n = 0; $n -lt 8; $n++) {
+        Start-Sleep -Milliseconds 400
+        $matches = @(Get-CimInstance Win32_Process -Filter "Name='AutoPrint.exe'" |
+            Where-Object { $_.ExecutablePath -eq $oldExe })
+        foreach ($running in $matches) {
+            Stop-Process -Id $running.ProcessId -Force -ErrorAction Stop
+            $foundOldProcess = $true
+        }
+    }
+    $stillRunning = @(Get-CimInstance Win32_Process -Filter "Name='AutoPrint.exe'" |
+        Where-Object { $_.ExecutablePath -eq $oldExe })
+    if ($stillRunning.Count) { throw 'Published AutoPrint.exe is still running' }
+    Write-Host "PASS actual public 3.2.4 installed (signed SHA-256 verified); autolaunched GUI isolated=$foundOldProcess"
+}
 
 @'
 import json
@@ -139,6 +193,14 @@ $baseline = Get-FileHashMap $legacyFiles
 Write-Host "Cross-source data smoke, candidate HEAD: $actualSha"
 Install-Candidate 'install-over-legacy-layout'
 Assert-FileHashMap $baseline 'initial candidate install'
+if ($productionPath) {
+    $newExe = Join-Path $install 'AutoPrint.exe'
+    $newExeHash = (Get-FileHash -LiteralPath $newExe -Algorithm SHA256).Hash
+    if ($newExeHash -eq $oldExeHash) {
+        throw 'Candidate did not replace the actual published 3.2.4 executable'
+    }
+    Write-Host 'PASS binary upgrade: public v3.2.4 installer -> integration candidate EXE (different SHA-256)'
+}
 
 @'
 import json
@@ -238,4 +300,9 @@ print("PASS verified restored catalog/history/templates/registry after reinstall
 if ($LASTEXITCODE -ne 0) { throw 'Post-reinstall restore failed' }
 
 Write-Host 'PASS: synthetic catalog/history/template/config/license preserved after installed Inno lifecycle.'
-Write-Host 'NOT COVERED: installed 3.2.4 binary -> next version, frozen GUI startup, real BTW/BarTender, physical print.'
+if ($productionPath) {
+    Write-Host 'PASS: genuine public v3.2.4 installer -> integration candidate EXE replacement.'
+} else {
+    Write-Host 'NOT COVERED: published v3.2.4 installer upgrade.'
+}
+Write-Host 'NOT COVERED: version-number change 3.2.4 -> 3.2.5, live licensed frozen GUI, real BTW/BarTender or physical print.'
