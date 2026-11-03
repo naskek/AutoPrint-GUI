@@ -4,10 +4,15 @@ param([string] $TemplatePath = '')
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:OS -ne 'Windows_NT') { throw 'Windows 10/11 required' }
-foreach ($proc in @('bartend','AutoPrint')) {
-    if (Get-Process -Name $proc -ErrorAction SilentlyContinue) {
-        throw "Close running $proc and finish any unsaved work before smoke"
-    }
+# Existing COM instances may legitimately run in the background for BarTender
+# services. Never kill them, attach to them, or stop their sessions.
+$existingBt = @(Get-Process -Name 'bartend' -ErrorAction SilentlyContinue)
+$skipLiveCom = $existingBt.Count -gt 0
+if ($skipLiveCom) {
+    Write-Warning "Found $($existingBt.Count) existing bartend processes. Skipping LIVE COM only; running offline BTW-migration and isolated GUI smoke. No processes will be touched."
+}
+if (Get-Process -Name 'AutoPrint' -ErrorAction SilentlyContinue) {
+    Write-Warning 'An AutoPrint instance exists. It will be left untouched; this smoke uses isolated source/profile and disabled printing.'
 }
 $head73 = '93a6fbdc230249e087acaf832ddbfcd7deef6609'
 $head76 = '0068cd65884874be47ae41df9d4777e5f9395c4a'
@@ -69,16 +74,15 @@ try {
     }
     $env:AUTOPRINT68_LEGACY_TEMPLATE = $copied
     $env:AUTOPRINT68_BTW_SMOKE_OUTPUT = Join-Path $work 'live-preview.png'
+    $env:AUTOPRINT68_SKIP_LIVE_BT = if ($skipLiveCom) { '1' } else { '0' }
     # Real BarTender COM uses the operator's normal Seagull profile.
     # AutoPrint user data stays isolated via AUTOPRINT_USER_DATA_DIR.
     $env:LOCALAPPDATA = $prev['LOCALAPPDATA']
     $env:APPDATA = $prev['APPDATA']
     Set-Location -LiteralPath $btwSource
     @'
-import hashlib, os, pythoncom
+import hashlib, os
 from pathlib import Path
-from PIL import Image
-from bartender_com import BT
 from template_storage import migrate_legacy_templates, get_user_templates_dir, bootstrap_template_registry, get_template_registry_path
 
 source = Path(os.environ["AUTOPRINT68_LEGACY_TEMPLATE"])
@@ -95,28 +99,35 @@ config = {"label_templates": {"16x16": {
 }}}
 cfg = bootstrap_template_registry(config, target, get_template_registry_path())
 assert cfg["label_templates"]["16x16"]["part_mode"] == "manual"
-class Log:
-    def log(self, s): print(s)
-    def err(self, s): print("ERROR:",s)
+if os.environ.get("AUTOPRINT68_SKIP_LIVE_BT") == "1":
+    print("PASS #73 EXACT SHA: real BTW migrated byte-for-byte, registry restored")
+    print("SKIP: real BarTender COM preview (existing bartend.exe processes untouched)")
+else:
+    import pythoncom
+    from PIL import Image
+    from bartender_com import BT
+    class Log:
+        def log(self, msg): print(msg)
+        def err(self, msg): print("ERROR:", msg)
 
-pythoncom.CoInitialize()
-engine = BT(Log())
-fmt = None
-try:
-    engine.start()
-    fmt = engine.open_format(str(copy))
-    out = os.environ["AUTOPRINT68_BTW_SMOKE_OUTPUT"]
-    if not engine.export_preview(fmt, out):
-        raise RuntimeError("BarTender failed to export migrated BTW")
-    with Image.open(out) as png:
-        png.verify()
-    print("PASS #73 EXACT SHA: migration + real BarTender opened migrated copy and PNG exported; no print")
-finally:
-    if fmt is not None:
-        try: fmt.Close(1)  # btDoNotSaveChanges
-        except Exception as ex: print("Close warning:",ex)
-    engine.stop()
-    pythoncom.CoUninitialize()
+    pythoncom.CoInitialize()
+    engine = BT(Log())
+    fmt = None
+    try:
+        engine.start()
+        fmt = engine.open_format(str(copy))
+        out = os.environ["AUTOPRINT68_BTW_SMOKE_OUTPUT"]
+        if not engine.export_preview(fmt, out):
+            raise RuntimeError("BarTender failed to export migrated BTW")
+        with Image.open(out) as png:
+            png.verify()
+        print("PASS #73 EXACT SHA: migration + real BarTender opened migrated copy and PNG exported; no print")
+    finally:
+        if fmt is not None:
+            try: fmt.Close(1)  # btDoNotSaveChanges
+            except Exception as ex: print("Close warning:", ex)
+        engine.stop()
+        pythoncom.CoUninitialize()
 '@ | & $python -
     if ($LASTEXITCODE -ne 0) { throw 'PR #73 migrated BTW smoke FAILED' }
     if ((Get-FileHash -LiteralPath $TemplatePath -Algorithm SHA256).Hash -ne $hash) {
@@ -184,5 +195,5 @@ finally {
     foreach ($v in $vars) {
         [Environment]::SetEnvironmentVariable($v,$prev[$v],'Process')
     }
-    Remove-Item Env:AUTOPRINT68_LEGACY_TEMPLATE,Env:AUTOPRINT68_BTW_SMOKE_OUTPUT,Env:AUTOPRINT68_CSV_FIXTURES -ErrorAction SilentlyContinue
+    Remove-Item Env:AUTOPRINT68_LEGACY_TEMPLATE,Env:AUTOPRINT68_BTW_SMOKE_OUTPUT,Env:AUTOPRINT68_SKIP_LIVE_BT,Env:AUTOPRINT68_CSV_FIXTURES -ErrorAction SilentlyContinue
 }
