@@ -1,35 +1,43 @@
 # Release readiness — Issue #68 (candidate 3.2.5)
 
-Status: **NOT READY TO TAG OR PUBLISH**. This is a planning/preflight PR,
-not the version-bump/release authorization.
+Status: **3.2.5 candidate is being prepared; NOT AUTHORIZED TO TAG OR PUBLISH.**
+The earlier release-safety PR #77 was merged. This file tracks the separate
+version-bump PR, its CI and its remaining release gates.
 
 ## Source of truth and current production
 
 - Last published production: **v3.2.4** in both private AutoPrint-GUI
   and public binary-only AutoPrint-GUI-Releases. Public v3.2.4 has
   `AutoPrint_Setup_3.2.4.exe` and `BarTenderGUI_Setup_3.2.4.exe`.
-- `APP_VERSION` in main is still **3.2.4**. Candidate **3.2.5**
-  must be checked for uniqueness again immediately before version bump/tag.
+- Last verified `main` before this release-candidate branch:
+  `820ed03a1a7649dcfd27f46e8b2eb5e8fcdfe68c`, with `APP_VERSION=3.2.4`.
+  The release-candidate branch now sets **`APP_VERSION=3.2.5`**.
+- GitHub confirmed no `v3.2.5` Git tag in either private or public repository
+  at preparation time; recheck tags, releases and main immediately before tagging.
 - Production/frozen installer upgrade must not replace or lose user BTW,
   SQLite catalog, history/status, config, licensing, or other user data.
 
-## Dependencies (each is an independent scope/PR)
+## Merged dependencies and explicit bundled-template decision
 
-- #66 GS1 DataMatrix and #60 preview: closed in main; their integration
-  still needs a no-duplicate-print GS1/source-to-PDF release smoke.
-- #5 / PR #73 user BTW preservation — draft; packaged migration/real BTW
-  inspection not fully proved.
-- #6 / PR #74 SQLite catalog — draft; exact-head packaged migration smoke
-  not done on real-data-derived isolated fixture.
-- #7 / PR #75 CSV history/status — draft; packed upgrade/legacy history
-  migration smoke not done.
-- #30 / PR #76 CSV browser — draft; Windows live GUI visual smoke not done.
-- #63 bundled production BTW audit is open. **Do not commit personal/live
-  production BTW** merely to satisfy a stale manifest. Decide separately
-  whether to ship verified non-personal defaults or rely on user-owned
-  templates; never silently replace operator files.
-- Inspect #69 source-run licensing behavior if it blocks isolated GUI smoke.
-  No license key or production license file belongs in this PR.
+- **#5 / PR #73**: user BTW preservation merged, exact-head packaged and
+  real BTW copy migration checks passed; exact-head real COM was skipped
+  because BarTender processes were already running.
+- **#6 / PR #74**: SQLite catalog persistence merged, including no-clobber
+  first-run publication; packaged upgrade passed on exact source SHA.
+- **#7 / PR #75**: persistent CSV history/status merged, exact-source
+  packaged migration passed.
+- **#30 / PR #76**: CSV browser layout/icons merged and accepted by operator
+  on exact source SHA using a no-print GUI smoke.
+- **#68 / PR #77**: release preflight hardening merged.
+- **#60 and #66**: GS1/preview work already in main and separately tested
+  with real BarTender, without physical printing on the 3.2.5 candidate.
+- **#63**: **explicitly deferred for 3.2.5 by owner**. Existing bundled
+  historical BTW assets and their default metadata remain EXACTLY unchanged;
+  do not replace with private working templates and do not silently assert
+  bundled defaults are validated production GS1 layouts. Operator BTW
+  overrides must retain priority.
+- **Test-only PR #78**: synthetic integration and production-installer
+  replacement smoke passed, **NEVER MERGE**.
 
 ## Evidence obtained before merges (2026-11-03)
 
@@ -58,31 +66,34 @@ independently merged commits in main. Never merge test PR #78.
   This is an operator visual acceptance of the combined UI, not proof of
   independent PR #76 exact-head smoke.
 
-**Remaining release gates:** real versioned 3.2.4→3.2.5 update, post-merge
-exact-head smoke as appropriate, licensed frozen GUI initialization and
-read-only BTW verification after migration, decisions around #63 shipped
-defaults, and final separate version-bump PR. None of these tests authorize
-main merges, tagging, publishing or physical printing.
+**Remaining release gates:** exact release-candidate 3.2.5 CI, actual
+versioned 3.2.4→3.2.5 installer upgrade and installed EXE version check,
+operator-data checksums, final source main ancestry and unique tag checks.
+A fully licensed frozen GUI run, read-only real BarTender inspection after
+packaged migration and physical print remain separately scoped live tests
+and are not established by synthetic CI. The #63 bundled-default decision
+is to leave those files unchanged in this release. **No tag, Release or
+physical print is authorized by this PR.**
 
 ## Required release sequence
 
-1. Complete independent PR reviews, required CI (unit-regression-tests,
-   bartender-com-contract, build-windows) and risk-class Windows smoke on
-   exact heads; owner approves merges separately. Do not merge Draft PRs
-   solely to get a release.
-2. Verify merged main contains intended fixes; reconcile conflicts and
-   re-run CI/smoke if head changed. Recheck version/tag/release uniqueness
-   and choose 3.2.5 only if still unused.
-3. Prepare a **separate release/version-bump PR** once dependencies are in
-   main: APP_VERSION, release notes, artifact manifest, updater compatibility.
-   Never reuse 3.2.2 or silently ship a new binary identified as 3.2.4.
+1. **DONE:** PRs #73–77 merged in order after exact-head review/smoke
+   and green required CI on each resulting main commit. Issue #63 decision:
+   bundled BTW assets unchanged.
+2. **DONE at candidate creation:** verified merged main and available
+   version `3.2.5`. Recheck tag and release uniqueness before publication.
+3. **IN PROGRESS:** separate candidate PR bumps `APP_VERSION` to 3.2.5
+   with matching updater/version tests, release notes and artifact manifest.
+   The source PR must pass required CI; no tag/release on the PR branch.
 4. Validate built candidate installer in disposable Windows environment,
    including **v3.2.4 -> candidate** upgrade, clean install, uninstall,
    reinstall, BarTenderGUI -> AutoPrint legacy data, BTW and SQLite history,
    config and license persistence; compare SHA-256 before/after.
-5. Verify 16x16 and 30x20 BTW with real BarTender 2022 R5 without submitting
-   print jobs where possible; separate explicit opt-in for safe live/PDF or
-   physical printing. No repeat submit after ambiguous COM response.
+5. Historical bundled 16x16 and 30x20 BTW are unchanged by explicit owner
+   decision. Existing real BarTender 2022 R5 dynamic-preview test is evidence
+   only for the earlier integrated source candidate, not the final installed
+   3.2.5 binary. No automatic or duplicate printing; physical print is
+   separate opt-in.
 6. Confirm release workflow re-runs tests and builds only from a main-contained
    commit, public token access works, and **both installer aliases** are
    byte-identical and SHA-256 verified.

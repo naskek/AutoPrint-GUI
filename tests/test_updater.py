@@ -18,9 +18,17 @@ from updater import (
 
 
 class ReleaseVersionTests(unittest.TestCase):
-    def test_release_version_is_3_2_4(self):
-        self.assertEqual(app_version.APP_VERSION, "3.2.4")
-        self.assertEqual(autoprint_main.APP_VERSION, "3.2.4")
+    def test_release_version_is_3_2_5(self):
+        self.assertEqual(app_version.APP_VERSION, "3.2.5")
+        self.assertEqual(autoprint_main.APP_VERSION, app_version.APP_VERSION)
+        self.assertTrue(is_newer_version(app_version.APP_VERSION, "3.2.4"))
+
+    def test_release_updater_asset_alias_compatibility(self):
+        version = app_version.APP_VERSION
+        current = {"name": f"AutoPrint_Setup_{version}.exe"}
+        legacy = {"name": f"BarTenderGUI_Setup_{version}.exe"}
+        self.assertIs(_select_installer_asset([legacy]), legacy)
+        self.assertIs(_select_installer_asset([legacy, current]), current)
 
 
 class VersionTests(unittest.TestCase):
