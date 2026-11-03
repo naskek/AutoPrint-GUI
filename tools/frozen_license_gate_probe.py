@@ -36,13 +36,6 @@ def main() -> int:
     license_file = install / "config" / "license.json"
     if not exe.is_file() or license_file.read_bytes() != TEST_LICENSE:
         raise RuntimeError("Frozen probe requires a disposable unlicensed application")
-    if os.environ.get("AUTOPRINT_USER_DATA_DIR") != os.path.join(
-        str(runner), os.path.relpath(
-            os.environ["AUTOPRINT_USER_DATA_DIR"], str(runner)
-        )
-    ):
-        # A sanity check that the user-data override belongs to this runner.
-        raise RuntimeError("Unexpected user-data directory")
     user_data = Path(os.environ["AUTOPRINT_USER_DATA_DIR"]).resolve()
     if runner not in user_data.parents:
         raise RuntimeError("User-data override not isolated")
