@@ -485,6 +485,70 @@ class BT:
         except (ET.ParseError, TypeError, ValueError):
             return "ambiguous"
 
+    @staticmethod
+    def _btxml_batch_response_summary(response):
+        """Return only allowlisted job metadata; NEVER log the raw XML.
+
+        No Message.Text, file paths, job names, record values, product data
+        or marking codes from response are permitted in application logs.
+        """
+        import xml.etree.ElementTree as ET
+
+        if not isinstance(response, str):
+            return "response=non-xml-type"
+        try:
+            root = ET.fromstring(response)
+        except (ET.ParseError, ValueError, TypeError):
+            return "response=invalid-xml"
+        if root.tag != "Response":
+            return "response=unexpected-root"
+
+        commands = root.findall("./Command")
+        prints = commands[0].findall("./Print") if len(commands) == 1 else []
+        if len(commands) != 1 or len(prints) != 1:
+            return (
+                f"response=structural-mismatch "
+                f"commands={min(len(commands), 99)} prints={min(len(prints), 99)}"
+            )
+        printed = prints[0]
+        status = str(printed.get("JobLastStatus") or "").strip().casefold()
+        known_status = {
+            "creating", "queued", "sending", "paused", "resumed",
+            "cancelled", "sent", "sent (printing verified)", "unknown",
+        }
+        safe_status = status if status in known_status else (
+            "missing" if not status else "other"
+        )
+        completed = str(printed.get("JobCompleted") or "").strip().casefold()
+        safe_completed = completed if completed in {"true", "false"} else (
+            "missing" if not completed else "other"
+        )
+        nested = str(
+            printed.findtext("./JobStatus/LastStatus") or ""
+        ).strip().casefold()
+        safe_nested = nested if nested in known_status else (
+            "missing" if not nested else "other"
+        )
+        severities = []
+        message_ids = []
+        for message in list(printed.iter("Message"))[:10]:
+            value = str(message.get("Severity") or "").strip().casefold()
+            if value in {"information", "warning", "error"}:
+                severities.append(value)
+            else:
+                severities.append("other")
+            identifier = str(message.get("ID") or "").strip()
+            message_ids.append(identifier if identifier.isdecimal()
+                               and len(identifier) <= 8 else "other")
+        has_error_node = root.find(".//Error") is not None
+        return (
+            f"response=print job_status={safe_status} "
+            f"completed={safe_completed} last_status={safe_nested} "
+            f"error_tag={str(has_error_node).lower()} "
+            f"message_severities={','.join(severities) or 'none'} "
+            f"message_ids={','.join(message_ids) or 'none'}"
+        )
+
     def submit_gs1_btxml_batch(self, btw_path, csv_path, printer,
                                job_name, row_count, *, expected_dm,
                                copies=1, show_dialog=False):
@@ -579,6 +643,15 @@ class BT:
                 "повтор запрещён."
             )
             return "ambiguous"
+        # A non-waiting BTXML Print may return before job status reaches
+        # Sent. Preserve the conservative ambiguous result, but capture
+        # safe metadata to diagnose this without another print attempt.
+        try:
+            self.logger.log(
+                "BTXML GS1: " + self._btxml_batch_response_summary(response)
+            )
+        except Exception:
+            pass
         result = self._btxml_batch_print_response(response)
         if result != "submitted":
             self.logger.err(
