@@ -9252,6 +9252,9 @@ class App(ctk.CTk):
                                 prn,
                                 batch_job_name,
                                 len(enriched),
+                                expected_dm=tuple(
+                                    str(row.get("DM") or "") for row in enriched
+                                ),
                                 copies=copies,
                                 show_dialog=self._dialog_flag(),
                             )
