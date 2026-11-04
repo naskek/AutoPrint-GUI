@@ -125,6 +125,47 @@ class BtxmlBatchContractTests(unittest.TestCase):
             with self.subTest(response=response):
                 self.assertEqual(BT._btxml_batch_print_response(response), "ambiguous")
 
+    def test_response_metadata_is_allowlisted_and_never_logs_marking_codes(self):
+        raw = (
+            '<Response Version="2.0"><Command>'
+            '<Print JobLastStatus="Queued" JobCompleted="false" '
+            'JobName="SECRET_JOB_123">'
+            '<JobStatus><LastStatus>Sending</LastStatus></JobStatus>'
+            '<Message ID="1606" Severity="Information">'
+            '<Text>SECRET_DM_0104601234567893</Text>'
+            '</Message></Print></Command></Response>'
+        )
+        info = BT._btxml_batch_response_summary(raw)
+        self.assertIn("job_status=queued", info)
+        self.assertIn("completed=false", info)
+        self.assertIn("last_status=sending", info)
+        self.assertIn("message_ids=1606", info)
+        self.assertNotIn("SECRET_", info)
+        self.assertNotIn("0104601234567893", info)
+        self.assertEqual(BT._btxml_batch_print_response(raw), "ambiguous")
+
+        # Arbitrary attribute values and message contents must never pass
+        # into logs, even when they appear in a status-like location.
+        unsafe = raw.replace('JobLastStatus="Queued"', 'JobLastStatus="SECRET_DM_123"')
+        self.assertIn(
+            "job_status=other", BT._btxml_batch_response_summary(unsafe)
+        )
+        self.assertNotIn(
+            "SECRET", BT._btxml_batch_response_summary(unsafe)
+        )
+
+    def test_response_status_metadata_does_not_enable_retry(self):
+        response = (
+            '<Response><Command><Print JobLastStatus="Queued" '
+            'JobCompleted="false"><JobStatus><LastStatus>Queued</LastStatus>'
+            '</JobStatus></Print></Command></Response>'
+        )
+        self.bt.app = SimpleNamespace(XMLScript=Mock(return_value=response))
+        self.assertEqual(self._submit(), "ambiguous")
+        self.bt.app.XMLScript.assert_called_once()
+        logged = " ".join(str(call.args[0]) for call in self.logger.log.call_args_list)
+        self.assertIn("job_status=queued", logged)
+
     def test_one_realistic_btxml_submit_with_fake_com_and_retained_files(self):
         self.bt.app = SimpleNamespace(XMLScript=Mock(return_value=self.sent_response()))
         expected_btw = self.btw.read_bytes()
