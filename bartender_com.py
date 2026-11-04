@@ -486,8 +486,8 @@ class BT:
             return "ambiguous"
 
     def submit_gs1_btxml_batch(self, btw_path, csv_path, printer,
-                               job_name, row_count, *, copies=1,
-                               show_dialog=False):
+                               job_name, row_count, *, expected_dm,
+                               copies=1, show_dialog=False):
         """Explicit immutable-job-input GS1 BTXML print; max ONE XMLScript.
 
         Any exception or malformed result after XMLScript starts is ambiguous.
@@ -500,6 +500,14 @@ class BT:
         from pathlib import Path
         from template_storage import get_user_data_dir
 
+        if (not isinstance(expected_dm, (tuple, list))
+                or len(expected_dm) != int(row_count)
+                or not all(isinstance(value, str) for value in expected_dm)):
+            self.logger.err(
+                "BTXML GS1: набор ожидаемых кодов не подтверждён; "
+                "отправка запрещена."
+            )
+            return "failed"
         if show_dialog:
             self.logger.err(
                 "BTXML GS1: диалог печати для этого пути не поддерживается; "
@@ -535,11 +543,13 @@ class BT:
             # deliberately retained after an asynchronous print submission.
             with copied_csv.open("r", encoding="utf-8-sig", newline="") as stream:
                 reader = csv.DictReader(stream, delimiter="\t")
-                if not reader.fieldnames or "DM" not in reader.fieldnames:
+                if (not reader.fieldnames
+                        or len(reader.fieldnames) != len(set(reader.fieldnames))
+                        or "DM" not in reader.fieldnames):
                     raise ValueError("Invalid GS1 text header")
-                copied_rows = sum(1 for _ in reader)
-            if copied_rows != int(row_count):
-                raise ValueError("Copied GS1 CSV row count changed")
+                copied_dm = [row.get("DM") for row in reader]
+            if copied_dm != list(expected_dm):
+                raise ValueError("Copied GS1 CSV does not match the verified batch")
             xml = self.build_gs1_btxml_print_request(
                 str(copied_btw), str(copied_csv),
                 printer, job_name, row_count, copies,
