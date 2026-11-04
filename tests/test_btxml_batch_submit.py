@@ -72,6 +72,7 @@ class BtxmlBatchContractTests(unittest.TestCase):
         return self.bt.submit_gs1_btxml_batch(
             str(self.btw), str(self.csv_path),
             "Synthetic No Printer", "AutoPrint TEST", 2,
+            expected_dm=("SAFE_SYNTHETIC_1", "SAFE_SYNTHETIC_2"),
             copies=1, show_dialog=show_dialog,
         )
 
@@ -152,6 +153,16 @@ class BtxmlBatchContractTests(unittest.TestCase):
         self.bt.app = SimpleNamespace(XMLScript=Mock(return_value="<Response/>"))
         self.assertEqual(self._submit(), "ambiguous")
         self.bt.app.XMLScript.assert_called_once()
+
+    def test_changed_synthetic_csv_codes_are_failed_before_submit(self):
+        self.bt.app = SimpleNamespace(XMLScript=Mock(return_value=self.sent_response()))
+        self.csv_path.write_text(
+            "ShortName\\tDM\\tNUM\\nTEST\\tDIFFERENT\\t1\\n"
+            "TEST\\tDIFFERENT2\\t2\\n",
+            encoding="utf-8-sig",
+        )
+        self.assertEqual(self._submit(), "failed")
+        self.bt.app.XMLScript.assert_not_called()
 
     def test_dialog_or_bad_csv_is_failed_before_any_submit(self):
         self.bt.app = SimpleNamespace(XMLScript=Mock(return_value=self.sent_response()))
