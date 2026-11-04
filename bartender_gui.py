@@ -8091,6 +8091,141 @@ class App(ctk.CTk):
 
         return enriched, calib_added
 
+    def _preflight_primary_batches_before_stickers(
+        self, batches, rows_all, idx0, copies,
+    ):
+        """Validate ALL primary batches before the first sticker submission.
+
+        Preserve the operator's stickers-first ordering, but do not call any
+        Print/PrintOut/XMLScript here.  Each batch gets exactly one preliminary
+        document inspection, never one COM lookup per serial number.  The
+        enriched rows are retained and reused in the subsequent main loop, so
+        no code can change through a second enrichment.
+        """
+        import csv
+        import tempfile
+
+        prepared = {}
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="AutoPrint87Preflight-"
+            ) as work:
+                for bidx, (start, end) in enumerate(batches, start=1):
+                    self._pause_wait()
+                    if self._should_stop():
+                        raise RuntimeError("предпроверка отменена до отправки")
+                    if start < 0 or end > len(rows_all) or start >= end:
+                        raise ValueError("некорректный диапазон пакета")
+                    enriched, calib_added = self._prepare_primary_batch_rows(
+                        rows_all, start, end, idx0, bidx
+                    )
+                    if (
+                        not enriched
+                        or len(enriched) - calib_added != end - start
+                        or self._should_stop()
+                    ):
+                        raise ValueError(
+                            f"пакет {bidx}: не все строки подготовлены"
+                        )
+
+                    fmt_name = enriched[0].get("_FORMAT") or "16x16"
+                    self._apply_format_ui(fmt_name)
+                    printer = self._get_printer()
+                    if not printer or not self._ensure_printer_available_for_print(
+                        printer, f"Предпроверка пакета {bidx}"
+                    ):
+                        raise RuntimeError(
+                            f"пакет {bidx}: принтер недоступен"
+                        )
+                    btw = self._get_btw_for_format(fmt_name)
+                    if not btw:
+                        raise ValueError(
+                            f"пакет {bidx}: шаблон не найден"
+                        )
+
+                    # This is a private, disposable preflight input, not the
+                    # production BASE_DIR/tmp_batch.csv or a legacy mirror.
+                    folder = os.path.join(work, f"batch_{bidx}")
+                    os.makedirs(folder, exist_ok=True)
+                    csv_path = os.path.join(folder, "tmp_batch.csv")
+                    fields = getattr(self, "REQ_COLS", DEFAULT_REQ_COLS)
+                    with open(
+                        csv_path, "w", encoding="utf-8-sig", newline=""
+                    ) as stream:
+                        writer = csv.DictWriter(
+                            stream, fieldnames=fields, delimiter="\t"
+                        )
+                        writer.writeheader()
+                        for row in enriched:
+                            writer.writerow({
+                                key: row.get(key, "") or "" for key in fields
+                            })
+
+                    fmt = None
+                    try:
+                        fmt = self.bt.open_format(btw)
+                        report = self._template_batch_report(
+                            fmt, part_mode=self._template_part_mode(fmt_name)
+                        )
+                        if report.get("can_batch"):
+                            if self._requires_database_dm(report):
+                                if not self._verify_dm_batch_database(
+                                    fmt, csv_path, enriched
+                                ):
+                                    raise ValueError(
+                                        f"пакет {bidx}: GS1 tmp_batch не подтверждён"
+                                    )
+                                if self._dialog_flag():
+                                    raise ValueError(
+                                        "диалог BarTender не поддержан в GS1 BTXML"
+                                    )
+                                # Prepare XML only; this method does not call
+                                # Application.XMLScript or any print API.
+                                self.bt.build_gs1_btxml_print_request(
+                                    btw, csv_path, printer,
+                                    f"AutoPrint preflight {bidx}",
+                                    len(enriched), copies,
+                                )
+                            else:
+                                if not self._rebind_template_db(
+                                    fmt, csv_path
+                                ):
+                                    raise ValueError(
+                                        f"пакет {bidx}: CSV COM-привязка не подтверждена"
+                                    )
+                                fmt.UseDatabase = True
+                                fmt.SelectRecordsAtPrint = False
+                                fmt.RecordRange = f"1-{len(enriched)}"
+                                if not self._check_template_db(fmt, csv_path):
+                                    raise ValueError(
+                                        f"пакет {bidx}: CSV readback не подтверждён"
+                                    )
+                        elif (
+                            report.get("db_count", 0) > 0
+                            or report.get("use_database")
+                            or report.get("has_tmp_batch_refs")
+                        ):
+                            raise ValueError(
+                                f"пакет {bidx}: непроверенное подключение BTW"
+                            )
+                        prepared[(start, end)] = (enriched, calib_added)
+                    finally:
+                        if fmt is not None:
+                            fmt.Close(1)
+            self.logger.log(
+                f"Предпроверка основной печати: {len(prepared)} "
+                "пакетов подтверждено до отправки стикеров."
+            )
+            return prepared
+        except Exception as exc:
+            # Never report raw DM values in diagnostics.
+            self.logger.err(
+                "Предпроверка основных пакетов не прошла "
+                f"({type(exc).__name__}); стикеры и основная печать "
+                "не отправлялись."
+            )
+            return None
+
     def _preprint_stickers_for_all_batches(self, batches, rows_all, idx0, total, total_rolls, record_jobs=False):
         """Печать стикеров сразу на все пакеты перед основной печатью."""
         try:
