@@ -8017,6 +8017,80 @@ class App(ctk.CTk):
         except Exception:
             pass
 
+    def _prepare_primary_batch_rows(self, rows_all, start, end, idx0,
+                                    bidx, progress_every=50):
+        """Generate exactly the same enriched rows for preflight and submit.
+
+        Return the prepared rows and calibration count. Never submit print.
+        """
+        rows = rows_all[start:end]
+        enriched = []
+        fast_used = False
+        if rows and self._can_fast_enrich(rows):
+            idx1_first = idx0 + start + 1
+            base_enr = self._enrich(rows[0], idx1_first)
+            if base_enr:
+                fast_used = True
+                fmt_fast = base_enr.get("_FORMAT")
+                for i, base in enumerate(rows):
+                    self._pause_wait()
+                    if self._should_stop():
+                        break
+                    try:
+                        self.update_idletasks(); self.update()
+                    except Exception:
+                        pass
+                    idx1 = idx0 + start + i + 1
+                    enr = dict(base_enr)
+                    enr["DM"] = base.get("DM", "")
+                    enr["NUM"] = str(idx1)
+                    enr["_FORMAT"] = fmt_fast
+                    enr["_SOURCE_ROW_NO"] = idx1
+                    enriched.append(enr)
+                    if (i + 1) % progress_every == 0:
+                        self._set_progress(i + 1, len(rows), f"Подготовка пакета {bidx}")
+                try:
+                    self.logger.log(f"Ускорение: GTIN одинаковый, обогащение выполнено один раз (пакет {bidx}).")
+                except Exception:
+                    pass
+
+        if not fast_used:
+            for i, base in enumerate(rows):
+                self._pause_wait()
+                if self._should_stop():
+                    break
+                try:
+                    self.update_idletasks(); self.update()
+                except Exception:
+                    pass
+                idx1 = idx0 + start + i + 1
+                enr = self._enrich(base, idx1)
+                if not enr:
+                    if not getattr(self, "_part_missing_logged", False):
+                        self.logger.err(f"Строка {idx1}: данные не сформированы - пропуск")
+                    continue
+                try:
+                    enr["_SOURCE_ROW_NO"] = idx1
+                except Exception:
+                    pass
+                enriched.append(enr)
+                if (i + 1) % progress_every == 0:
+                    self._set_progress(i + 1, len(rows), f"Подготовка пакета {bidx}")
+
+        if not enriched:
+            return [], 0
+        calib_added = 0
+        if self._bool_var(getattr(self, "calib_var", False)):
+            fmt0 = enriched[0].get("_FORMAT", "16x16")
+            cols = getattr(self, "REQ_COLS", [])
+            dummy = {k: ("1" if k.upper() == "NUM" else ("000" if k == "ShortGTIN" else "X")) for k in cols}
+            dummy.update({"_FORMAT": fmt0})
+            enriched = [{**dummy, "_CALIB": True} for _ in range(6)] + enriched
+            calib_added = 6
+            self.logger.log("КАЛИБРОВКА: 6 строк 'X' добавлены в начало пакета.")
+
+        return enriched, calib_added
+
     def _preprint_stickers_for_all_batches(self, batches, rows_all, idx0, total, total_rolls, record_jobs=False):
         """Печать стикеров сразу на все пакеты перед основной печатью."""
         try:
@@ -9052,76 +9126,24 @@ class App(ctk.CTk):
                 self.logger.log(f"[Пакет {bidx}/{len(batches)}] Строки {idx0 + start + 1}-{idx0 + end}")
                 self._set_progress(0, len(rows), f"Пакет {bidx}")
 
-                enriched = []
-                fast_used = False
-                if rows and self._can_fast_enrich(rows):
-                    idx1_first = idx0 + start + 1
-                    base_enr = self._enrich(rows[0], idx1_first)
-                    if base_enr:
-                        fast_used = True
-                        fmt_fast = base_enr.get("_FORMAT")
-                        for i, base in enumerate(rows):
-                            self._pause_wait()
-                            if self._should_stop():
-                                break
-                            try:
-                                self.update_idletasks(); self.update()
-                            except Exception:
-                                pass
-                            idx1 = idx0 + start + i + 1
-                            enr = dict(base_enr)
-                            enr["DM"] = base.get("DM", "")
-                            enr["NUM"] = str(idx1)
-                            enr["_FORMAT"] = fmt_fast
-                            enr["_SOURCE_ROW_NO"] = idx1
-                            enriched.append(enr)
-                            if (i + 1) % PROGRESS_EVERY == 0:
-                                self._set_progress(i + 1, len(rows), f"Подготовка пакета {bidx}")
-                        try:
-                            self.logger.log(f"Ускорение: GTIN одинаковый, обогащение выполнено один раз (пакет {bidx}).")
-                        except Exception:
-                            pass
-
-                if not fast_used:
-                    for i, base in enumerate(rows):
-                        self._pause_wait()
-                        if self._should_stop():
-                            break
-                        try:
-                            self.update_idletasks(); self.update()
-                        except Exception:
-                            pass
-                        idx1 = idx0 + start + i + 1
-                        enr = self._enrich(base, idx1)
-                        if not enr:
-                            if not getattr(self, "_part_missing_logged", False):
-                                self.logger.err(f"Строка {idx1}: данные не сформированы - пропуск")
-                            continue
-                        try:
-                            enr["_SOURCE_ROW_NO"] = idx1
-                        except Exception:
-                            pass
-                        enriched.append(enr)
-                        if (i + 1) % PROGRESS_EVERY == 0:
-                            self._set_progress(i + 1, len(rows), f"Подготовка пакета {bidx}")
-
+                prepared = (
+                    sticker_preflight_plans.get((start, end))
+                    if sticker_preflight_plans is not None else None
+                )
+                if prepared is not None:
+                    enriched, calib_added = prepared
+                else:
+                    enriched, calib_added = self._prepare_primary_batch_rows(
+                        rows_all, start, end, idx0, bidx, PROGRESS_EVERY
+                    )
                 if not enriched:
                     if getattr(self, "_part_missing_logged", False):
-                        self.logger.err("Печать остановлена: заполните номер партии для выбранного шаблона.")
+                        self.logger.err(
+                            "Печать остановлена: заполните номер партии для выбранного шаблона."
+                        )
                         break
-                    else:
-                        self.logger.err(f"Пакет {bidx}: нет валидных строк для печати.")
+                    self.logger.err(f"Пакет {bidx}: нет валидных строк для печати.")
                     continue
-
-                calib_added = 0
-                if self._bool_var(getattr(self, "calib_var", False)):
-                    fmt0 = enriched[0].get("_FORMAT", "16x16")
-                    cols = getattr(self, "REQ_COLS", [])
-                    dummy = {k: ("1" if k.upper() == "NUM" else ("000" if k == "ShortGTIN" else "X")) for k in cols}
-                    dummy.update({"_FORMAT": fmt0})
-                    enriched = [{**dummy, "_CALIB": True} for _ in range(6)] + enriched
-                    calib_added = 6
-                    self.logger.log("КАЛИБРОВКА: 6 строк 'X' добавлены в начало пакета.")
 
                 fmt_name = enriched[0].get("_FORMAT") or "16x16"
                 real_in_batch = len(enriched) - calib_added
