@@ -403,6 +403,268 @@ class BT:
                 f"({type(exc).__name__}); печать не выполнялась."
             )
             return False
+    @staticmethod
+    def build_gs1_btxml_print_request(template_path, csv_path, printer,
+                                     job_name, row_count, copies=1):
+        """One explicitly-bound BTXML Print for one verified GS1 batch.
+
+        Seagull 2022 documents Print/RecordSet/FileName/RecordRange, and
+        Format CloseAtEndOfJob/SaveAtEndOfJob. Never use Databases.Item
+        or an implicit document database path.
+        """
+        import xml.etree.ElementTree as ET
+
+        if not all(isinstance(value, str) and value.strip()
+                   for value in (template_path, csv_path, printer, job_name)):
+            raise ValueError("BTXML Print: incomplete document, data, printer or job")
+        if isinstance(row_count, bool) or int(row_count) < 1:
+            raise ValueError("BTXML Print: row_count must be positive")
+        if isinstance(copies, bool) or int(copies) != 1:
+            raise ValueError("BTXML Print: only one copy per record is supported")
+
+        root = ET.Element("XMLScript", Version="2.0", Name="AutoPrintGS1Batch")
+        command = ET.SubElement(root, "Command", Name="GS1Batch")
+        request = ET.SubElement(
+            command, "Print", JobName=job_name,
+            WaitForJobToComplete="false", Timeout="30000",
+            ReturnPrintData="false", ReturnSummary="false",
+            ReturnLabelData="false",
+        )
+        ET.SubElement(
+            request, "Format", CloseAtEndOfJob="true",
+            SaveAtEndOfJob="false",
+        ).text = template_path
+        recordset = ET.SubElement(
+            request, "RecordSet", Name="tmp_batch",
+            Type="btTextFile", AddIfNone="false",
+        )
+        ET.SubElement(recordset, "FileName").text = csv_path
+        ET.SubElement(recordset, "Delimitation").text = "btDelimTab"
+        ET.SubElement(recordset, "UseFieldNamesFromFirstRecord").text = "true"
+        setup = ET.SubElement(request, "PrintSetup")
+        for tag, value in (
+            ("Printer", printer), ("UseDatabase", "true"),
+            ("RecordRange", f"1-{int(row_count)}"),
+            ("AutoPrintAgain", "false"), ("EnablePrompting", "false"),
+            ("IdenticalCopiesOfLabel", "1"), ("NumberSerializedLabels", "1"),
+        ):
+            ET.SubElement(setup, tag).text = value
+        if len(root.findall(".//Print")) != 1:
+            raise RuntimeError("BTXML Print request must contain exactly one submit")
+        return ET.tostring(root, encoding="unicode")
+
+    @staticmethod
+    def _btxml_batch_print_response(response):
+        """Positive spool-submit evidence only; all else ambiguous after send.
+
+        Seagull's XML response documents Print.JobLastStatus='Sent'.
+        This does not mean the physical printer completed the labels.
+        """
+        import xml.etree.ElementTree as ET
+
+        if not isinstance(response, str):
+            return "ambiguous"
+        try:
+            root = ET.fromstring(response)
+            if root.tag != "Response" or root.find(".//Error") is not None:
+                return "ambiguous"
+            commands = root.findall("./Command")
+            if len(commands) != 1:
+                return "ambiguous"
+            prints = commands[0].findall("./Print")
+            if len(prints) != 1:
+                return "ambiguous"
+            for message in root.iter("Message"):
+                if str(message.get("Severity") or "").casefold() == "error":
+                    return "ambiguous"
+            printed = prints[0]
+            status = str(printed.get("JobLastStatus") or "").casefold()
+            if status != "sent":
+                return "ambiguous"
+            return "submitted"
+        except (ET.ParseError, TypeError, ValueError):
+            return "ambiguous"
+
+    @staticmethod
+    def _btxml_batch_response_summary(response):
+        """Return only allowlisted job metadata; NEVER log the raw XML.
+
+        No Message.Text, file paths, job names, record values, product data
+        or marking codes from response are permitted in application logs.
+        """
+        import xml.etree.ElementTree as ET
+
+        if not isinstance(response, str):
+            return "response=non-xml-type"
+        try:
+            root = ET.fromstring(response)
+        except (ET.ParseError, ValueError, TypeError):
+            return "response=invalid-xml"
+        if root.tag != "Response":
+            return "response=unexpected-root"
+
+        commands = root.findall("./Command")
+        prints = commands[0].findall("./Print") if len(commands) == 1 else []
+        if len(commands) != 1 or len(prints) != 1:
+            return (
+                f"response=structural-mismatch "
+                f"commands={min(len(commands), 99)} prints={min(len(prints), 99)}"
+            )
+        printed = prints[0]
+        status = str(printed.get("JobLastStatus") or "").strip().casefold()
+        known_status = {
+            "creating", "queued", "sending", "paused", "resumed",
+            "cancelled", "sent", "sent (printing verified)", "unknown",
+        }
+        safe_status = status if status in known_status else (
+            "missing" if not status else "other"
+        )
+        completed = str(printed.get("JobCompleted") or "").strip().casefold()
+        safe_completed = completed if completed in {"true", "false"} else (
+            "missing" if not completed else "other"
+        )
+        nested = str(
+            printed.findtext("./JobStatus/LastStatus") or ""
+        ).strip().casefold()
+        safe_nested = nested if nested in known_status else (
+            "missing" if not nested else "other"
+        )
+        severities = []
+        message_ids = []
+        for message in list(printed.iter("Message"))[:10]:
+            value = str(message.get("Severity") or "").strip().casefold()
+            if value in {"information", "warning", "error"}:
+                severities.append(value)
+            else:
+                severities.append("other")
+            identifier = str(message.get("ID") or "").strip()
+            message_ids.append(identifier if identifier.isdecimal()
+                               and len(identifier) <= 8 else "other")
+        has_error_node = root.find(".//Error") is not None
+        return (
+            f"response=print job_status={safe_status} "
+            f"completed={safe_completed} last_status={safe_nested} "
+            f"error_tag={str(has_error_node).lower()} "
+            f"message_severities={','.join(severities) or 'none'} "
+            f"message_ids={','.join(message_ids) or 'none'}"
+        )
+
+    def submit_gs1_btxml_batch(self, btw_path, csv_path, printer,
+                               job_name, row_count, *, expected_dm,
+                               copies=1, show_dialog=False):
+        """Explicit immutable-job-input GS1 BTXML print; max ONE XMLScript.
+
+        Any exception or malformed result after XMLScript starts is ambiguous.
+        Inputs remain in owner-profile print-job-inputs, not deleted while
+        BarTender/Windows may still have a pending asynchronous job. Cleanup
+        needs an independently verified job-lifecycle policy (#31).
+        """
+        import hashlib
+        import tempfile
+        from pathlib import Path
+        from template_storage import get_user_data_dir
+
+        if (not isinstance(expected_dm, (tuple, list))
+                or len(expected_dm) != int(row_count)
+                or not all(isinstance(value, str) for value in expected_dm)):
+            self.logger.err(
+                "BTXML GS1: набор ожидаемых кодов не подтверждён; "
+                "отправка запрещена."
+            )
+            return "failed"
+        if show_dialog:
+            self.logger.err(
+                "BTXML GS1: диалог печати для этого пути не поддерживается; "
+                "отправка запрещена до отключения опции."
+            )
+            return "failed"
+        if self.app is None:
+            self.logger.err("BTXML GS1: BarTender COM не запущен.")
+            return "failed"
+
+        try:
+            original = Path(btw_path).resolve(strict=True)
+            data = Path(csv_path).resolve(strict=True)
+            if original.suffix.casefold() != ".btw" or data.stat().st_size == 0:
+                raise ValueError("Missing BTW or empty batch CSV")
+            user_area = Path(get_user_data_dir()) / "print-job-inputs"
+            user_area.mkdir(parents=True, exist_ok=True)
+            directory = Path(tempfile.mkdtemp(prefix="gs1-", dir=str(user_area)))
+            copied_btw = directory / original.name
+            copied_csv = directory / "tmp_batch.csv"
+            shutil.copy2(original, copied_btw)
+            shutil.copy2(data, copied_csv)
+            if hashlib.sha256(original.read_bytes()).digest() != hashlib.sha256(
+                copied_btw.read_bytes()
+            ).digest():
+                raise RuntimeError("BTW copy failed integrity check")
+            if hashlib.sha256(data.read_bytes()).digest() != hashlib.sha256(
+                copied_csv.read_bytes()
+            ).digest():
+                raise RuntimeError("CSV copy failed integrity check")
+
+            # No raw GS1 values or BTXML strings in logs. The directory is
+            # deliberately retained after an asynchronous print submission.
+            with copied_csv.open("r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream, delimiter="\t")
+                if (not reader.fieldnames
+                        or len(reader.fieldnames) != len(set(reader.fieldnames))
+                        or "DM" not in reader.fieldnames):
+                    raise ValueError("Invalid GS1 text header")
+                copied_dm = [row.get("DM") for row in reader]
+            if copied_dm != list(expected_dm):
+                raise ValueError("Copied GS1 CSV does not match the verified batch")
+            xml = self.build_gs1_btxml_print_request(
+                str(copied_btw), str(copied_csv),
+                printer, job_name, row_count, copies,
+            )
+            from pythoncom import VT_BYREF, VT_DISPATCH
+            from win32com.client import VARIANT
+            messages = VARIANT(VT_BYREF | VT_DISPATCH, None)
+        except Exception as exc:
+            self.logger.err(
+                f"BTXML GS1: предварительная подготовка не удалась "
+                f"({type(exc).__name__}); задание не отправлено."
+            )
+            return "failed"
+
+        self.logger.log(
+            f"BTXML GS1: начало одной отправки {row_count} записей; "
+            f"входные файлы сохранены: {directory}."
+        )
+        try:
+            # This is the SINGLE submission attempt; no retry/fallback,
+            # including timeout, COM exception, bad response or status.
+            response = self.app.XMLScript(xml, 0, messages)
+        except Exception as exc:
+            self.logger.err(
+                "BTXML GS1: исключение после начала XMLScript "
+                f"({type(exc).__name__}); отправка неоднозначна, "
+                "повтор запрещён."
+            )
+            return "ambiguous"
+        # A non-waiting BTXML Print may return before job status reaches
+        # Sent. Preserve the conservative ambiguous result, but capture
+        # safe metadata to diagnose this without another print attempt.
+        try:
+            self.logger.log(
+                "BTXML GS1: " + self._btxml_batch_response_summary(response)
+            )
+        except Exception:
+            pass
+        result = self._btxml_batch_print_response(response)
+        if result != "submitted":
+            self.logger.err(
+                "BTXML GS1: отсутствует подтверждение JobLastStatus=Sent; "
+                "отправка неоднозначна, повтор запрещён."
+            )
+        else:
+            self.logger.log(
+                "BTXML GS1: BarTender сообщил JobLastStatus=Sent "
+                "(отправлено в очередь, физическая печать не подтверждена)."
+            )
+        return result
+
     def export_preview(self, fmt, path):
         """Экспортирует изображение шаблона как в production v3.2.4."""
         output_path = str(path).replace("%PageNumber%", "1")

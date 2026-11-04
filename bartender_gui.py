@@ -6169,52 +6169,50 @@ class App(ctk.CTk):
         """Use the same lightweight GS1 preflight as the no-GUI COM inspector."""
         return verify_dm_batch_database(fmt, expected_path, self.logger, expected_rows)
 
-    def _check_template_db(self, fmt, expected_path: str):
+    @staticmethod
+    def _batch_database_one(databases):
+        """Resolve the single batch DB with the vendor's by-reference VARIANT.
+
+        Seagull's Databases.Item C# contract passes Index as ref object.
+        Late-bound pywin32 must marshal that signature explicitly; a bare
+        Python int becomes VT_I4 and failed on the deployed 2022 R5 COM.
+        DumbDispatch bypasses makepy's potentially mismatched type coercion.
+        This is exactly one Item call, not a retry or alternative lookup.
         """
-        Проверяет, привязан ли шаблон BarTender к ожидаемому tmp_batch.csv.
-        Возвращает True, если связь найдена или не удалось проверить (чтобы не блокировать печать).
+        import pythoncom
+        from win32com.client import VARIANT
+        from win32com.client.dynamic import DumbDispatch
+
+        index = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_VARIANT, 1)
+        return DumbDispatch(databases).Item(index)
+
+    def _check_template_db(self, fmt, expected_path: str) -> bool:
+        """Require a positive ActiveX readback of the current text-file source.
+
+        A template's design-time schema or working UI preview is not evidence
+        that BarTender will read the batch CSV. An unavailable COM member must
+        stop the job, not turn into a successful check.
         """
         try:
-            conns = getattr(fmt, "DatabaseConnections", None)
-            if not conns:
-                # Шаблон без подключений: ничего не проверяем
-                return True
-            try:
-                count = conns.Count
-            except Exception:
-                count = 0
-            if count <= 0:
-                return True
-            expected_norm = os.path.normcase(os.path.abspath(expected_path or ""))
-            found = False
-            for i in range(1, count + 1):
-                try:
-                    conn = conns.Item(i)
-                except Exception:
-                    continue
-                fname = None
-                try:
-                    tf = getattr(conn, "TextFile", None)
-                    if tf:
-                        fname = getattr(tf, "FileName", None)
-                except Exception:
-                    pass
-                if not fname:
-                    try:
-                        fname = getattr(conn, "FileName", None)
-                    except Exception:
-                        pass
-                if fname:
-                    norm = os.path.normcase(os.path.abspath(str(fname)))
-                    if norm == expected_norm:
-                        found = True
-                        break
-            if not found:
-                self.logger.err(f"Шаблон не привязан к tmp_batch.csv ({expected_norm}). Проверь привязку в BarTender.")
-            return found
-        except Exception:
-            # не валим печать, если не смогли проверить
+            if not expected_path or not os.path.isfile(expected_path):
+                raise ValueError("текущий CSV отсутствует")
+            dbs = fmt.Databases
+            if int(dbs.Count) != 1:
+                raise ValueError("ожидалось ровно одно текстовое подключение")
+            # The documented ActiveX database collection. On unsupported local
+            # installations Item(1) may fail: stop rather than guess an API.
+            source = str(self._batch_database_one(dbs).TextFile.FileName or "")
+            expected = os.path.normcase(os.path.abspath(expected_path))
+            current = os.path.normcase(os.path.abspath(source)) if source else ""
+            if current != expected:
+                raise ValueError("действующий путь источника не совпадает с текущим CSV")
             return True
+        except Exception as exc:
+            self.logger.err(
+                f"BT batch: не подтверждена привязка к {expected_path}; "
+                f"печать запрещена ({type(exc).__name__}: {exc})."
+            )
+            return False
 
     def _template_db_connection_count(self, fmt) -> int:
         total = 0
@@ -6628,113 +6626,35 @@ class App(ctk.CTk):
             pass
         return BT_BATCH_AMBIGUOUS
 
-    def _rebind_template_db(self, fmt, csv_path: str):
+    def _rebind_template_db(self, fmt, csv_path: str) -> bool:
+        """Bind one text database through documented ActiveX, then read it back.
+
+        False is a pre-submit stop. Do not use undocumented DatabaseConnections,
+        tolerate a setter failure or persist the runtime path into the BTW.
         """
-        Принудительно перепривязывает текстовые подключения шаблона к переданному csv_path.
-        Возвращает True, если удалось изменить хотя бы одно подключение.
-        """
-        import os
         try:
-            target = os.path.normcase(os.path.abspath(csv_path or ""))
-            conns = getattr(fmt, "DatabaseConnections", None)
-            changed = False
-            seen_paths = []
-            if conns:
-                try:
-                    count = conns.Count
-                except Exception:
-                    count = 0
-                for i in range(1, count + 1):
-                    try:
-                        conn = conns.Item(i)
-                    except Exception:
-                        continue
-                    try:
-                        seen_paths.append(str(getattr(conn, "FileName", "") or getattr(getattr(conn, "TextFile", None) or {}, "FileName", "")))
-                    except Exception:
-                        pass
-                    # Устанавливаем путь в TextFile.FileName, если доступно
-                    try:
-                        tf = getattr(conn, "TextFile", None)
-                    except Exception:
-                        tf = None
-                    if tf:
-                        try:
-                            cur = os.path.normcase(os.path.abspath(str(getattr(tf, "FileName", ""))))
-                        except Exception:
-                            cur = None
-                        try:
-                            tf.FileName = csv_path
-                            if cur != target:
-                                changed = True
-                        except Exception:
-                            pass
-                    # Также пробуем conn.FileName на случай другого API
-                    try:
-                        cur2 = os.path.normcase(os.path.abspath(str(getattr(conn, "FileName", ""))))
-                    except Exception:
-                        cur2 = None
-                    try:
-                        conn.FileName = csv_path
-                        if cur2 != target:
-                            changed = True
-                    except Exception:
-                        pass
-
-            # BarTender старых версий может использовать коллекцию Databases
-            dbs = getattr(fmt, "Databases", None)
-            if dbs:
-                try:
-                    dcount = dbs.Count
-                except Exception:
-                    dcount = 0
-                for j in range(1, dcount + 1):
-                    try:
-                        db = dbs.Item(j)
-                    except Exception:
-                        continue
-                    try:
-                        seen_paths.append(str(getattr(db, "FileName", "") or getattr(getattr(db, "TextFile", None) or {}, "FileName", "")))
-                    except Exception:
-                        pass
-                    try:
-                        cur3 = os.path.normcase(os.path.abspath(str(getattr(db, "FileName", ""))))
-                    except Exception:
-                        cur3 = None
-                    try:
-                        db.FileName = csv_path
-                        if cur3 != target:
-                            changed = True
-                    except Exception:
-                        pass
-                    # Некоторые текстовые БД имеют TextFile.FileName
-                    try:
-                        tf2 = getattr(db, "TextFile", None)
-                    except Exception:
-                        tf2 = None
-                    if tf2:
-                        try:
-                            cur4 = os.path.normcase(os.path.abspath(str(getattr(tf2, "FileName", ""))))
-                        except Exception:
-                            cur4 = None
-                        try:
-                            tf2.FileName = csv_path
-                            if cur4 != target:
-                                changed = True
-                        except Exception:
-                            pass
-
-            if changed:
-                try:
-                    self.logger.log(f"Подключение шаблона перепривязано к {csv_path}")
-                except Exception:
-                    pass
-            return changed
-        except Exception as e:
-            try:
-                self.logger.err(f"Не удалось перепривязать шаблон к {csv_path}: {e}")
-            except Exception:
-                pass
+            if not csv_path or not os.path.isfile(csv_path):
+                raise ValueError("сформированный CSV не найден")
+            dbs = fmt.Databases
+            if int(dbs.Count) != 1:
+                raise ValueError("ожидалось ровно одно текстовое подключение")
+            text_file = self._batch_database_one(dbs).TextFile
+            text_file.FileName = csv_path
+            if not self._check_template_db(fmt, csv_path):
+                return False
+            # Seagull documents RefreshDatabases as reloading the source just
+            # before printing, rather than relying on cached design-time data.
+            setup = fmt.PrintSetup
+            setup.RefreshDatabases = True
+            if not bool(setup.RefreshDatabases):
+                raise ValueError("RefreshDatabases не включён")
+            self.logger.log(f"BT batch: источник CSV подтверждён: {csv_path}")
+            return True
+        except Exception as exc:
+            self.logger.err(
+                f"BT batch: не удалось подтвердить привязку к {csv_path}; "
+                f"печать запрещена ({type(exc).__name__}: {exc})."
+            )
             return False
 
     def _update_csv_dir_label(self):
@@ -9212,6 +9132,7 @@ class App(ctk.CTk):
                 self._write_tmp_batch_csv(enriched, tmp_csv_path, add_calib=False)
 
                 fmt = None
+                batch_succeeded = False
                 batch_start_num = idx0 + start + 1
                 batch_end_num = idx0 + end
                 try:
@@ -9252,24 +9173,46 @@ class App(ctk.CTk):
                         break
 
                     can_use_tmp_batch = False
+                    # The GS1 path uses an explicit BTXML <Print>/<RecordSet>
+                    # FileName, not the unavailable BarTender 2022 R5
+                    # ActiveX Databases.Item lookup. The non-GS1 path is
+                    # unchanged and still requires positive COM readback.
+                    gs1_btxml = bool(
+                        batch_report.get("can_batch")
+                        and self._requires_database_dm(batch_report)
+                    )
                     if batch_report.get("can_batch"):
-                        try:
-                            self._rebind_template_db(fmt, tmp_csv_path)
-                        except Exception:
-                            pass
-                        try:
-                            can_use_tmp_batch = bool(self._check_template_db(fmt, tmp_csv_path))
-                        except Exception:
-                            can_use_tmp_batch = False
-                    else:
-                        try:
-                            self.logger.log(
-                                f"Шаблон {fmt_name} не готов к пакетной печати через tmp_batch: "
-                                f"{batch_report.get('batch_message')}. "
-                                f"Переключаю печать на прямую подстановку полей."
+                        if gs1_btxml:
+                            can_use_tmp_batch = True
+                        else:
+                            can_use_tmp_batch = self._rebind_template_db(
+                                fmt, tmp_csv_path
                             )
-                        except Exception:
-                            pass
+                            if not can_use_tmp_batch:
+                                failed_batch = True
+                                self.logger.err(
+                                    f"Пакет {bidx}: текущий CSV {tmp_csv_path} "
+                                    "не подтверждён через BarTender COM. "
+                                    "Задание не отправлено."
+                                )
+                                break
+                    else:
+                        if (
+                            batch_report.get("db_count", 0) > 0
+                            or batch_report.get("use_database")
+                            or batch_report.get("has_tmp_batch_refs")
+                        ):
+                            failed_batch = True
+                            self.logger.err(
+                                f"Пакет {bidx}: шаблон имеет подключение к базе, "
+                                "но не готов к пакетной печати. Прямая печать запрещена."
+                            )
+                            break
+                        self.logger.log(
+                            f"Шаблон {fmt_name} не готов к пакетной печати через tmp_batch: "
+                            f"{batch_report.get('batch_message')}. "
+                            "Переключаю печать на прямую подстановку полей."
+                        )
 
                     # A database-bound marking code cannot be represented by
                     # NamedSubStrings if its text database was not verified.
@@ -9296,18 +9239,39 @@ class App(ctk.CTk):
                         extra_info += f" (+{calib_added} калибровочных)"
 
                     if can_use_tmp_batch:
-                        fmt.UseDatabase = True
-                        fmt.SelectRecordsAtPrint = False
-                        fmt.RecordRange = f"1-{len(enriched)}"
-                        self.logger.log(f"Отправка на печать: {real_in_batch} строк через tmp_batch." + extra_info)
-                        batch_job_name = f"AutoPrint {fmt_name} {batch_start_num}-{batch_end_num}"
-                        batch_outcome = self._bt_batch_print(
-                            fmt,
-                            prn,
-                            batch_job_name,
-                            copies,
-                            self._dialog_flag(),
+                        batch_job_name = (
+                            f"AutoPrint {fmt_name} {batch_start_num}-{batch_end_num}"
                         )
+                        if gs1_btxml:
+                            # Strict XMLScript Print with explicit immutable
+                            # RecordSet/FileName: one submit attempt per batch.
+                            # This does NOT invoke Format.Print/PrintOut.
+                            batch_outcome = self.bt.submit_gs1_btxml_batch(
+                                btw,
+                                tmp_csv_path,
+                                prn,
+                                batch_job_name,
+                                len(enriched),
+                                expected_dm=tuple(
+                                    str(row.get("DM") or "") for row in enriched
+                                ),
+                                copies=copies,
+                                show_dialog=self._dialog_flag(),
+                            )
+                        else:
+                            fmt.UseDatabase = True
+                            fmt.SelectRecordsAtPrint = False
+                            fmt.RecordRange = f"1-{len(enriched)}"
+                            if not self._check_template_db(fmt, tmp_csv_path):
+                                failed_batch = True
+                                self.logger.err(
+                                    f"Пакет {bidx}: привязка CSV перед самой отправкой "
+                                    "не подтверждена. Задание не отправлено."
+                                )
+                                break
+                            batch_outcome = self._bt_batch_print(
+                                fmt, prn, batch_job_name, copies, self._dialog_flag()
+                            )
                         if batch_outcome == BT_BATCH_AMBIGUOUS:
                             ambiguous_batch = True
                             self.logger.log(
@@ -9333,6 +9297,7 @@ class App(ctk.CTk):
                     sent_total += real_in_batch
                     calib_total += calib_added
                     success = True
+                    batch_succeeded = True
                     self.logger.log(f"Пакет {bidx} отправлен. Всего отправлено: {sent_total}/{total}" + (f"; калибровочных: {calib_total}" if calib_added else ""))
                     self._set_progress(len(rows), len(rows), f"Пакет {bidx}")
                 except Exception as e:
@@ -9343,6 +9308,13 @@ class App(ctk.CTk):
                             fmt.Close(1)
                         except Exception:
                             pass
+
+                if not batch_succeeded:
+                    # No status updates, marking-sticker submit or continuation
+                    # after a failed/ambiguous primary batch.
+                    if not ambiguous_batch and not cancelled_batch:
+                        failed_batch = True
+                    break
 
                 try:
                     start_num = batch_start_num
