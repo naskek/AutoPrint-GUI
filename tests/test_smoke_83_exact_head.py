@@ -27,6 +27,35 @@ class Issue83ExactHeadHarnessTests(unittest.TestCase):
                 self.assertEqual(tuple(reader.fieldnames), FIELDS)
                 self.assertEqual(list(reader), rows)
 
+    def test_named_diagnostic_single_vendor_item_and_no_submit(self):
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "tools" / "diagnose_83_named_lookup.py"
+        )
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        calls = [
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+        ]
+        self.assertEqual(calls.count("Item"), 1)
+        self.assertFalse(set(calls) & {
+            "Print", "PrintOut", "GetDatabase", "XMLScript",
+            "ExportPrintPreviewToImage", "ExportPrintPreviewRangeToImage",
+            "ExportToFile", "_bt_batch_print", "_print_rows_direct",
+        })
+
+    def test_named_diagnostic_configuration_name_parser(self):
+        from tools.diagnose_83_named_lookup import _names_in_configuration
+        data = (
+            '<Root><RecordSet Name="tmp_batch"/>'
+            '<Database><Name>second_source</Name></Database></Root>'
+        )
+        self.assertEqual(
+            _names_in_configuration(data), {"tmp_batch", "second_source"}
+        )
+
     def test_stage_diagnostic_only_uses_one_database_lookup_and_no_print(self):
         path = (
             Path(__file__).resolve().parents[1]
