@@ -27,6 +27,41 @@ class Issue83ExactHeadHarnessTests(unittest.TestCase):
                 self.assertEqual(tuple(reader.fieldnames), FIELDS)
                 self.assertEqual(list(reader), rows)
 
+    def test_two_record_btxml_preview_is_explicit_no_print(self):
+        from tools.smoke_83_two_row_btxml_preview import build_two_row_preview_xml
+        import xml.etree.ElementTree as ET
+
+        template = Path("D:/isolation/only_copy.btw")
+        csv_path = Path("D:/isolation/tmp_batch.csv")
+        output_dir = Path("D:/isolation/png")
+        root = ET.fromstring(build_two_row_preview_xml(template, csv_path, output_dir))
+        self.assertIsNone(root.find(".//Print"))
+        self.assertIsNone(root.find(".//PrintOut"))
+        self.assertEqual(len(root.findall(".//ExportPrintPreviewToImage")), 1)
+        self.assertEqual(root.findtext(".//RecordSet/FileName"), str(csv_path))
+        self.assertEqual(root.find(".//RecordSet").get("Name"), "tmp_batch")
+        self.assertEqual(
+            root.findtext(".//ExportPrintPreviewToImage/PrintSetup/RecordRange"),
+            "1-2",
+        )
+
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "tools" / "smoke_83_two_row_btxml_preview.py"
+        )
+        ast_tree = ast.parse(path.read_text(encoding="utf-8"))
+        called = [
+            node.func.attr
+            for node in ast.walk(ast_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+        ]
+        self.assertEqual(called.count("XMLScript"), 1)
+        self.assertFalse(set(called) & {
+            "Print", "PrintOut", "_bt_batch_print",
+            "GetDatabase", "_print_range_one_job_via_csv",
+        })
+
     def test_named_diagnostic_single_vendor_item_and_no_submit(self):
         path = (
             Path(__file__).resolve().parents[1]
