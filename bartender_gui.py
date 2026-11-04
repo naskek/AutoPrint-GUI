@@ -6169,6 +6169,23 @@ class App(ctk.CTk):
         """Use the same lightweight GS1 preflight as the no-GUI COM inspector."""
         return verify_dm_batch_database(fmt, expected_path, self.logger, expected_rows)
 
+    @staticmethod
+    def _batch_database_one(databases):
+        """Resolve the single batch DB with the vendor's by-reference VARIANT.
+
+        Seagull's Databases.Item C# contract passes Index as ref object.
+        Late-bound pywin32 must marshal that signature explicitly; a bare
+        Python int becomes VT_I4 and failed on the deployed 2022 R5 COM.
+        DumbDispatch bypasses makepy's potentially mismatched type coercion.
+        This is exactly one Item call, not a retry or alternative lookup.
+        """
+        import pythoncom
+        from win32com.client import VARIANT
+        from win32com.client.dynamic import DumbDispatch
+
+        index = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_VARIANT, 1)
+        return DumbDispatch(databases).Item(index)
+
     def _check_template_db(self, fmt, expected_path: str) -> bool:
         """Require a positive ActiveX readback of the current text-file source.
 
@@ -6184,7 +6201,7 @@ class App(ctk.CTk):
                 raise ValueError("ожидалось ровно одно текстовое подключение")
             # The documented ActiveX database collection. On unsupported local
             # installations Item(1) may fail: stop rather than guess an API.
-            source = str(dbs.Item(1).TextFile.FileName or "")
+            source = str(self._batch_database_one(dbs).TextFile.FileName or "")
             expected = os.path.normcase(os.path.abspath(expected_path))
             current = os.path.normcase(os.path.abspath(source)) if source else ""
             if current != expected:
@@ -6621,7 +6638,7 @@ class App(ctk.CTk):
             dbs = fmt.Databases
             if int(dbs.Count) != 1:
                 raise ValueError("ожидалось ровно одно текстовое подключение")
-            text_file = dbs.Item(1).TextFile
+            text_file = self._batch_database_one(dbs).TextFile
             text_file.FileName = csv_path
             if not self._check_template_db(fmt, csv_path):
                 return False
