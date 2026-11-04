@@ -160,8 +160,8 @@ class StickerPreflightTests(unittest.TestCase):
         )
         app._print_sticker_placeholder.side_effect = [False, True]
         batch_rows = [
-            ([(dict(app.csv_rows[0], _FORMAT="16x16")], 0)),
-            ([(dict(app.csv_rows[1], _FORMAT="16x16")], 0)),
+            ([dict(app.csv_rows[0], _FORMAT="16x16")], 0),
+            ([dict(app.csv_rows[1], _FORMAT="16x16")], 0),
         ]
         prepared = {(0, 1): batch_rows[0], (1, 2): batch_rows[1]}
         result = app._preprint_stickers_for_all_batches(
