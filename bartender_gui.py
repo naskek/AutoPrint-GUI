@@ -7508,19 +7508,19 @@ class App(ctk.CTk):
     def _print_sticker_placeholder(self, bidx, start, end, total, sample_row=None, km_count=None, total_rolls=None):
         """Печать стикера через BarTender, если есть шаблон sticker60x40.btw (или cfg['sticker_btw'])."""
         if not self._require_print_capabilities("Печать стикера"):
-            return
+            return False
         prn = self._get_sticker_printer()
         if not prn:
             self.logger.err("Стикер: принтер не найден.")
-            return
+            return False
         if not self._ensure_printer_available_for_print(prn, "Печать стикера"):
-            return
+            return False
         sticker_path = resolve_sticker_template_path(self.cfg)
         if not sticker_path:
             self.logger.err(
                 f"Стикер: шаблон не найден: {sticker_template_display_path(self.cfg)}."
             )
-            return
+            return False
         client_name = self._get_client_name()
         payload = self._build_sticker_payload(
             bidx,
@@ -7539,6 +7539,8 @@ class App(ctk.CTk):
                 save_config(self.cfg)
             except Exception:
                 pass
+        fmt = None
+        submit_started = False
         try:
             fmt = self.bt.open_format(sticker_path)
             self.bt.set_common_print_flags(fmt)
@@ -7548,18 +7550,33 @@ class App(ctk.CTk):
                 self.bt.apply_fields(fmt, payload)
             except Exception:
                 pass
+            # One attempt. An exception after PrintOut begins may mean
+            # BarTender already submitted the sticker; never retry it.
+            submit_started = True
             fmt.PrintOut(False, False)
-            self.logger.log(f"Стикер отправлен: пакет {bidx} ({start}-{end}) → принтер '{prn}' (шаблон: {sticker_path}).")
-        except Exception as e:
-            try:
-                self.logger.err(f"Стикер не напечатан: {e}")
-            except Exception:
-                pass
+            self.logger.log(
+                f"Стикер отправлен: пакет {bidx} ({start}-{end}) "
+                f"→ принтер '{prn}' (шаблон: {sticker_path})."
+            )
+            return True
+        except Exception as exc:
+            if submit_started:
+                self.logger.err(
+                    f"Стикер пакет {bidx}: результат PrintOut неоднозначен "
+                    f"({type(exc).__name__}); повтор запрещён."
+                )
+            else:
+                self.logger.err(
+                    f"Стикер пакет {bidx}: подготовка не выполнена "
+                    f"({type(exc).__name__}); отправки не было."
+                )
+            return False
         finally:
-            try:
-                fmt.Close(1)
-            except Exception:
-                pass
+            if fmt is not None:
+                try:
+                    fmt.Close(1)
+                except Exception:
+                    pass
 
     def _get_prod_date(self, silent=False):
         try:
@@ -8226,50 +8243,64 @@ class App(ctk.CTk):
             )
             return None
 
-    def _preprint_stickers_for_all_batches(self, batches, rows_all, idx0, total, total_rolls, record_jobs=False):
-        """Печать стикеров сразу на все пакеты перед основной печатью."""
-        try:
-            if self._bool_var(getattr(self, "skip_sticker_var", False)):
-                return False
-            printed = 0
-            for bidx, (start, end) in enumerate(batches, start=1):
-                try:
-                    rows = rows_all[start:end]
-                    if not rows:
-                        continue
-                    idx1 = idx0 + start + 1
-                    enr = self._enrich(rows[0], idx1)
-                    if not enr:
-                        self.logger.err(f"Стикер пакет {bidx}: данные не сформированы (пропуск).")
-                        continue
-                    if record_jobs:
-                        self._record_sticker_job(
-                            bidx,
-                            idx0 + start + 1,
-                            idx0 + end,
-                            total,
-                            enr,
-                            len(rows),
-                            total_rolls,
-                        )
-                    self._print_sticker_placeholder(
-                        bidx,
-                        idx0 + start + 1,
-                        idx0 + end,
-                        total,
-                        sample_row=enr,
-                        km_count=len(rows),
-                        total_rolls=total_rolls,
-                    )
-                    printed += 1
-                except Exception as e:
-                    try:
-                        self.logger.err(f"Стикер пакет {bidx}: ошибка предварительной печати: {e}")
-                    except Exception:
-                        pass
-            return printed > 0
-        except Exception:
+    def _preprint_stickers_for_all_batches(
+        self, batches, rows_all, idx0, total, total_rolls,
+        record_jobs=False, prepared=None,
+    ):
+        """Print all stickers first, but stop on first failed/ambiguous attempt.
+
+        Called only after primary preflight. Never retry an attempted sticker
+        through the after-primary fallback on a partial preprint failure.
+        """
+        if self._bool_var(getattr(self, "skip_sticker_var", False)):
             return False
+        for bidx, (start, end) in enumerate(batches, start=1):
+            try:
+                if self._should_stop():
+                    self.logger.err("Предварительная печать стикеров отменена.")
+                    return False
+                rows = rows_all[start:end]
+                if not rows:
+                    self.logger.err(f"Стикер пакет {bidx}: пустой пакет.")
+                    return False
+                idx1 = idx0 + start + 1
+                if prepared is not None:
+                    batch_rows, _calib = prepared[(start, end)]
+                    enr = next(
+                        (row for row in batch_rows if not row.get("_CALIB")),
+                        None,
+                    )
+                else:
+                    enr = self._enrich(rows[0], idx1)
+                if not enr:
+                    self.logger.err(
+                        f"Стикер пакет {bidx}: данные не сформированы."
+                    )
+                    return False
+                if record_jobs:
+                    self._record_sticker_job(
+                        bidx, idx1, idx0 + end, total, enr,
+                        len(rows), total_rolls,
+                    )
+                result = self._print_sticker_placeholder(
+                    bidx, idx1, idx0 + end, total,
+                    sample_row=enr,
+                    km_count=len(rows),
+                    total_rolls=total_rolls,
+                )
+                if result is not True:
+                    self.logger.err(
+                        f"Стикер пакет {bidx}: нет подтверждения PrintOut; "
+                        "остальные стикеры и основные пакеты не отправляются."
+                    )
+                    return False
+            except Exception as exc:
+                self.logger.err(
+                    f"Стикер пакет {bidx}: ошибка ({type(exc).__name__}); "
+                    "автоматическая повторная печать запрещена."
+                )
+                return False
+        return bool(batches)
 
     def _on_preview_resize(self, event=None):
         """Пересчитывает превью при изменении размеров контейнера (например, при переносе на другой монитор)."""
