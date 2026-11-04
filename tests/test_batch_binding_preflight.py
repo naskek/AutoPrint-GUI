@@ -2,10 +2,11 @@
 
 No real BarTender, printer, spooler or production marking codes are used.
 """
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 import bartender_gui
@@ -34,6 +35,17 @@ class FakeTextFile:
             self.current = str(value)
 
 
+class FakeByRefVariant:
+    def __init__(self, vartype, value):
+        self.vartype = vartype
+        self.value = value
+
+
+class FakeDumbDispatch:
+    def __new__(cls, databases):
+        return databases
+
+
 class FakeDatabases:
     def __init__(self, textfile, *, count=1, fail_item=False):
         self.Count = count
@@ -45,8 +57,10 @@ class FakeDatabases:
         self.calls.append(index)
         if self.fail_item:
             raise RuntimeError("COM error 12345678")
-        if index != 1:
-            raise AssertionError("unexpected database index")
+        if not isinstance(index, FakeByRefVariant):
+            raise AssertionError("Databases.Item must receive a typed byref VARIANT")
+        if (index.vartype, index.value) != (0x4000 | 12, 1):
+            raise AssertionError("unexpected database index COM type or value")
         return SimpleNamespace(TextFile=self.textfile)
 
 
@@ -72,6 +86,26 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
     def setUp(self):
         self.app = object.__new__(bartender_gui.App)
         self.app.logger = Mock()
+        # Simulate the exact pythoncom + win32com type contract on Linux CI.
+        # The production method itself is called; no fake Item(1) substitution.
+        pythoncom = ModuleType("pythoncom")
+        pythoncom.VT_BYREF = 0x4000
+        pythoncom.VT_VARIANT = 12
+        win32com = ModuleType("win32com")
+        win32com.__path__ = []
+        client = ModuleType("win32com.client")
+        client.__path__ = []
+        client.VARIANT = FakeByRefVariant
+        dynamic = ModuleType("win32com.client.dynamic")
+        dynamic.DumbDispatch = FakeDumbDispatch
+        self._com_modules = patch.dict(sys.modules, {
+            "pythoncom": pythoncom,
+            "win32com": win32com,
+            "win32com.client": client,
+            "win32com.client.dynamic": dynamic,
+        })
+        self._com_modules.start()
+        self.addCleanup(self._com_modules.stop)
 
     @staticmethod
     def _fmt(path, **kwargs):
@@ -105,7 +139,10 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
             self.assertTrue(self.app._rebind_template_db(fmt, str(path)))
             self.assertTrue(self.app._check_template_db(fmt, str(path)))
             self.assertEqual(text.FileName, str(path))
-            self.assertEqual(dbs.calls, [1, 1, 1])
+            self.assertEqual(
+                [(argument.vartype, argument.value) for argument in dbs.calls],
+                [(0x4000 | 12, 1)] * 3,
+            )
             self.assertTrue(setup.RefreshDatabases)
             # Binding is pre-submit only; the actual calling path is covered below.
             fmt.Print.assert_not_called()
