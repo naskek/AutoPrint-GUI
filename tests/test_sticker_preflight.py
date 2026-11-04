@@ -177,6 +177,9 @@ class StickerPreflightTests(unittest.TestCase):
 
     def test_sticker_printout_exception_is_ambiguous_and_not_retried(self):
         app, fmt = self.make_app()
+        app._print_sticker_placeholder = (
+            bartender_gui.App._print_sticker_placeholder.__get__(app)
+        )
         app.cfg = {}
         app._get_sticker_printer = Mock(return_value="Fake Sticker Printer")
         app._get_client_name = Mock(return_value="")
