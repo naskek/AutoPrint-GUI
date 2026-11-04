@@ -9255,16 +9255,51 @@ class App(ctk.CTk):
         self._set_print_active_ui(True)
         try:
             self._stickers_preprinted = False
-            if target_batches is None and not self._bool_var(getattr(self, "skip_sticker_var", False)):
-                if self._preprint_stickers_for_all_batches(
-                    batches_full,
-                    rows_all,
-                    idx0,
-                    total,
-                    total_rolls,
+            sticker_preflight_plans = None
+            if (
+                target_batches is None
+                and not self._bool_var(getattr(self, "skip_sticker_var", False))
+            ):
+                sticker_preflight_plans = (
+                    self._preflight_primary_batches_before_stickers(
+                        batches_full, rows_all, idx0, copies
+                    )
+                )
+                if sticker_preflight_plans is None:
+                    state = "cancelled" if self._should_stop() else "failed"
+                    self.logger.err(
+                        "Основная печать и стикеры остановлены ДО первой "
+                        "отправки: предпроверка не завершена."
+                    )
+                    try:
+                        self._record_csv_status(
+                            self.csv_path, state, printer=prn
+                        )
+                    except Exception:
+                        pass
+                    return
+
+                # The former path interpreted a partial preprint as success
+                # and could automatically retry failed/ambiguous stickers
+                # after primary submission. Stop instead.
+                self._stickers_preprinted = True
+                if not self._preprint_stickers_for_all_batches(
+                    batches_full, rows_all, idx0, total, total_rolls,
                     record_jobs=record_jobs,
+                    prepared=sticker_preflight_plans,
                 ):
-                    self._stickers_preprinted = True
+                    self.logger.err(
+                        "Предварительная печать стикеров не подтверждена; "
+                        "основные пакеты не отправляются. "
+                        "Результат стикеров может быть неоднозначен."
+                    )
+                    try:
+                        self._record_csv_status(
+                            self.csv_path, "unknown", printer=prn
+                        )
+                    except Exception:
+                        pass
+                    return
 
             if target_batches is None:
                 self.last_batches = batches_full
