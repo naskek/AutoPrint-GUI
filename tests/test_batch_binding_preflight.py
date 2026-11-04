@@ -226,7 +226,8 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
             fmt.PrintOut.assert_not_called()
 
 
-    def _run_print_path(self, row_count, *, fmt_options=None, report_override=None):
+    def _run_print_path(self, row_count, *, fmt_options=None, report_override=None,
+                        gs1=False, gs1_preflight=True, gs1_submit="submitted"):
         """Exercise the production batch caller, not just its binding helper."""
         with tempfile.TemporaryDirectory() as root:
             expected = Path(root) / "tmp_batch.csv"
@@ -273,7 +274,7 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
             app._template_part_mode = Mock(return_value="manual")
             report = {
                 "can_batch": True,
-                "db_fields": ["DM"],
+                "db_fields": ["DM"] if gs1 else ["NUM"],
                 "template_fields": [],
                 "named_fields": [],
                 "db_count": 1,
@@ -283,14 +284,19 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
             if report_override:
                 report.update(report_override)
             app._template_batch_report = Mock(return_value=report)
-            app._verify_dm_batch_database = Mock(return_value=True)
+            app._verify_dm_batch_database = Mock(
+                return_value=gs1_preflight
+            )
             app._dialog_flag = Mock(return_value=False)
             app._bt_batch_print = Mock(
                 return_value=bartender_gui.BT_BATCH_SUBMITTED
             )
             app.update_idletasks = Mock()
             app.update = Mock()
-            app.bt = SimpleNamespace(open_format=Mock(return_value=fmt))
+            app.bt = SimpleNamespace(
+                open_format=Mock(return_value=fmt),
+                submit_gs1_btxml_batch=Mock(return_value=gs1_submit),
+            )
             with patch.object(bartender_gui, "BASE_DIR", root):
                 app._print_range_one_job_via_csv()
 
@@ -325,13 +331,50 @@ class BatchBindingPreSubmitTests(unittest.TestCase):
         fmt.PrintOut.assert_not_called()
         fmt.Close.assert_called_once_with(1)
 
-    def test_real_batch_caller_sends_6000_rows_in_one_batch(self):
-        app, fmt = self._run_print_path(6000)
-        app._bt_batch_print.assert_called_once()
-        self.assertEqual(fmt.RecordRange, "1-6000")
-        self.assertTrue(fmt.UseDatabase)
-        self.assertFalse(fmt.SelectRecordsAtPrint)
+    def test_real_batch_caller_sends_6000_gs1_rows_in_one_btxml_job(self):
+        app, fmt = self._run_print_path(6000, gs1=True)
+        app.bt.submit_gs1_btxml_batch.assert_called_once()
+        args = app.bt.submit_gs1_btxml_batch.call_args
+        self.assertEqual(args.args[4], 6000)
+        self.assertEqual(args.kwargs["copies"], 1)
+        self.assertEqual(args.kwargs["show_dialog"], False)
+        app._verify_dm_batch_database.assert_called_once()
+        app._bt_batch_print.assert_not_called()
         app._preprint_stickers_for_all_batches.assert_not_called()
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+        fmt.Close.assert_called_once_with(1)
+
+    def test_gs1_btxml_rejects_failed_schema_without_submit(self):
+        app, fmt = self._run_print_path(
+            2, gs1=True, gs1_preflight=False
+        )
+        app.bt.submit_gs1_btxml_batch.assert_not_called()
+        app._bt_batch_print.assert_not_called()
+        app._mark_csv_printed.assert_not_called()
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+        fmt.Close.assert_called_once_with(1)
+
+    def test_gs1_btxml_ambiguous_does_not_retry_or_mark_printed(self):
+        app, fmt = self._run_print_path(
+            2, gs1=True, gs1_submit=bartender_gui.BT_BATCH_AMBIGUOUS
+        )
+        app.bt.submit_gs1_btxml_batch.assert_called_once()
+        app._bt_batch_print.assert_not_called()
+        app._mark_csv_printed.assert_not_called()
+        app._record_csv_status.assert_called_once()
+        self.assertEqual(app._record_csv_status.call_args.args[1], "unknown")
+        fmt.Print.assert_not_called()
+        fmt.PrintOut.assert_not_called()
+        fmt.Close.assert_called_once_with(1)
+
+    def test_non_gs1_database_still_uses_original_verified_com_route(self):
+        app, fmt = self._run_print_path(2, gs1=False)
+        app._bt_batch_print.assert_called_once()
+        app.bt.submit_gs1_btxml_batch.assert_not_called()
+        self.assertEqual(fmt.RecordRange, "1-2")
+        fmt.Print.assert_not_called()
         fmt.PrintOut.assert_not_called()
         fmt.Close.assert_called_once_with(1)
 
