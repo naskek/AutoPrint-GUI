@@ -3,6 +3,7 @@
 Fake COM/GUI contract only. No physical printers, production template/CSV,
 spooler access, or PrintOut attempt.
 """
+import ast
 import tempfile
 import unittest
 from pathlib import Path
@@ -223,6 +224,24 @@ class StickerPreflightTests(unittest.TestCase):
         app._preprint_stickers_for_all_batches.assert_not_called()
         app.bt.submit_gs1_btxml_batch.assert_not_called()
         fmt.PrintOut.assert_not_called()
+
+    def test_live_exact_head_smoke_contains_no_submit_api(self):
+        src = (
+            Path(__file__).resolve().parents[1]
+            / "tools" / "smoke_87_exact_head.py"
+        )
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+        calls = [
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+        ]
+        self.assertFalse(set(calls) & {
+            "Print", "PrintOut", "XMLScript", "_print_sticker_placeholder",
+            "_bt_batch_print", "submit_gs1_btxml_batch",
+            "_print_range_one_job_via_csv",
+        })
 
     def test_preflight_6000_rows_only_one_com_open(self):
         app, fmt = self.make_app(row_count=6000, batch_size=6000)
