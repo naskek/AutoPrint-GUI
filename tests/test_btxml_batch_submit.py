@@ -156,11 +156,13 @@ class BtxmlBatchContractTests(unittest.TestCase):
 
     def test_changed_synthetic_csv_codes_are_failed_before_submit(self):
         self.bt.app = SimpleNamespace(XMLScript=Mock(return_value=self.sent_response()))
-        self.csv_path.write_text(
-            "ShortName\\tDM\\tNUM\\nTEST\\tDIFFERENT\\t1\\n"
-            "TEST\\tDIFFERENT2\\t2\\n",
-            encoding="utf-8-sig",
-        )
+        with self.csv_path.open("w", encoding="utf-8-sig", newline="") as stream:
+            writer = csv.DictWriter(
+                stream, fieldnames=("ShortName", "DM", "NUM"), delimiter="\t"
+            )
+            writer.writeheader()
+            writer.writerow({"ShortName": "TEST", "DM": "DIFFERENT", "NUM": 1})
+            writer.writerow({"ShortName": "TEST", "DM": "DIFFERENT2", "NUM": 2})
         self.assertEqual(self._submit(), "failed")
         self.bt.app.XMLScript.assert_not_called()
 
