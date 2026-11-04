@@ -94,7 +94,6 @@ def smoke(source_btw: Path, expected_sha: str) -> bool:
 
     import pythoncom
     from win32com.client import DispatchEx
-    from bartender_gui import App, DEFAULT_REQ_COLS
 
     pythoncom.CoInitialize()
     app = fmt = None
@@ -103,8 +102,10 @@ def smoke(source_btw: Path, expected_sha: str) -> bool:
             prefix="AutoPrint83Exact-", ignore_cleanup_errors=True
         ) as root:
             work = Path(root)
-            # The module import above happens under the source checkout; no
-            # production config, catalog or license file is read by this test.
+            # Set profile BEFORE importing GUI dependencies: source-run must
+            # not read or create production config, catalog or template data.
+            os.environ["AUTOPRINT_USER_DATA_DIR"] = str(work / "profile")
+            from bartender_gui import App, DEFAULT_REQ_COLS
             copy = work / "isolated_30x20.btw"
             tmp_csv = work / "tmp_batch.csv"
             shutil.copy2(source_btw, copy)
@@ -147,16 +148,16 @@ def smoke(source_btw: Path, expected_sha: str) -> bool:
                 print("PR FINAL BINDING READBACK: PASS")
                 print("NO SUBMIT WAS ATTEMPTED")
             finally:
-                if fmt is not None:
-                    try:
+                try:
+                    if fmt is not None:
                         fmt.Close(DO_NOT_SAVE)
-                    finally:
-                        fmt = None
-                if app is not None:
-                    try:
-                        app.Quit(DO_NOT_SAVE)
-                    finally:
-                        app = None
+                finally:
+                    fmt = None
+                    if app is not None:
+                        try:
+                            app.Quit(DO_NOT_SAVE)
+                        finally:
+                            app = None
 
                 if _sha256(copy) != copy_hash:
                     raise RuntimeError("Disposable BTW modified")
