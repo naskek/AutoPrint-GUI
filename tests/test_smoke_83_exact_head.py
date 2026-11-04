@@ -27,6 +27,25 @@ class Issue83ExactHeadHarnessTests(unittest.TestCase):
                 self.assertEqual(tuple(reader.fieldnames), FIELDS)
                 self.assertEqual(list(reader), rows)
 
+    def test_stage_diagnostic_only_uses_one_database_lookup_and_no_print(self):
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "tools" / "diagnose_83_com_dispatch.py"
+        )
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        called = [
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+        ]
+        self.assertEqual(called.count("_batch_database_one"), 1)
+        self.assertFalse(set(called) & {
+            "Print", "PrintOut", "GetDatabase", "XMLScript",
+            "ExportPrintPreviewToImage", "ExportPrintPreviewRangeToImage",
+            "ExportToFile", "_bt_batch_print", "_print_rows_direct",
+        })
+
     def test_no_print_submit_or_preview_com_calls_in_diagnostic(self):
         path = Path(__file__).resolve().parents[1] / "tools" / "smoke_83_exact_head.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))
