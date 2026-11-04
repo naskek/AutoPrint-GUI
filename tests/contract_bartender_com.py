@@ -99,6 +99,7 @@ class BarTenderComBoundaryContractTests(unittest.TestCase):
     def test_manual_part_num_reaches_sticker_named_data_source(self, _resolve_sticker):
         app = object.__new__(bartender_gui.App)
         app.cfg = {}
+        app.cancel_requested = False
         app.logger = self.logger
         app._require_print_capabilities = Mock(return_value=True)
         app._get_sticker_printer = Mock(return_value="Sticker Printer")
