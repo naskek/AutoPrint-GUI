@@ -8277,11 +8277,6 @@ class App(ctk.CTk):
                         f"Стикер пакет {bidx}: данные не сформированы."
                     )
                     return False
-                if record_jobs:
-                    self._record_sticker_job(
-                        bidx, idx1, idx0 + end, total, enr,
-                        len(rows), total_rolls,
-                    )
                 result = self._print_sticker_placeholder(
                     bidx, idx1, idx0 + end, total,
                     sample_row=enr,
@@ -8294,6 +8289,13 @@ class App(ctk.CTk):
                         "остальные стикеры и основные пакеты не отправляются."
                     )
                     return False
+                if record_jobs:
+                    # Only confirmed submissions should be recorded as
+                    # eligible for later explicit sticker reprint.
+                    self._record_sticker_job(
+                        bidx, idx1, idx0 + end, total, enr,
+                        len(rows), total_rolls,
+                    )
             except Exception as exc:
                 self.logger.err(
                     f"Стикер пакет {bidx}: ошибка ({type(exc).__name__}); "
