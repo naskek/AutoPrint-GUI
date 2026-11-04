@@ -9173,17 +9173,29 @@ class App(ctk.CTk):
                         break
 
                     can_use_tmp_batch = False
+                    # The GS1 path uses an explicit BTXML <Print>/<RecordSet>
+                    # FileName, not the unavailable BarTender 2022 R5
+                    # ActiveX Databases.Item lookup. The non-GS1 path is
+                    # unchanged and still requires positive COM readback.
+                    gs1_btxml = bool(
+                        batch_report.get("can_batch")
+                        and self._requires_database_dm(batch_report)
+                    )
                     if batch_report.get("can_batch"):
-                        # Failed binding is a hard pre-submit stop, never a
-                        # reason to fall back to a different print API.
-                        can_use_tmp_batch = self._rebind_template_db(fmt, tmp_csv_path)
-                        if not can_use_tmp_batch:
-                            failed_batch = True
-                            self.logger.err(
-                                f"Пакет {bidx}: текущий CSV {tmp_csv_path} не подтверждён "
-                                "через BarTender COM. Задание не отправлено."
+                        if gs1_btxml:
+                            can_use_tmp_batch = True
+                        else:
+                            can_use_tmp_batch = self._rebind_template_db(
+                                fmt, tmp_csv_path
                             )
-                            break
+                            if not can_use_tmp_batch:
+                                failed_batch = True
+                                self.logger.err(
+                                    f"Пакет {bidx}: текущий CSV {tmp_csv_path} "
+                                    "не подтверждён через BarTender COM. "
+                                    "Задание не отправлено."
+                                )
+                                break
                     else:
                         if (
                             batch_report.get("db_count", 0) > 0
@@ -9227,25 +9239,36 @@ class App(ctk.CTk):
                         extra_info += f" (+{calib_added} калибровочных)"
 
                     if can_use_tmp_batch:
-                        fmt.UseDatabase = True
-                        fmt.SelectRecordsAtPrint = False
-                        fmt.RecordRange = f"1-{len(enriched)}"
-                        if not self._check_template_db(fmt, tmp_csv_path):
-                            failed_batch = True
-                            self.logger.err(
-                                f"Пакет {bidx}: привязка CSV перед самой отправкой "
-                                "не подтверждена. Задание не отправлено."
-                            )
-                            break
-                        self.logger.log(f"Отправка на печать: {real_in_batch} строк через tmp_batch." + extra_info)
-                        batch_job_name = f"AutoPrint {fmt_name} {batch_start_num}-{batch_end_num}"
-                        batch_outcome = self._bt_batch_print(
-                            fmt,
-                            prn,
-                            batch_job_name,
-                            copies,
-                            self._dialog_flag(),
+                        batch_job_name = (
+                            f"AutoPrint {fmt_name} {batch_start_num}-{batch_end_num}"
                         )
+                        if gs1_btxml:
+                            # Strict XMLScript Print with explicit immutable
+                            # RecordSet/FileName: one submit attempt per batch.
+                            # This does NOT invoke Format.Print/PrintOut.
+                            batch_outcome = self.bt.submit_gs1_btxml_batch(
+                                btw,
+                                tmp_csv_path,
+                                prn,
+                                batch_job_name,
+                                len(enriched),
+                                copies=copies,
+                                show_dialog=self._dialog_flag(),
+                            )
+                        else:
+                            fmt.UseDatabase = True
+                            fmt.SelectRecordsAtPrint = False
+                            fmt.RecordRange = f"1-{len(enriched)}"
+                            if not self._check_template_db(fmt, tmp_csv_path):
+                                failed_batch = True
+                                self.logger.err(
+                                    f"Пакет {bidx}: привязка CSV перед самой отправкой "
+                                    "не подтверждена. Задание не отправлено."
+                                )
+                                break
+                            batch_outcome = self._bt_batch_print(
+                                fmt, prn, batch_job_name, copies, self._dialog_flag()
+                            )
                         if batch_outcome == BT_BATCH_AMBIGUOUS:
                             ambiguous_batch = True
                             self.logger.log(
