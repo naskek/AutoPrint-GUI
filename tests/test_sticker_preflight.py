@@ -166,12 +166,44 @@ class StickerPreflightTests(unittest.TestCase):
         prepared = {(0, 1): batch_rows[0], (1, 2): batch_rows[1]}
         result = app._preprint_stickers_for_all_batches(
             [(0, 1), (1, 2)], app.csv_rows, 0, 2, 2,
-            prepared=prepared,
+            prepared=prepared, record_jobs=True,
         )
         self.assertFalse(result)
+        app._record_sticker_job.assert_not_called()
         app._print_sticker_placeholder.assert_called_once()
         fmt.Print.assert_not_called()
         fmt.PrintOut.assert_not_called()
+
+    def test_sticker_printout_exception_is_ambiguous_and_not_retried(self):
+        app, fmt = self.make_app()
+        app.cfg = {}
+        app._get_sticker_printer = Mock(return_value="Fake Sticker Printer")
+        app._get_client_name = Mock(return_value="")
+        app._build_sticker_payload = Mock(return_value={"PART_NUM": "TEST"})
+        fmt.PrintSetup = SimpleNamespace()
+        fmt.PrintOut.side_effect = RuntimeError("unknown submit outcome")
+        app.bt = SimpleNamespace(
+            open_format=Mock(return_value=fmt),
+            set_common_print_flags=Mock(),
+            apply_fields=Mock(return_value=True),
+        )
+        with patch(
+            "bartender_gui.resolve_sticker_template_path",
+            return_value="disposable-sticker.btw",
+        ):
+            outcome = app._print_sticker_placeholder(
+                1, 1, 1, 2,
+                sample_row={"DM": "synthetic"},
+                km_count=1, total_rolls=2,
+            )
+        self.assertIs(outcome, False)
+        fmt.PrintOut.assert_called_once_with(False, False)
+        fmt.Close.assert_called_once_with(1)
+        app.bt.open_format.assert_called_once_with("disposable-sticker.btw")
+        self.assertIn(
+            "повтор запрещён",
+            " ".join(str(c.args[0]) for c in app.logger.err.call_args_list),
+        )
 
     def test_non_gs1_unverified_com_binding_denies_stickers(self):
         app, fmt = self.make_app()
