@@ -7546,10 +7546,14 @@ class App(ctk.CTk):
             self.bt.set_common_print_flags(fmt)
             fmt.PrintSetup.Printer = prn
             fmt.PrintSetup.IdenticalCopiesOfLabel = 1
-            try:
-                self.bt.apply_fields(fmt, payload)
-            except Exception:
-                pass
+            # A sticker with no confirmed Named Data Source assignment
+            # must never be submitted with cached template values.
+            if not self.bt.apply_fields(fmt, payload):
+                self.logger.err(
+                    f"Стикер пакет {bidx}: ни одно поле не подставлено; "
+                    "отправка запрещена."
+                )
+                return False
             # One attempt. An exception after PrintOut begins may mean
             # BarTender already submitted the sticker; never retry it.
             submit_started = True
