@@ -97,6 +97,100 @@ class StickerPreflightTests(unittest.TestCase):
         ):
             app._print_range_one_job_via_csv()
 
+
+    def enable_real_sticker_path(self, app, fmt):
+        """Exercise real preprint and placeholder methods with fake COM only."""
+        app._preprint_stickers_for_all_batches = (
+            bartender_gui.App._preprint_stickers_for_all_batches.__get__(app)
+        )
+        app._print_sticker_placeholder = (
+            bartender_gui.App._print_sticker_placeholder.__get__(app)
+        )
+        app._get_sticker_printer = Mock(return_value="Fake Sticker Printer")
+        app._get_client_name = Mock(return_value="")
+        app._build_sticker_payload = Mock(
+            return_value={"PART_NUM": "TEST", "ShortName": "Synthetic"}
+        )
+        app.bt.set_common_print_flags = Mock()
+        app.bt.apply_fields = Mock(return_value=True)
+        self.sticker_template_patch = patch(
+            "bartender_gui.resolve_sticker_template_path",
+            return_value="disposable-sticker.btw",
+        )
+        self.sticker_template_patch.start()
+        self.addCleanup(self.sticker_template_patch.stop)
+        return app
+
+    def test_end_to_end_fake_com_two_stickers_then_two_primary_submits(self):
+        app, fmt = self.make_app(row_count=2, batch_size=1)
+        self.enable_real_sticker_path(app, fmt)
+        events = []
+
+        def sticker(*args):
+            events.append(("sticker", args))
+
+        def primary(*args, **kwargs):
+            events.append(("primary", kwargs["expected_dm"]))
+            return bartender_gui.BT_BATCH_SUBMITTED
+
+        fmt.PrintOut.side_effect = sticker
+        app.bt.submit_gs1_btxml_batch.side_effect = primary
+        self.run_print(app)
+
+        self.assertEqual(
+            [name for name, _details in events],
+            ["sticker", "sticker", "primary", "primary"],
+        )
+        self.assertEqual(events[2][1], ("SYNTHETIC-ROW-0",))
+        self.assertEqual(events[3][1], ("SYNTHETIC-ROW-1",))
+        self.assertEqual(app.bt.open_format.call_count, 6)
+        self.assertEqual(fmt.Close.call_count, 6)
+        self.assertEqual(app._verify_dm_batch_database.call_count, 4)
+        self.assertEqual(app._enrich.call_count, 2)
+        self.assertEqual(app._record_sticker_job.call_count, 4)
+        app.bt.submit_gs1_btxml_batch.assert_has_calls([
+            app.bt.submit_gs1_btxml_batch.call_args_list[0],
+            app.bt.submit_gs1_btxml_batch.call_args_list[1],
+        ])
+        self.assertEqual(fmt.PrintOut.call_count, 2)
+        fmt.Print.assert_not_called()
+        app._bt_batch_print.assert_not_called()
+        app._record_csv_status.assert_not_called()
+
+    def test_end_to_end_fake_com_ambiguous_first_sticker_stops_all_submits(self):
+        app, fmt = self.make_app(row_count=2, batch_size=1)
+        self.enable_real_sticker_path(app, fmt)
+        fmt.PrintOut.side_effect = RuntimeError("unknown sticker status")
+
+        self.run_print(app)
+
+        fmt.PrintOut.assert_called_once_with(False, False)
+        app.bt.submit_gs1_btxml_batch.assert_not_called()
+        app._bt_batch_print.assert_not_called()
+        app._record_sticker_job.assert_not_called()
+        self.assertEqual(app._record_csv_status.call_args.args[1], "unknown")
+        self.assertEqual(app.bt.open_format.call_count, 3)
+        self.assertEqual(fmt.Close.call_count, 3)
+        fmt.Print.assert_not_called()
+
+    def test_end_to_end_fake_com_ambiguous_first_primary_stops_later_batch(self):
+        app, fmt = self.make_app(row_count=2, batch_size=1)
+        self.enable_real_sticker_path(app, fmt)
+        app.bt.submit_gs1_btxml_batch.side_effect = [
+            bartender_gui.BT_BATCH_AMBIGUOUS,
+            bartender_gui.BT_BATCH_SUBMITTED,
+        ]
+
+        self.run_print(app)
+
+        self.assertEqual(fmt.PrintOut.call_count, 2)
+        app.bt.submit_gs1_btxml_batch.assert_called_once()
+        app._bt_batch_print.assert_not_called()
+        app._record_csv_status.assert_called_once()
+        self.assertEqual(app._record_csv_status.call_args.args[1], "unknown")
+        app._mark_csv_printed.assert_not_called()
+        fmt.Print.assert_not_called()
+
     def test_failure_in_second_primary_preflight_blocks_every_sticker_and_main(self):
         app, fmt = self.make_app(row_count=2, batch_size=1)
         app._verify_dm_batch_database.side_effect = [True, False]
