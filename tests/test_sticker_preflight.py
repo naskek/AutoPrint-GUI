@@ -209,6 +209,65 @@ class StickerPreflightTests(unittest.TestCase):
             " ".join(str(c.args[0]) for c in app.logger.err.call_args_list),
         )
 
+    def test_sticker_with_no_assigned_fields_never_calls_printout(self):
+        app, fmt = self.make_app()
+        app._print_sticker_placeholder = (
+            bartender_gui.App._print_sticker_placeholder.__get__(app)
+        )
+        app._get_sticker_printer = Mock(return_value="Fake Sticker Printer")
+        app._get_client_name = Mock(return_value="")
+        app._build_sticker_payload = Mock(return_value={"PART_NUM": "TEST"})
+        fmt.PrintSetup = SimpleNamespace()
+        app.bt = SimpleNamespace(
+            open_format=Mock(return_value=fmt),
+            set_common_print_flags=Mock(),
+            apply_fields=Mock(return_value=False),
+        )
+        with patch(
+            "bartender_gui.resolve_sticker_template_path",
+            return_value="disposable-sticker.btw",
+        ):
+            self.assertIs(
+                app._print_sticker_placeholder(
+                    1, 1, 1, 2,
+                    sample_row={"DM": "synthetic"},
+                    km_count=1, total_rolls=2,
+                ),
+                False,
+            )
+        app.bt.apply_fields.assert_called_once()
+        fmt.PrintOut.assert_not_called()
+        fmt.Close.assert_called_once_with(1)
+
+    def test_sticker_field_assignment_exception_never_calls_printout(self):
+        app, fmt = self.make_app()
+        app._print_sticker_placeholder = (
+            bartender_gui.App._print_sticker_placeholder.__get__(app)
+        )
+        app._get_sticker_printer = Mock(return_value="Fake Sticker Printer")
+        app._get_client_name = Mock(return_value="")
+        app._build_sticker_payload = Mock(return_value={"PART_NUM": "TEST"})
+        fmt.PrintSetup = SimpleNamespace()
+        app.bt = SimpleNamespace(
+            open_format=Mock(return_value=fmt),
+            set_common_print_flags=Mock(),
+            apply_fields=Mock(side_effect=RuntimeError("setter failed")),
+        )
+        with patch(
+            "bartender_gui.resolve_sticker_template_path",
+            return_value="disposable-sticker.btw",
+        ):
+            self.assertIs(
+                app._print_sticker_placeholder(
+                    1, 1, 1, 2,
+                    sample_row={"DM": "synthetic"},
+                    km_count=1, total_rolls=2,
+                ),
+                False,
+            )
+        fmt.PrintOut.assert_not_called()
+        fmt.Close.assert_called_once_with(1)
+
     def test_non_gs1_unverified_com_binding_denies_stickers(self):
         app, fmt = self.make_app()
         app._requires_database_dm.return_value = False
