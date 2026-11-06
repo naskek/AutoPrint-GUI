@@ -148,10 +148,7 @@ class StickerPreflightTests(unittest.TestCase):
         self.assertEqual(app._verify_dm_batch_database.call_count, 4)
         self.assertEqual(app._enrich.call_count, 2)
         self.assertEqual(app._record_sticker_job.call_count, 4)
-        app.bt.submit_gs1_btxml_batch.assert_has_calls([
-            app.bt.submit_gs1_btxml_batch.call_args_list[0],
-            app.bt.submit_gs1_btxml_batch.call_args_list[1],
-        ])
+        self.assertEqual(app.bt.submit_gs1_btxml_batch.call_count, 2)
         self.assertEqual(fmt.PrintOut.call_count, 2)
         fmt.Print.assert_not_called()
         app._bt_batch_print.assert_not_called()
