@@ -7508,19 +7508,19 @@ class App(ctk.CTk):
     def _print_sticker_placeholder(self, bidx, start, end, total, sample_row=None, km_count=None, total_rolls=None):
         """Печать стикера через BarTender, если есть шаблон sticker60x40.btw (или cfg['sticker_btw'])."""
         if not self._require_print_capabilities("Печать стикера"):
-            return
+            return False
         prn = self._get_sticker_printer()
         if not prn:
             self.logger.err("Стикер: принтер не найден.")
-            return
+            return False
         if not self._ensure_printer_available_for_print(prn, "Печать стикера"):
-            return
+            return False
         sticker_path = resolve_sticker_template_path(self.cfg)
         if not sticker_path:
             self.logger.err(
                 f"Стикер: шаблон не найден: {sticker_template_display_path(self.cfg)}."
             )
-            return
+            return False
         client_name = self._get_client_name()
         payload = self._build_sticker_payload(
             bidx,
@@ -7539,27 +7539,48 @@ class App(ctk.CTk):
                 save_config(self.cfg)
             except Exception:
                 pass
+        fmt = None
+        submit_started = False
         try:
             fmt = self.bt.open_format(sticker_path)
             self.bt.set_common_print_flags(fmt)
             fmt.PrintSetup.Printer = prn
             fmt.PrintSetup.IdenticalCopiesOfLabel = 1
-            try:
-                self.bt.apply_fields(fmt, payload)
-            except Exception:
-                pass
+            # A sticker with no confirmed Named Data Source assignment
+            # must never be submitted with cached template values.
+            if not self.bt.apply_fields(fmt, payload):
+                self.logger.err(
+                    f"Стикер пакет {bidx}: ни одно поле не подставлено; "
+                    "отправка запрещена."
+                )
+                return False
+            # One attempt. An exception after PrintOut begins may mean
+            # BarTender already submitted the sticker; never retry it.
+            submit_started = True
             fmt.PrintOut(False, False)
-            self.logger.log(f"Стикер отправлен: пакет {bidx} ({start}-{end}) → принтер '{prn}' (шаблон: {sticker_path}).")
-        except Exception as e:
-            try:
-                self.logger.err(f"Стикер не напечатан: {e}")
-            except Exception:
-                pass
+            self.logger.log(
+                f"Стикер отправлен: пакет {bidx} ({start}-{end}) "
+                f"→ принтер '{prn}' (шаблон: {sticker_path})."
+            )
+            return True
+        except Exception as exc:
+            if submit_started:
+                self.logger.err(
+                    f"Стикер пакет {bidx}: результат PrintOut неоднозначен "
+                    f"({type(exc).__name__}); повтор запрещён."
+                )
+            else:
+                self.logger.err(
+                    f"Стикер пакет {bidx}: подготовка не выполнена "
+                    f"({type(exc).__name__}); отправки не было."
+                )
+            return False
         finally:
-            try:
-                fmt.Close(1)
-            except Exception:
-                pass
+            if fmt is not None:
+                try:
+                    fmt.Close(1)
+                except Exception:
+                    pass
 
     def _get_prod_date(self, silent=False):
         try:
@@ -8017,50 +8038,275 @@ class App(ctk.CTk):
         except Exception:
             pass
 
-    def _preprint_stickers_for_all_batches(self, batches, rows_all, idx0, total, total_rolls, record_jobs=False):
-        """Печать стикеров сразу на все пакеты перед основной печатью."""
-        try:
-            if self._bool_var(getattr(self, "skip_sticker_var", False)):
-                return False
-            printed = 0
-            for bidx, (start, end) in enumerate(batches, start=1):
-                try:
-                    rows = rows_all[start:end]
-                    if not rows:
-                        continue
-                    idx1 = idx0 + start + 1
-                    enr = self._enrich(rows[0], idx1)
-                    if not enr:
-                        self.logger.err(f"Стикер пакет {bidx}: данные не сформированы (пропуск).")
-                        continue
-                    if record_jobs:
-                        self._record_sticker_job(
-                            bidx,
-                            idx0 + start + 1,
-                            idx0 + end,
-                            total,
-                            enr,
-                            len(rows),
-                            total_rolls,
-                        )
-                    self._print_sticker_placeholder(
-                        bidx,
-                        idx0 + start + 1,
-                        idx0 + end,
-                        total,
-                        sample_row=enr,
-                        km_count=len(rows),
-                        total_rolls=total_rolls,
-                    )
-                    printed += 1
-                except Exception as e:
+    def _prepare_primary_batch_rows(self, rows_all, start, end, idx0,
+                                    bidx, progress_every=50):
+        """Generate exactly the same enriched rows for preflight and submit.
+
+        Return the prepared rows and calibration count. Never submit print.
+        """
+        rows = rows_all[start:end]
+        enriched = []
+        fast_used = False
+        if rows and self._can_fast_enrich(rows):
+            idx1_first = idx0 + start + 1
+            base_enr = self._enrich(rows[0], idx1_first)
+            if base_enr:
+                fast_used = True
+                fmt_fast = base_enr.get("_FORMAT")
+                for i, base in enumerate(rows):
+                    self._pause_wait()
+                    if self._should_stop():
+                        break
                     try:
-                        self.logger.err(f"Стикер пакет {bidx}: ошибка предварительной печати: {e}")
+                        self.update_idletasks(); self.update()
                     except Exception:
                         pass
-            return printed > 0
-        except Exception:
+                    idx1 = idx0 + start + i + 1
+                    enr = dict(base_enr)
+                    enr["DM"] = base.get("DM", "")
+                    enr["NUM"] = str(idx1)
+                    enr["_FORMAT"] = fmt_fast
+                    enr["_SOURCE_ROW_NO"] = idx1
+                    enriched.append(enr)
+                    if (i + 1) % progress_every == 0:
+                        self._set_progress(i + 1, len(rows), f"Подготовка пакета {bidx}")
+                try:
+                    self.logger.log(f"Ускорение: GTIN одинаковый, обогащение выполнено один раз (пакет {bidx}).")
+                except Exception:
+                    pass
+
+        if not fast_used:
+            for i, base in enumerate(rows):
+                self._pause_wait()
+                if self._should_stop():
+                    break
+                try:
+                    self.update_idletasks(); self.update()
+                except Exception:
+                    pass
+                idx1 = idx0 + start + i + 1
+                enr = self._enrich(base, idx1)
+                if not enr:
+                    if not getattr(self, "_part_missing_logged", False):
+                        self.logger.err(f"Строка {idx1}: данные не сформированы - пропуск")
+                    continue
+                try:
+                    enr["_SOURCE_ROW_NO"] = idx1
+                except Exception:
+                    pass
+                enriched.append(enr)
+                if (i + 1) % progress_every == 0:
+                    self._set_progress(i + 1, len(rows), f"Подготовка пакета {bidx}")
+
+        if not enriched:
+            return [], 0
+        calib_added = 0
+        if self._bool_var(getattr(self, "calib_var", False)):
+            fmt0 = enriched[0].get("_FORMAT", "16x16")
+            cols = getattr(self, "REQ_COLS", [])
+            dummy = {k: ("1" if k.upper() == "NUM" else ("000" if k == "ShortGTIN" else "X")) for k in cols}
+            dummy.update({"_FORMAT": fmt0})
+            enriched = [{**dummy, "_CALIB": True} for _ in range(6)] + enriched
+            calib_added = 6
+            self.logger.log("КАЛИБРОВКА: 6 строк 'X' добавлены в начало пакета.")
+
+        return enriched, calib_added
+
+    def _preflight_primary_batches_before_stickers(
+        self, batches, rows_all, idx0, copies,
+    ):
+        """Validate ALL primary batches before the first sticker submission.
+
+        Preserve the operator's stickers-first ordering, but do not call any
+        Print/PrintOut/XMLScript here.  Each batch gets exactly one preliminary
+        document inspection, never one COM lookup per serial number.  The
+        enriched rows are retained and reused in the subsequent main loop, so
+        no code can change through a second enrichment.
+        """
+        import csv
+        import tempfile
+
+        prepared = {}
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="AutoPrint87Preflight-"
+            ) as work:
+                for bidx, (start, end) in enumerate(batches, start=1):
+                    self._pause_wait()
+                    if self._should_stop():
+                        raise RuntimeError("предпроверка отменена до отправки")
+                    if start < 0 or end > len(rows_all) or start >= end:
+                        raise ValueError("некорректный диапазон пакета")
+                    enriched, calib_added = self._prepare_primary_batch_rows(
+                        rows_all, start, end, idx0, bidx
+                    )
+                    if (
+                        not enriched
+                        or len(enriched) - calib_added != end - start
+                        or self._should_stop()
+                    ):
+                        raise ValueError(
+                            f"пакет {bidx}: не все строки подготовлены"
+                        )
+
+                    fmt_name = enriched[0].get("_FORMAT") or "16x16"
+                    self._apply_format_ui(fmt_name)
+                    printer = self._get_printer()
+                    if not printer or not self._ensure_printer_available_for_print(
+                        printer, f"Предпроверка пакета {bidx}"
+                    ):
+                        raise RuntimeError(
+                            f"пакет {bidx}: принтер недоступен"
+                        )
+                    btw = self._get_btw_for_format(fmt_name)
+                    if not btw:
+                        raise ValueError(
+                            f"пакет {bidx}: шаблон не найден"
+                        )
+
+                    # This is a private, disposable preflight input, not the
+                    # production BASE_DIR/tmp_batch.csv or a legacy mirror.
+                    folder = os.path.join(work, f"batch_{bidx}")
+                    os.makedirs(folder, exist_ok=True)
+                    csv_path = os.path.join(folder, "tmp_batch.csv")
+                    fields = getattr(self, "REQ_COLS", DEFAULT_REQ_COLS)
+                    with open(
+                        csv_path, "w", encoding="utf-8-sig", newline=""
+                    ) as stream:
+                        writer = csv.DictWriter(
+                            stream, fieldnames=fields, delimiter="\t"
+                        )
+                        writer.writeheader()
+                        for row in enriched:
+                            writer.writerow({
+                                key: row.get(key, "") or "" for key in fields
+                            })
+
+                    fmt = None
+                    try:
+                        fmt = self.bt.open_format(btw)
+                        report = self._template_batch_report(
+                            fmt, part_mode=self._template_part_mode(fmt_name)
+                        )
+                        if report.get("can_batch"):
+                            if self._requires_database_dm(report):
+                                if not self._verify_dm_batch_database(
+                                    fmt, csv_path, enriched
+                                ):
+                                    raise ValueError(
+                                        f"пакет {bidx}: GS1 tmp_batch не подтверждён"
+                                    )
+                                if self._dialog_flag():
+                                    raise ValueError(
+                                        "диалог BarTender не поддержан в GS1 BTXML"
+                                    )
+                                # Prepare XML only; this method does not call
+                                # Application.XMLScript or any print API.
+                                self.bt.build_gs1_btxml_print_request(
+                                    btw, csv_path, printer,
+                                    f"AutoPrint preflight {bidx}",
+                                    len(enriched), copies,
+                                )
+                            else:
+                                if not self._rebind_template_db(
+                                    fmt, csv_path
+                                ):
+                                    raise ValueError(
+                                        f"пакет {bidx}: CSV COM-привязка не подтверждена"
+                                    )
+                                fmt.UseDatabase = True
+                                fmt.SelectRecordsAtPrint = False
+                                fmt.RecordRange = f"1-{len(enriched)}"
+                                if not self._check_template_db(fmt, csv_path):
+                                    raise ValueError(
+                                        f"пакет {bidx}: CSV readback не подтверждён"
+                                    )
+                        elif (
+                            report.get("db_count", 0) > 0
+                            or report.get("use_database")
+                            or report.get("has_tmp_batch_refs")
+                        ):
+                            raise ValueError(
+                                f"пакет {bidx}: непроверенное подключение BTW"
+                            )
+                        prepared[(start, end)] = (enriched, calib_added)
+                    finally:
+                        if fmt is not None:
+                            fmt.Close(1)
+            self.logger.log(
+                f"Предпроверка основной печати: {len(prepared)} "
+                "пакетов подтверждено до отправки стикеров."
+            )
+            return prepared
+        except Exception as exc:
+            # Never report raw DM values in diagnostics.
+            self.logger.err(
+                "Предпроверка основных пакетов не прошла "
+                f"({type(exc).__name__}); стикеры и основная печать "
+                "не отправлялись."
+            )
+            return None
+
+    def _preprint_stickers_for_all_batches(
+        self, batches, rows_all, idx0, total, total_rolls,
+        record_jobs=False, prepared=None,
+    ):
+        """Print all stickers first, but stop on first failed/ambiguous attempt.
+
+        Called only after primary preflight. Never retry an attempted sticker
+        through the after-primary fallback on a partial preprint failure.
+        """
+        if self._bool_var(getattr(self, "skip_sticker_var", False)):
             return False
+        for bidx, (start, end) in enumerate(batches, start=1):
+            try:
+                if self._should_stop():
+                    self.logger.err("Предварительная печать стикеров отменена.")
+                    return False
+                rows = rows_all[start:end]
+                if not rows:
+                    self.logger.err(f"Стикер пакет {bidx}: пустой пакет.")
+                    return False
+                idx1 = idx0 + start + 1
+                if prepared is not None:
+                    batch_rows, _calib = prepared[(start, end)]
+                    enr = next(
+                        (row for row in batch_rows if not row.get("_CALIB")),
+                        None,
+                    )
+                else:
+                    enr = self._enrich(rows[0], idx1)
+                if not enr:
+                    self.logger.err(
+                        f"Стикер пакет {bidx}: данные не сформированы."
+                    )
+                    return False
+                result = self._print_sticker_placeholder(
+                    bidx, idx1, idx0 + end, total,
+                    sample_row=enr,
+                    km_count=len(rows),
+                    total_rolls=total_rolls,
+                )
+                if result is not True:
+                    self.logger.err(
+                        f"Стикер пакет {bidx}: нет подтверждения PrintOut; "
+                        "остальные стикеры и основные пакеты не отправляются."
+                    )
+                    return False
+                if record_jobs:
+                    # Only confirmed submissions should be recorded as
+                    # eligible for later explicit sticker reprint.
+                    self._record_sticker_job(
+                        bidx, idx1, idx0 + end, total, enr,
+                        len(rows), total_rolls,
+                    )
+            except Exception as exc:
+                self.logger.err(
+                    f"Стикер пакет {bidx}: ошибка ({type(exc).__name__}); "
+                    "автоматическая повторная печать запрещена."
+                )
+                return False
+        return bool(batches)
 
     def _on_preview_resize(self, event=None):
         """Пересчитывает превью при изменении размеров контейнера (например, при переносе на другой монитор)."""
@@ -9015,16 +9261,51 @@ class App(ctk.CTk):
         self._set_print_active_ui(True)
         try:
             self._stickers_preprinted = False
-            if target_batches is None and not self._bool_var(getattr(self, "skip_sticker_var", False)):
-                if self._preprint_stickers_for_all_batches(
-                    batches_full,
-                    rows_all,
-                    idx0,
-                    total,
-                    total_rolls,
+            sticker_preflight_plans = None
+            if (
+                target_batches is None
+                and not self._bool_var(getattr(self, "skip_sticker_var", False))
+            ):
+                sticker_preflight_plans = (
+                    self._preflight_primary_batches_before_stickers(
+                        batches_full, rows_all, idx0, copies
+                    )
+                )
+                if sticker_preflight_plans is None:
+                    state = "cancelled" if self._should_stop() else "failed"
+                    self.logger.err(
+                        "Основная печать и стикеры остановлены ДО первой "
+                        "отправки: предпроверка не завершена."
+                    )
+                    try:
+                        self._record_csv_status(
+                            self.csv_path, state, printer=prn
+                        )
+                    except Exception:
+                        pass
+                    return
+
+                # The former path interpreted a partial preprint as success
+                # and could automatically retry failed/ambiguous stickers
+                # after primary submission. Stop instead.
+                self._stickers_preprinted = True
+                if not self._preprint_stickers_for_all_batches(
+                    batches_full, rows_all, idx0, total, total_rolls,
                     record_jobs=record_jobs,
+                    prepared=sticker_preflight_plans,
                 ):
-                    self._stickers_preprinted = True
+                    self.logger.err(
+                        "Предварительная печать стикеров не подтверждена; "
+                        "основные пакеты не отправляются. "
+                        "Результат стикеров может быть неоднозначен."
+                    )
+                    try:
+                        self._record_csv_status(
+                            self.csv_path, "unknown", printer=prn
+                        )
+                    except Exception:
+                        pass
+                    return
 
             if target_batches is None:
                 self.last_batches = batches_full
@@ -9052,76 +9333,24 @@ class App(ctk.CTk):
                 self.logger.log(f"[Пакет {bidx}/{len(batches)}] Строки {idx0 + start + 1}-{idx0 + end}")
                 self._set_progress(0, len(rows), f"Пакет {bidx}")
 
-                enriched = []
-                fast_used = False
-                if rows and self._can_fast_enrich(rows):
-                    idx1_first = idx0 + start + 1
-                    base_enr = self._enrich(rows[0], idx1_first)
-                    if base_enr:
-                        fast_used = True
-                        fmt_fast = base_enr.get("_FORMAT")
-                        for i, base in enumerate(rows):
-                            self._pause_wait()
-                            if self._should_stop():
-                                break
-                            try:
-                                self.update_idletasks(); self.update()
-                            except Exception:
-                                pass
-                            idx1 = idx0 + start + i + 1
-                            enr = dict(base_enr)
-                            enr["DM"] = base.get("DM", "")
-                            enr["NUM"] = str(idx1)
-                            enr["_FORMAT"] = fmt_fast
-                            enr["_SOURCE_ROW_NO"] = idx1
-                            enriched.append(enr)
-                            if (i + 1) % PROGRESS_EVERY == 0:
-                                self._set_progress(i + 1, len(rows), f"Подготовка пакета {bidx}")
-                        try:
-                            self.logger.log(f"Ускорение: GTIN одинаковый, обогащение выполнено один раз (пакет {bidx}).")
-                        except Exception:
-                            pass
-
-                if not fast_used:
-                    for i, base in enumerate(rows):
-                        self._pause_wait()
-                        if self._should_stop():
-                            break
-                        try:
-                            self.update_idletasks(); self.update()
-                        except Exception:
-                            pass
-                        idx1 = idx0 + start + i + 1
-                        enr = self._enrich(base, idx1)
-                        if not enr:
-                            if not getattr(self, "_part_missing_logged", False):
-                                self.logger.err(f"Строка {idx1}: данные не сформированы - пропуск")
-                            continue
-                        try:
-                            enr["_SOURCE_ROW_NO"] = idx1
-                        except Exception:
-                            pass
-                        enriched.append(enr)
-                        if (i + 1) % PROGRESS_EVERY == 0:
-                            self._set_progress(i + 1, len(rows), f"Подготовка пакета {bidx}")
-
+                prepared = (
+                    sticker_preflight_plans.get((start, end))
+                    if sticker_preflight_plans is not None else None
+                )
+                if prepared is not None:
+                    enriched, calib_added = prepared
+                else:
+                    enriched, calib_added = self._prepare_primary_batch_rows(
+                        rows_all, start, end, idx0, bidx, PROGRESS_EVERY
+                    )
                 if not enriched:
                     if getattr(self, "_part_missing_logged", False):
-                        self.logger.err("Печать остановлена: заполните номер партии для выбранного шаблона.")
+                        self.logger.err(
+                            "Печать остановлена: заполните номер партии для выбранного шаблона."
+                        )
                         break
-                    else:
-                        self.logger.err(f"Пакет {bidx}: нет валидных строк для печати.")
+                    self.logger.err(f"Пакет {bidx}: нет валидных строк для печати.")
                     continue
-
-                calib_added = 0
-                if self._bool_var(getattr(self, "calib_var", False)):
-                    fmt0 = enriched[0].get("_FORMAT", "16x16")
-                    cols = getattr(self, "REQ_COLS", [])
-                    dummy = {k: ("1" if k.upper() == "NUM" else ("000" if k == "ShortGTIN" else "X")) for k in cols}
-                    dummy.update({"_FORMAT": fmt0})
-                    enriched = [{**dummy, "_CALIB": True} for _ in range(6)] + enriched
-                    calib_added = 6
-                    self.logger.log("КАЛИБРОВКА: 6 строк 'X' добавлены в начало пакета.")
 
                 fmt_name = enriched[0].get("_FORMAT") or "16x16"
                 real_in_batch = len(enriched) - calib_added
