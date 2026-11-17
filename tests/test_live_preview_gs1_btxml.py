@@ -12,19 +12,26 @@ import bartender_com
 
 
 class _Format:
-    def __init__(self, db=True, gs1=True, db_count=1):
+    def __init__(self, db=True, gs1=True, db_count=1, prefix="tmp_batch.tmp_batch.",
+                 fields=None):
         self.Databases = SimpleNamespace(Count=db_count)
         self.db = db
         self.gs1 = gs1
+        self.prefix = prefix
+        self.fields = fields
 
     def UsedNames(self, kind, separator):
         if kind == 1:
-            fields = (
-                "ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM", "NUM"
-            ) if self.db else ("DM",)
-            return "\n".join("tmp_batch.tmp_batch." + f for f in fields)
+            fields = self.fields if self.fields is not None else (
+                ("ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM", "NUM")
+                if self.db else ("DM",)
+            )
+            return "\n".join(self.prefix + f for f in fields)
         if kind == 0:
-            return "DM\nGS1_GTIN\nGS1_SERIAL\nGS1_CRYPTO" if self.gs1 else "DM"
+            if not self.gs1:
+                # Manual-prefix BTW does not need these old named sources.
+                raise AssertionError("Preview must not require old GS1 named sources")
+            return "DM\nGS1_GTIN\nGS1_SERIAL\nGS1_CRYPTO"
         raise AssertionError("Unknown UsedNames kind")
 
 
@@ -45,11 +52,24 @@ class GS1BtXmlLivePreviewTests(unittest.TestCase):
             "NUM": "1",
         }
 
-    def test_gs1_database_contract_is_required(self):
-        self.assertTrue(self.bt.supports_gs1_btxml_preview(_Format()))
+    def test_old_gs1_and_new_single_dm_both_use_current_row_btxml_preview(self):
+        # Legacy GS1 Application Identifier template remains supported.
+        self.assertTrue(self.bt.supports_gs1_btxml_preview(_Format(gs1=True)))
+        # Manual GS1 prefix / one DM field in the barcode; the other database
+        # fields remain bound to label text in the same tmp_batch recordset.
+        self.assertTrue(self.bt.supports_gs1_btxml_preview(_Format(gs1=False)))
+
+    def test_missing_or_wrong_database_contract_must_not_use_btxml(self):
         self.assertFalse(self.bt.supports_gs1_btxml_preview(_Format(db=False)))
-        self.assertFalse(self.bt.supports_gs1_btxml_preview(_Format(gs1=False)))
+        self.assertFalse(self.bt.supports_gs1_btxml_preview(_Format(db_count=0)))
         self.assertFalse(self.bt.supports_gs1_btxml_preview(_Format(db_count=2)))
+        self.assertFalse(self.bt.supports_gs1_btxml_preview(
+            _Format(prefix="another_table.another_table.")
+        ))
+        self.assertFalse(self.bt.supports_gs1_btxml_preview(
+            _Format(fields=("ShortName", "ShortGTIN", "PROD_DATE",
+                            "PART_NUM", "DM"))
+        ))
 
     def test_xmlscript_contains_only_record_preview_and_explicit_source(self):
         xml = self.bt._build_gs1_btxml_preview_request(
@@ -131,6 +151,50 @@ class GS1BtXmlLivePreviewTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(original.read_bytes()).digest(), checksum)
             app.XMLScript.assert_called_once()
             app.Formats.Item.assert_not_called()
+            app.Print.assert_not_called()
+            app.PrintOut.assert_not_called()
+
+    @patch("win32com.client.VARIANT")
+    def test_two_distinct_rows_export_current_dm_without_print(self, variant):
+        """BTXML uses a fresh isolated recordset for every preview request."""
+        with tempfile.TemporaryDirectory() as root:
+            original = Path(root) / "operator.btw"
+            original.write_bytes(b"original BTW untouched")
+            source_hash = hashlib.sha256(original.read_bytes()).digest()
+            seen = []
+
+            def export(xml, source_type, messages):
+                parsed = ET.fromstring(xml)
+                self.assertIsNone(parsed.find(".//Print"))
+                preview = parsed.find("./Command/ExportPrintPreviewToImage")
+                csv_path = Path(preview.findtext("RecordSet/FileName"))
+                with csv_path.open(encoding="utf-8-sig", newline="") as stream:
+                    rows = list(csv.DictReader(stream, delimiter="\t"))
+                self.assertEqual(len(rows), 1)
+                seen.append(rows[0])
+                image = Path(preview.findtext("Folder")) / "preview_1.png"
+                image.write_bytes(b"PNG mock for " + str(len(seen)).encode())
+                return "<Response><Command><ExportPrintPreviewToImage/></Command></Response>"
+
+            app = Mock()
+            app.XMLScript.side_effect = export
+            self.bt.app = app
+
+            row_one = self._row()
+            row_two = dict(row_one)
+            row_two["DM"] = row_one["DM"].replace("SERIAL0000001", "SERIAL0000002")
+            row_two["NUM"] = "2"
+            for index, row in enumerate((row_one, row_two), 1):
+                out = Path(root) / f"preview-{index}" / "preview_%PageNumber%.png"
+                self.assertTrue(self.bt.export_gs1_btxml_preview(
+                    str(original), row, str(out)
+                ))
+
+            self.assertEqual([r["DM"] for r in seen],
+                             [row_one["DM"], row_two["DM"]])
+            self.assertEqual([r["NUM"] for r in seen], ["1", "2"])
+            self.assertEqual(hashlib.sha256(original.read_bytes()).digest(), source_hash)
+            self.assertEqual(app.XMLScript.call_count, 2)
             app.Print.assert_not_called()
             app.PrintOut.assert_not_called()
 
