@@ -2,6 +2,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from template_storage import (
     get_bundled_templates_dir,
@@ -145,6 +146,30 @@ class TemplateStorageTests(unittest.TestCase):
             self.assertEqual((destination / "30x20.btw").read_bytes(), b"active")
             self.assertFalse(list(destination.glob("*.legacy-*.btw")))
             self.assertEqual(len(list((destination / "archive").glob("*.btw"))), 1)
+
+    def test_archive_copy_failure_keeps_active_and_source_intact(self):
+        with tempfile.TemporaryDirectory() as root:
+            legacy = Path(root) / "BarTenderGUI" / "templates"
+            destination = Path(root) / "AutoPrintData" / "templates"
+            legacy.mkdir(parents=True)
+            destination.mkdir(parents=True)
+            source = legacy / "16x16.btw"
+            source.write_bytes(b"legacy-good")
+            active = destination / "16x16.btw"
+            active.write_bytes(b"active-good")
+
+            with patch("template_storage.shutil.copyfile",
+                       side_effect=PermissionError("source is locked")):
+                events = migrate_legacy_templates(
+                    destination_dir=destination, legacy_dirs=[legacy]
+                )
+            self.assertEqual([event["status"] for event in events], ["error"])
+            self.assertEqual(source.read_bytes(), b"legacy-good")
+            self.assertEqual(active.read_bytes(), b"active-good")
+            self.assertEqual(list((destination / "archive").glob("*.btw")), [])
+            self.assertEqual(
+                list((destination / "archive").glob(".autoprint-template-*")), []
+            )
 
 if __name__ == "__main__":
     unittest.main()
