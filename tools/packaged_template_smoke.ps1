@@ -1,6 +1,10 @@
 # Issue #5: real Inno installer lifecycle + synthetic BTW preservation on disposable CI.
 # Never execute this on a production Windows workstation.
-param([Parameter(Mandatory = $true)][string] $Installer)
+param(
+    [Parameter(Mandatory = $true)][string] $Installer,
+    [string] $PreviousInstaller = '',
+    [string] $PreviousVersion = ''
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -10,6 +14,15 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or
 }
 
 $installerPath = (Resolve-Path -LiteralPath $Installer).Path
+$previousInstallerPath = ''
+if ($PreviousInstaller) {
+    $previousInstallerPath = (Resolve-Path -LiteralPath $PreviousInstaller).Path
+    if (-not $PreviousVersion) {
+        throw 'PreviousVersion is required with PreviousInstaller'
+    }
+} elseif ($PreviousVersion) {
+    throw 'PreviousVersion without PreviousInstaller is not allowed'
+}
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $workRoot = Join-Path $env:RUNNER_TEMP ("autoprint-btw-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")
 if (Test-Path -LiteralPath $workRoot) {
@@ -50,18 +63,22 @@ if ($LASTEXITCODE -ne 0 -or -not $expectedSha -or $actualSha -ne $expectedSha) {
 }
 $q = [char]34
 
-function Invoke-Installer([string] $phase) {
+function Invoke-Installer([string] $phase, [string] $sourceInstaller = $installerPath) {
     $log = Join-Path $workRoot "$phase.log"
     $argsText = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=$q$installDir$q /LOG=$q$log$q"
-    $process = Start-Process -FilePath $installerPath -ArgumentList $argsText -Wait -PassThru
+    $process = Start-Process -FilePath $sourceInstaller -ArgumentList $argsText -Wait -PassThru
     if ($process.ExitCode -ne 0) {
         throw "Inno $phase failed with exit code $($process.ExitCode). See $log"
     }
 }
 
-function Assert-Installed {
+function Assert-Installed([string] $expectedVersion) {
     $appExe = Join-Path $installDir 'AutoPrint.exe'
     if (-not (Test-Path -LiteralPath $appExe)) { throw "Installed EXE missing: $appExe" }
+    $actualVersion = (Get-Item -LiteralPath $appExe).VersionInfo.ProductVersion
+    if ([string]$actualVersion -ne $expectedVersion) {
+        throw "Installed EXE version mismatch: expected=$expectedVersion actual=$actualVersion"
+    }
     $bundled = Join-Path $installDir '_internal\bundled_templates'
     foreach ($file in @('16x16.btw', '30x20.btw', '58x60.btw')) {
         if (-not (Test-Path -LiteralPath (Join-Path $bundled $file))) {
@@ -96,10 +113,18 @@ function Assert-Snapshot([hashtable] $expected, [string] $phase) {
     Write-Host "PASS $phase : $($expected.Count) persistent files preserved byte-for-byte"
 }
 
+$candidateVersion = (& python -c "from app_version import APP_VERSION; print(APP_VERSION)").Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Failed to resolve candidate APP_VERSION' }
 Write-Host "Packaged smoke: $installerPath"
 Write-Host "Tested exact PR HEAD SHA: $actualSha"
-Invoke-Installer 'fresh-install'
-Assert-Installed
+if ($previousInstallerPath) {
+    Write-Host "Cross-version smoke: v$PreviousVersion -> v$candidateVersion"
+    Invoke-Installer 'fresh-install' $previousInstallerPath
+    Assert-Installed $PreviousVersion
+} else {
+    Invoke-Installer 'fresh-install'
+    Assert-Installed $candidateVersion
+}
 if (Test-Path -LiteralPath $userData) {
     throw 'Fresh installer unexpectedly created user-data storage before the app ran'
 }
@@ -157,16 +182,64 @@ restored = bootstrap_template_registry({}, user, registry)
 assert restored["label_templates"] == labels
 assert restored["sticker_btw"] == str(user / "sticker60x40.btw")
 assert read_template_registry(registry)["label_templates"] == labels
+
+# Production-like persistent fixtures, entirely in the disposable runner.
+from catalog_store import CatalogStore
+from csv_history_store import CsvHistoryStore
+catalog = CatalogStore(userdata / "data" / "catalog.sqlite3")
+catalog.initialize()
+catalog.create_product({"gtin": "99900000000000", "name": "Synthetic smoke product"})
+history = CsvHistoryStore(userdata / "csv-history.sqlite3")
+history.initialize()
+history.append_event(
+    str(root / "synthetic-test.csv"),
+    "submitted_to_bartender",
+    printer="NO PRINT - SYNTHETIC HISTORY ONLY", sent=2, fmt="16x16",
+)
+user_cfg = userdata / "config"
+user_cfg.mkdir(parents=True)
+(user_cfg / "config.json").write_text('{"smoke": "preserve user config"}', encoding="utf-8")
+(user_cfg / "license.json").write_text('{"test": "intentionally invalid synthetic license"}', encoding="utf-8")
+
+# Old installs may also have mutable data inside the application directory.
+legacy_cfg = installed / "config"
+legacy_cfg.mkdir(parents=True, exist_ok=True)
+(legacy_cfg / "config.json").write_text('{"smoke": "preserve legacy config"}', encoding="utf-8")
+(legacy_cfg / "license.json").write_text('{"test": "invalid legacy license"}', encoding="utf-8")
+legacy_data = installed / "data"
+legacy_data.mkdir(parents=True, exist_ok=True)
+import sqlite3
+with sqlite3.connect(legacy_data / "catalog.sqlite3") as db:
+    db.execute("CREATE TABLE smoke (value TEXT NOT NULL)")
+    db.execute("INSERT INTO smoke VALUES ('legacy user catalog')")
+print("PASS synthetic SQLite catalog/history, config/license and legacy install data created")
 print("PASS imports, filename conflict, legacy migration, registry restore")
 '@ | python -
 if ($LASTEXITCODE -ne 0) { throw 'Python storage fixture failed' }
 
 $original = Get-UserSnapshot
-# Same-version in-place install exercises the installer update/repair code path,
-# not compatibility with an older production release.
+$legacyPaths = @('config\config.json', 'config\license.json', 'data\catalog.sqlite3')
+$legacyHashes = @{}
+foreach ($relative in $legacyPaths) {
+    $target = Join-Path $installDir $relative
+    if (-not (Test-Path -LiteralPath $target)) { throw "Missing legacy fixture: $relative" }
+    $legacyHashes[$relative] = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+}
+function Assert-LegacyMutable([string] $phase) {
+    foreach ($relative in $legacyPaths) {
+        $target = Join-Path $installDir $relative
+        if (-not (Test-Path -LiteralPath $target) -or
+            (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ne $legacyHashes[$relative]) {
+            throw "Legacy install-dir user data modified at $phase : $relative"
+        }
+    }
+    Write-Host "PASS $phase : install-dir config/license/catalog preserved"
+}
+
 Invoke-Installer 'in-place-upgrade'
-Assert-Installed
+Assert-Installed $candidateVersion
 Assert-Snapshot $original 'in-place-upgrade'
+Assert-LegacyMutable 'in-place-upgrade'
 if (-not (Test-Path -LiteralPath (Join-Path $installDir 'templates\16x16.btw'))) {
     throw 'Installer removed an operator-owned legacy BTW in the install directory'
 }
@@ -188,9 +261,11 @@ if (Test-Path -LiteralPath (Join-Path $installDir 'AutoPrint.exe')) {
     throw 'Uninstaller did not remove the installed application'
 }
 Assert-Snapshot $original 'uninstall'
+Assert-LegacyMutable 'uninstall'
 Invoke-Installer 'reinstall'
-Assert-Installed
+Assert-Installed $candidateVersion
 Assert-Snapshot $original 'reinstall'
+Assert-LegacyMutable 'reinstall'
 
 @'
 import os
@@ -209,4 +284,9 @@ print("PASS reinstall metadata restoration")
 if ($LASTEXITCODE -ne 0) { throw 'Post-reinstall metadata validation failed' }
 
 Write-Host 'PASS: Inno lifecycle and SHA-256 preservation on disposable Windows CI runner.'
-Write-Host 'NOT COVERED: cross-version upgrade, frozen GUI startup, live BarTender COM, physical print.'
+if ($previousInstallerPath) {
+    Write-Host "PASS: v$PreviousVersion to v$candidateVersion installer upgrade on disposable runner."
+} else {
+    Write-Host 'Cross-version upgrade not requested in this invocation.'
+}
+Write-Host 'NOT COVERED: licensed frozen GUI startup, live BarTender COM, physical print.'
