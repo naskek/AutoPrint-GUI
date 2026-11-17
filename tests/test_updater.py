@@ -18,10 +18,10 @@ from updater import (
 
 
 class ReleaseVersionTests(unittest.TestCase):
-    def test_release_version_is_3_2_5(self):
-        self.assertEqual(app_version.APP_VERSION, "3.2.5")
+    def test_release_version_is_3_2_6(self):
+        self.assertEqual(app_version.APP_VERSION, "3.2.6")
         self.assertEqual(autoprint_main.APP_VERSION, app_version.APP_VERSION)
-        self.assertTrue(is_newer_version(app_version.APP_VERSION, "3.2.4"))
+        self.assertTrue(is_newer_version(app_version.APP_VERSION, "3.2.5"))
 
     def test_release_updater_asset_alias_compatibility(self):
         version = app_version.APP_VERSION
