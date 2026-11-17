@@ -253,7 +253,18 @@ class BT:
 
     @staticmethod
     def supports_gs1_btxml_preview(fmt):
-        """Only the verified tmp_batch/GS1 contract can use BTXML preview."""
+        """Permit isolated current-row BTXML preview for known tmp_batch fields.
+
+        Older GS1 BTW templates expose named GS1_GTIN/GS1_SERIAL/GS1_CRYPTO
+        components. The operator-verified manual-prefix Data Matrix instead
+        has a single barcode data source bound to tmp_batch.DM; the named
+        components are not needed by this BTXML export. Both use the same
+        six runtime database fields and one existing tmp_batch recordset.
+
+        This checks preview data-binding eligibility only. UsedNames does
+        not expose the barcode symbology, prefix or VBScript conversion:
+        a successful preview must never certify a GS1 mark for printing.
+        """
         try:
             db_fields = {
                 name.strip().casefold()
@@ -264,16 +275,7 @@ class BT:
                 for name in ("ShortName", "ShortGTIN", "PROD_DATE",
                              "PART_NUM", "DM", "NUM")
             }
-            named = {
-                name.strip().casefold()
-                for name in str(fmt.UsedNames(0, "\n") or "").splitlines()
-            }
-            gs1_names = {"gs1_gtin", "gs1_serial", "gs1_crypto"}
-            return (
-                required.issubset(db_fields)
-                and gs1_names.issubset(named)
-                and int(fmt.Databases.Count or 0) == 1
-            )
+            return required.issubset(db_fields) and int(fmt.Databases.Count or 0) == 1
         except Exception:
             return False
 
