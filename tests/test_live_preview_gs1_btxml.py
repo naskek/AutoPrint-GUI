@@ -169,7 +169,7 @@ class GS1BtXmlLivePreviewTests(unittest.TestCase):
                 preview = parsed.find("./Command/ExportPrintPreviewToImage")
                 csv_path = Path(preview.findtext("RecordSet/FileName"))
                 with csv_path.open(encoding="utf-8-sig", newline="") as stream:
-                    rows = list(csv.DictReader(stream, delimiter="\\t"))
+                    rows = list(csv.DictReader(stream, delimiter="\t"))
                 self.assertEqual(len(rows), 1)
                 seen.append(rows[0])
                 image = Path(preview.findtext("Folder")) / "preview_1.png"
