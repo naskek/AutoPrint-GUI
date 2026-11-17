@@ -155,6 +155,50 @@ class GS1BtXmlLivePreviewTests(unittest.TestCase):
             app.PrintOut.assert_not_called()
 
     @patch("win32com.client.VARIANT")
+    def test_two_distinct_rows_export_current_dm_without_print(self, variant):
+        """BTXML uses a fresh isolated recordset for every preview request."""
+        with tempfile.TemporaryDirectory() as root:
+            original = Path(root) / "operator.btw"
+            original.write_bytes(b"original BTW untouched")
+            source_hash = hashlib.sha256(original.read_bytes()).digest()
+            seen = []
+
+            def export(xml, source_type, messages):
+                parsed = ET.fromstring(xml)
+                self.assertIsNone(parsed.find(".//Print"))
+                preview = parsed.find("./Command/ExportPrintPreviewToImage")
+                csv_path = Path(preview.findtext("RecordSet/FileName"))
+                with csv_path.open(encoding="utf-8-sig", newline="") as stream:
+                    rows = list(csv.DictReader(stream, delimiter="\\t"))
+                self.assertEqual(len(rows), 1)
+                seen.append(rows[0])
+                image = Path(preview.findtext("Folder")) / "preview_1.png"
+                image.write_bytes(b"PNG mock for " + str(len(seen)).encode())
+                return "<Response><Command><ExportPrintPreviewToImage/></Command></Response>"
+
+            app = Mock()
+            app.XMLScript.side_effect = export
+            self.bt.app = app
+
+            row_one = self._row()
+            row_two = dict(row_one)
+            row_two["DM"] = row_one["DM"].replace("SERIAL0000001", "SERIAL0000002")
+            row_two["NUM"] = "2"
+            for index, row in enumerate((row_one, row_two), 1):
+                out = Path(root) / f"preview-{index}" / "preview_%PageNumber%.png"
+                self.assertTrue(self.bt.export_gs1_btxml_preview(
+                    str(original), row, str(out)
+                ))
+
+            self.assertEqual([r["DM"] for r in seen],
+                             [row_one["DM"], row_two["DM"]])
+            self.assertEqual([r["NUM"] for r in seen], ["1", "2"])
+            self.assertEqual(hashlib.sha256(original.read_bytes()).digest(), source_hash)
+            self.assertEqual(app.XMLScript.call_count, 2)
+            app.Print.assert_not_called()
+            app.PrintOut.assert_not_called()
+
+    @patch("win32com.client.VARIANT")
     def test_missing_export_png_fails_without_retry(self, variant):
         with tempfile.TemporaryDirectory() as root:
             original = Path(root) / "operator.btw"
