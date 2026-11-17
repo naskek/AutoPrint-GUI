@@ -12,19 +12,26 @@ import bartender_com
 
 
 class _Format:
-    def __init__(self, db=True, gs1=True, db_count=1):
+    def __init__(self, db=True, gs1=True, db_count=1, prefix="tmp_batch.tmp_batch.",
+                 fields=None):
         self.Databases = SimpleNamespace(Count=db_count)
         self.db = db
         self.gs1 = gs1
+        self.prefix = prefix
+        self.fields = fields
 
     def UsedNames(self, kind, separator):
         if kind == 1:
-            fields = (
-                "ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM", "NUM"
-            ) if self.db else ("DM",)
-            return "\n".join("tmp_batch.tmp_batch." + f for f in fields)
+            fields = self.fields if self.fields is not None else (
+                ("ShortName", "ShortGTIN", "PROD_DATE", "PART_NUM", "DM", "NUM")
+                if self.db else ("DM",)
+            )
+            return "\n".join(self.prefix + f for f in fields)
         if kind == 0:
-            return "DM\nGS1_GTIN\nGS1_SERIAL\nGS1_CRYPTO" if self.gs1 else "DM"
+            if not self.gs1:
+                # Manual-prefix BTW does not need these old named sources.
+                raise AssertionError("Preview must not require old GS1 named sources")
+            return "DM\nGS1_GTIN\nGS1_SERIAL\nGS1_CRYPTO"
         raise AssertionError("Unknown UsedNames kind")
 
 
@@ -45,11 +52,24 @@ class GS1BtXmlLivePreviewTests(unittest.TestCase):
             "NUM": "1",
         }
 
-    def test_gs1_database_contract_is_required(self):
-        self.assertTrue(self.bt.supports_gs1_btxml_preview(_Format()))
+    def test_old_gs1_and_new_single_dm_both_use_current_row_btxml_preview(self):
+        # Legacy GS1 Application Identifier template remains supported.
+        self.assertTrue(self.bt.supports_gs1_btxml_preview(_Format(gs1=True)))
+        # Manual GS1 prefix / one DM field in the barcode; the other database
+        # fields remain bound to label text in the same tmp_batch recordset.
+        self.assertTrue(self.bt.supports_gs1_btxml_preview(_Format(gs1=False)))
+
+    def test_missing_or_wrong_database_contract_must_not_use_btxml(self):
         self.assertFalse(self.bt.supports_gs1_btxml_preview(_Format(db=False)))
-        self.assertFalse(self.bt.supports_gs1_btxml_preview(_Format(gs1=False)))
+        self.assertFalse(self.bt.supports_gs1_btxml_preview(_Format(db_count=0)))
         self.assertFalse(self.bt.supports_gs1_btxml_preview(_Format(db_count=2)))
+        self.assertFalse(self.bt.supports_gs1_btxml_preview(
+            _Format(prefix="another_table.another_table.")
+        ))
+        self.assertFalse(self.bt.supports_gs1_btxml_preview(
+            _Format(fields=("ShortName", "ShortGTIN", "PROD_DATE",
+                            "PART_NUM", "DM"))
+        ))
 
     def test_xmlscript_contains_only_record_preview_and_explicit_source(self):
         xml = self.bt._build_gs1_btxml_preview_request(
