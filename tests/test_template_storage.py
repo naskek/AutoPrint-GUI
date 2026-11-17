@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -92,12 +93,58 @@ class TemplateStorageTests(unittest.TestCase):
             )
 
             self.assertEqual(target.read_bytes(), b"existing-version")
-            conflict_files = list(destination.glob("16x16.legacy-*.btw"))
+            conflict_files = list((destination / "archive").glob("16x16.legacy-*.btw"))
+            self.assertEqual(list(destination.glob("*.legacy-*.btw")), [])
             self.assertEqual(len(conflict_files), 1)
             self.assertEqual(conflict_files[0].read_bytes(), b"user-legacy-version")
             self.assertEqual(first[0]["status"], "conflict-preserved")
             self.assertEqual(second[0]["status"], "conflict-preserved")
 
+
+    def test_existing_root_legacy_backup_is_not_copied_again(self):
+        with tempfile.TemporaryDirectory() as root:
+            legacy = Path(root) / "BarTenderGUI" / "templates"
+            destination = Path(root) / "AutoPrintData" / "templates"
+            legacy.mkdir(parents=True)
+            destination.mkdir(parents=True)
+
+            source = legacy / "16x16.btw"
+            source.write_bytes(b"previous-custom")
+            (destination / "16x16.btw").write_bytes(b"current-active")
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
+            previous_backup = destination / f"16x16.legacy-{digest}.btw"
+            previous_backup.write_bytes(source.read_bytes())
+
+            events = migrate_legacy_templates(
+                destination_dir=destination, legacy_dirs=[legacy]
+            )
+            self.assertEqual(events[0]["status"], "conflict-preserved")
+            self.assertEqual(Path(events[0]["target"]), previous_backup)
+            self.assertEqual(previous_backup.read_bytes(), b"previous-custom")
+            self.assertEqual((destination / "16x16.btw").read_bytes(), b"current-active")
+            self.assertFalse((destination / "archive").exists())
+
+    def test_fresh_collision_uses_archive_without_changing_active_template(self):
+        with tempfile.TemporaryDirectory() as root:
+            legacy = Path(root) / "BarTenderGUI" / "templates"
+            destination = Path(root) / "AutoPrintData" / "templates"
+            legacy.mkdir(parents=True)
+            destination.mkdir(parents=True)
+            (legacy / "30x20.btw").write_bytes(b"old")
+            (destination / "30x20.btw").write_bytes(b"active")
+
+            first = migrate_legacy_templates(
+                destination_dir=destination, legacy_dirs=[legacy]
+            )
+            second = migrate_legacy_templates(
+                destination_dir=destination, legacy_dirs=[legacy]
+            )
+            self.assertEqual(first[0]["target"], second[0]["target"])
+            self.assertEqual(Path(first[0]["target"]).parent, destination / "archive")
+            self.assertEqual(Path(first[0]["target"]).read_bytes(), b"old")
+            self.assertEqual((destination / "30x20.btw").read_bytes(), b"active")
+            self.assertFalse(list(destination.glob("*.legacy-*.btw")))
+            self.assertEqual(len(list((destination / "archive").glob("*.btw"))), 1)
 
 if __name__ == "__main__":
     unittest.main()
