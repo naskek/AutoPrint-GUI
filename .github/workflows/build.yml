@@ -126,12 +126,32 @@ jobs:
           Get-Item $installer | Select-Object Name, Length, LastWriteTime
           Get-FileHash $installer -Algorithm SHA256
 
-      - name: Packaged BTW preservation smoke
+      - name: Fetch published 3.2.5 installer for release-upgrade smoke
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/')
+        shell: pwsh
+        run: |
+          $url = "https://github.com/naskek/AutoPrint-GUI-Releases/releases/download/v3.2.5/AutoPrint_Setup_3.2.5.exe"
+          $dest = Join-Path $env:RUNNER_TEMP "AutoPrint_Setup_3.2.5.exe"
+          Invoke-WebRequest -Uri $url -OutFile $dest -MaximumRedirection 10
+          $actualHash = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedHash = "3b21d56563ffc32f7c6fef95402cb8f6442f1bdd04d0d07098b7cff7a763ff2f"
+          if ($actualHash -ne $expectedHash) {
+            throw "Published v3.2.5 installer hash mismatch; refusing cross-version smoke"
+          }
+          Write-Host "Pinned published v3.2.5 installer verified (SHA256 $actualHash)"
+
+      - name: Packaged BTW and cross-version release-upgrade smoke
         shell: pwsh
         run: |
           $version = python -c "from app_version import APP_VERSION; print(APP_VERSION)"
           $env:AUTOPRINT_SMOKE_EXPECT_SHA = "${{ github.event.pull_request.head.sha || github.sha }}"
-          ./tools/packaged_template_smoke.ps1 -Installer "dist/installer/AutoPrint_Setup_${version}.exe"
+          $installer = "dist/installer/AutoPrint_Setup_${version}.exe"
+          $previous = Join-Path $env:RUNNER_TEMP "AutoPrint_Setup_3.2.5.exe"
+          if (Test-Path -LiteralPath $previous) {
+            ./tools/packaged_template_smoke.ps1 -Installer $installer -PreviousInstaller $previous -PreviousVersion "3.2.5"
+          } else {
+            ./tools/packaged_template_smoke.ps1 -Installer $installer
+          }
 
       - name: Upload packaged smoke logs on failure
         if: failure()
