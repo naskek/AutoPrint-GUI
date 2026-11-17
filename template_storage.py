@@ -318,7 +318,23 @@ def migrate_legacy_templates(
                     continue
 
                 digest = _sha256(source)[:16]
-                conflict = destination / f"{source.stem}.legacy-{digest}{source.suffix}"
+                backup_name = f"{source.stem}.legacy-{digest}{source.suffix}"
+                # Backups created by older releases may already live beside
+                # active templates. Respect them without creating another copy.
+                old_backup = destination / backup_name
+                if old_backup.exists():
+                    event["target"] = str(old_backup)
+                    if _same_file_content(source, old_backup):
+                        event["status"] = "conflict-preserved"
+                        events.append(event)
+                        continue
+                    raise FileExistsError(
+                        f"Existing legacy backup has different content: {old_backup}"
+                    )
+
+                # New migration backups are not eligible as active BTW files.
+                # Never move/delete old files: a registry might reference them.
+                conflict = destination / "archive" / backup_name
                 event["target"] = str(conflict)
                 if conflict.exists():
                     if _same_file_content(source, conflict):
