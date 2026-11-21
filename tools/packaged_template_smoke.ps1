@@ -167,7 +167,8 @@ in_install.mkdir(parents=True)
 first = migrate_legacy_templates(destination_dir=user, legacy_dirs=[old, in_install])
 second = migrate_legacy_templates(destination_dir=user, legacy_dirs=[old, in_install])
 assert all(x["status"] != "error" for x in first + second)
-assert len(list(user.glob("16x16.legacy-*.btw"))) == 2
+assert len(list((user / "archive").glob("16x16.legacy-*.btw"))) == 2
+assert not list(user.glob("*.legacy-*.btw"))
 assert (user / "legacy-only.btw").read_bytes() == b"unique legacy"
 assert (old / "16x16.btw").read_bytes() == b"bar-tender legacy"
 assert (in_install / "16x16.btw").read_bytes() == b"installed legacy"

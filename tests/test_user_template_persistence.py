@@ -101,7 +101,8 @@ class UserTemplatePersistenceTests(unittest.TestCase):
             self.assertEqual(
                 (persistent / "16x16.btw").read_bytes(), b"existing-persistent"
             )
-            variants = list(persistent.glob("16x16.legacy-*.btw"))
+            variants = list((persistent / "archive").glob("16x16.legacy-*.btw"))
+            self.assertEqual(list(persistent.glob("*.legacy-*.btw")), [])
             self.assertEqual(len(variants), 2)
             self.assertEqual(
                 {p.read_bytes() for p in variants},
