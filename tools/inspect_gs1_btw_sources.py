@@ -62,6 +62,18 @@ def inspect_btw(path: Path) -> int:
             print(f"Databases: ERROR {exc}")
             return 2
         print(f"Databases.Count={count}")
+        # Issue #83: this is the exact documented collection access required
+        # by the production pre-submit guard. Inspection never writes the CSV
+        # path or submits a print job.
+        if count == 1:
+            try:
+                source = str(databases.Item(1).TextFile.FileName or "")
+                print(f"Item(1).TextFile.FileName: {source or '[empty]'}")
+                print("Item(1) readback: AVAILABLE (setter still untested)")
+            except Exception as exc:
+                print(f"Item(1) readback: UNAVAILABLE {exc}; #83 blocks batch printing")
+        else:
+            print("Item(1) readback: NOT VERIFIED (expected exactly one database)")
         # Seagull documents this read-only XML property as the way to
         # discover recordset/database names without dereferencing a Database.
         try:
