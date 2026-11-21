@@ -13,7 +13,7 @@ from catalog_excel import (
     select_automatic_migration_source,
 )
 from catalog_store import CatalogSnapshot, CatalogStore, get_catalog_db_path
-from catalog_persistence import migrate_legacy_catalog
+from catalog_persistence import legacy_database_candidates, migrate_legacy_catalog
 
 
 @dataclass(frozen=True)
@@ -78,9 +78,27 @@ def initialize_catalog_runtime(
         try:
             store = CatalogStore(final_path)
             store.initialize()
+            # An already-created empty persistent DB must not silently hide
+            # operator products left in a 3.2.4 installation directory.
+            # This is an inspection only: never overwrite either database.
+            if database_path is not None and not store.read_snapshot().products:
+                for legacy_path in legacy_database_candidates(
+                    root, final_path, legacy_database_paths
+                ):
+                    legacy_store = CatalogStore(legacy_path)
+                    legacy_store.initialize()  # read-only validation for existing DB
+                    legacy_count = len(legacy_store.read_snapshot().products)
+                    if legacy_count:
+                        return _error_result(
+                            f"Каталог {final_path} пуст, но в старом каталоге "
+                            f"{legacy_path} найдено {legacy_count} товаров. "
+                            "Автоматическая замена запрещена: сохраните обе БД "
+                            "и выберите источник после проверки данных."
+                        )
             return _ready_result(store)
         except Exception as exc:
-            return _error_result(f"Не удалось открыть каталог {final_path}: {exc}")
+            return _error_result(f"Не удалось безопасно проверить каталог {final_path} "
+                                 f"и прежние базы: {exc}")
 
     if database_path is not None:
         try:

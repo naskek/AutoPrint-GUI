@@ -73,6 +73,51 @@ class PersistentCatalogTests(unittest.TestCase):
         self.assertEqual([p.name for p in result.snapshot.products], ["Persistent"])
         self.assertEqual(CatalogStore(self.legacy).list_products()[0].name, "Legacy")
 
+    def test_empty_persistent_db_cannot_shadow_populated_legacy(self):
+        original = self._legacy_db()
+        CatalogStore(self.target).initialize()
+        result = self._start()
+        self.assertFalse(result.ready)
+        self.assertIn(str(self.target), result.error)
+        self.assertIn(str(self.legacy), result.error)
+        self.assertIn("1 товаров", result.error)
+        self.assertEqual(CatalogStore(self.target).list_products(), [])
+        self.assertEqual(
+            CatalogStore(self.legacy).list_products()[0],
+            original.list_products()[0],
+        )
+        self.assertFalse((self.target.parent / "backups").exists())
+
+    def test_empty_persistent_db_with_no_legacy_is_valid(self):
+        CatalogStore(self.target).initialize()
+        result = self._start([])
+        self.assertTrue(result.ready, result.error)
+        self.assertEqual(result.snapshot.products, ())
+
+    def test_corrupt_legacy_with_empty_persistent_db_fails_closed(self):
+        CatalogStore(self.target).initialize()
+        self.legacy.parent.mkdir(parents=True, exist_ok=True)
+        self.legacy.write_bytes(b"invalid SQLite backup")
+        result = self._start()
+        self.assertFalse(result.ready)
+        self.assertIn("прежние базы", result.error)
+        self.assertTrue(self.target.is_file())
+        self.assertEqual(self.legacy.read_bytes(), b"invalid SQLite backup")
+
+    def test_legacy_install_root_bartendergui_with_existing_empty_profile(self):
+        old_install = self.root / "BarTenderGUI"
+        legacy = old_install / "data" / "catalog.sqlite3"
+        old_store = self._legacy_db(path=legacy)
+        CatalogStore(self.target).initialize()
+        result = initialize_catalog_runtime(
+            old_install,
+            database_path=self.target,
+            legacy_database_paths=[legacy],
+        )
+        self.assertFalse(result.ready)
+        self.assertIn(str(legacy), result.error)
+        self.assertEqual(len(old_store.list_products()), 1)
+
     def test_conflicting_legacy_versions_fail_closed(self):
         self._legacy_db()
         alternate = self.root / "BarTenderGUI" / "data" / "catalog.sqlite3"
